@@ -68,6 +68,7 @@ func New(ctx context.Context, cfg config.Config, store *db.Store, objectStore *s
 		preloadSlots: make(chan struct{}, 2),
 	}
 	s.runtime.Store(state)
+	s.startDownloadResumeCleanup(ctx)
 	return s, nil
 }
 
@@ -185,7 +186,7 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 	version, migrationErr := db.MigrationStatus(ctx, s.db.SQL)
-	if s.db.SQL.PingContext(ctx) != nil || migrationErr != nil || version < 2 || s.currentStorage().Ready(ctx) != nil {
+	if s.db.SQL.PingContext(ctx) != nil || migrationErr != nil || version < 3 || s.currentStorage().Ready(ctx) != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
 		return
 	}

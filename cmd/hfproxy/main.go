@@ -129,7 +129,7 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
-	if version < 2 {
+	if version < 3 {
 		return fmt.Errorf("database is not migrated; run hfproxy migrate up")
 	}
 	cfg, err = config.LoadPersisted(ctx, store.SQL, cfg)

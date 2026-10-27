@@ -51,6 +51,14 @@ func (s *S3) Key(sha256 string) string {
 	return key
 }
 
+func (s *S3) PartialKey(id string, part int) string {
+	key := fmt.Sprintf("partials/%s/%08d", id, part)
+	if s.prefix != "" {
+		return s.prefix + "/" + key
+	}
+	return key
+}
+
 func (s *S3) UploadFile(ctx context.Context, file *os.File, key, contentType string, size int64) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return err

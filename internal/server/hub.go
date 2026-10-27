@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -44,6 +45,7 @@ type downloadProgressWriter struct {
 	ctx         context.Context
 	db          *sql.DB
 	id          string
+	baseBytes   int64
 	destination io.Writer
 	bytes       int64
 	lastPersist time.Time
@@ -54,7 +56,7 @@ func (w *downloadProgressWriter) Write(chunk []byte) (int, error) {
 	w.bytes += int64(n)
 	if time.Since(w.lastPersist) >= time.Second {
 		w.lastPersist = time.Now()
-		_, _ = w.db.ExecContext(w.ctx, `UPDATE downloads SET bytes=$2 WHERE id=$1 AND status='downloading'`, w.id, w.bytes)
+		_, _ = w.db.ExecContext(w.ctx, `UPDATE downloads SET bytes=$2 WHERE id=$1 AND status='downloading'`, w.id, w.baseBytes+w.bytes)
 	}
 	return n, err
 }
@@ -141,10 +143,14 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 			meta.LastMod = sql.NullTime{Time: t, Valid: true}
 		}
 	}
-	if upstream.ContentLength >= 0 {
+	sizeKnown := upstream.ContentLength >= 0
+	if sizeKnown {
 		meta.Size = upstream.ContentLength
 	} else if size := firstHeaders.Get("X-Linked-Size"); size != "" {
-		meta.Size, _ = strconv.ParseInt(size, 10, 64)
+		if parsedSize, parseErr := strconv.ParseInt(size, 10, 64); parseErr == nil && parsedSize >= 0 {
+			meta.Size = parsedSize
+			sizeKnown = true
+		}
 	}
 	if meta.ContentType == "" {
 		meta.ContentType = "application/octet-stream"
@@ -203,77 +209,125 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	downloadID := db.NewID()
-	_, _ = s.db.SQL.ExecContext(r.Context(), `INSERT INTO downloads(id,repository_id,commit_sha,path,status) VALUES($1,$2,$3,$4,'downloading')`, downloadID, repoPK, commit, parsed.FilePath)
-	fetchPath := upstreamResolvePath(parsed)
-	body, headers, fetchErr := s.fetchHub(r.Context(), http.MethodGet, fetchPath, safeResolveQuery(r.URL.Query()), nil)
-	if fetchErr != nil {
-		s.finishDownload(r.Context(), downloadID, 0, "upstream")
-		s.hubFailure(w, r, fetchErr)
-		return
-	}
-	defer body.Body.Close()
-	if body.StatusCode < 200 || body.StatusCode >= 300 {
-		s.finishDownload(r.Context(), downloadID, 0, "upstream_status")
-		s.hubStatus(w, r, body.StatusCode, body.Header)
-		return
-	}
-	actualCommit := headers.Get("X-Repo-Commit")
-	if actualCommit == "" {
-		actualCommit = body.Header.Get("X-Repo-Commit")
-	}
-	if actualCommit != "" && actualCommit != commit {
-		s.finishDownload(r.Context(), downloadID, 0, "revision_changed")
-		writeProblem(w, r, http.StatusConflict, "Revision changed", "The requested branch moved during the download; retry against the resolved revision.")
-		return
-	}
-	if body.ContentLength > s.currentConfig().CacheMaxFileSize {
+	_, _ = s.db.SQL.ExecContext(r.Context(), `INSERT INTO downloads(id,repository_id,commit_sha,path,status,bytes) VALUES($1,$2,$3,$4,'downloading',0)`, downloadID, repoPK, commit, parsed.FilePath)
+	objectStore := s.currentStorage()
+	if meta.Size > s.currentConfig().CacheMaxFileSize {
 		s.finishDownload(r.Context(), downloadID, 0, "size_limit")
 		writeProblem(w, r, 413, "File too large", "The upstream file exceeds the configured cache file limit.")
 		return
 	}
-	tmp, err := os.CreateTemp("", "hfproxy-staging-*")
-	if err != nil {
-		s.finishDownload(r.Context(), downloadID, 0, "staging")
-		writeProblem(w, r, 500, "Cache error", "Unable to stage the upstream file.")
-		return
+	var tmp *os.File
+	var body *http.Response
+	var size int64
+	var digest string
+	var resume *downloadResume
+	if sizeKnown {
+		resumeETag := upstream.Header.Get("ETag")
+		if resumeETag == "" {
+			resumeETag = firstHeaders.Get("ETag")
+		}
+		tmp, digest, resume, err = s.downloadResumable(r.Context(), objectStore, downloadID, repoPK, commit, parsed, meta.Size, resumeETag, meta.ContentType)
+		size = meta.Size
+		if err != nil {
+			completed := int64(0)
+			if resume != nil {
+				completed = resume.CompletedBytes
+			}
+			s.finishDownload(r.Context(), downloadID, completed, "upstream_read")
+			var statusErr *upstreamStatusError
+			if errors.As(err, &statusErr) {
+				s.hubStatus(w, r, statusErr.status, statusErr.header)
+				return
+			}
+			writeProblem(w, r, http.StatusBadGateway, "Upstream transfer failed", "The file could not be completed. Retry the preload to continue from the last stored block.")
+			return
+		}
+		if resume.ETag != "" {
+			meta.ETag = resume.ETag
+		}
+		defer func() {
+			name := tmp.Name()
+			_ = tmp.Close()
+			_ = os.Remove(name)
+		}()
+	} else {
+		fetchPath := upstreamResolvePath(resolvePath{RepoType: parsed.RepoType, RepoID: parsed.RepoID, Revision: commit, FilePath: parsed.FilePath})
+		var headers http.Header
+		body, headers, err = s.fetchHub(r.Context(), http.MethodGet, fetchPath, safeResolveQuery(r.URL.Query()), nil)
+		if err != nil {
+			s.finishDownload(r.Context(), downloadID, 0, "upstream")
+			s.hubFailure(w, r, err)
+			return
+		}
+		defer body.Body.Close()
+		if body.StatusCode < 200 || body.StatusCode >= 300 {
+			s.finishDownload(r.Context(), downloadID, 0, "upstream_status")
+			s.hubStatus(w, r, body.StatusCode, body.Header)
+			return
+		}
+		actualCommit := headers.Get("X-Repo-Commit")
+		if actualCommit == "" {
+			actualCommit = body.Header.Get("X-Repo-Commit")
+		}
+		if actualCommit != "" && actualCommit != commit {
+			s.finishDownload(r.Context(), downloadID, 0, "revision_changed")
+			writeProblem(w, r, http.StatusConflict, "Revision changed", "The requested branch moved during the download; retry against the resolved revision.")
+			return
+		}
+		if body.ContentLength > s.currentConfig().CacheMaxFileSize {
+			s.finishDownload(r.Context(), downloadID, 0, "size_limit")
+			writeProblem(w, r, 413, "File too large", "The upstream file exceeds the configured cache file limit.")
+			return
+		}
+		tmp, err = os.CreateTemp("", "hfproxy-staging-*")
+		if err != nil {
+			s.finishDownload(r.Context(), downloadID, 0, "staging")
+			writeProblem(w, r, 500, "Cache error", "Unable to stage the upstream file.")
+			return
+		}
+		defer func() {
+			name := tmp.Name()
+			_ = tmp.Close()
+			_ = os.Remove(name)
+		}()
+		hash := sha256.New()
+		limited := io.LimitReader(body.Body, s.currentConfig().CacheMaxFileSize+1)
+		progress := &downloadProgressWriter{ctx: r.Context(), db: s.db.SQL, id: downloadID, destination: io.MultiWriter(tmp, hash), lastPersist: time.Now()}
+		size, err = io.Copy(progress, limited)
+		if err != nil {
+			s.finishDownload(r.Context(), downloadID, size, "upstream_read")
+			writeProblem(w, r, 502, "Upstream transfer failed", "The Hub response could not be completely downloaded.")
+			return
+		}
+		if size > s.currentConfig().CacheMaxFileSize {
+			s.finishDownload(r.Context(), downloadID, size, "size_limit")
+			writeProblem(w, r, 413, "File too large", "The upstream file exceeds the configured cache file limit.")
+			return
+		}
+		digest = hex.EncodeToString(hash.Sum(nil))
 	}
-	defer tmp.Close()
-	defer os.Remove(tmp.Name())
-	hash := sha256.New()
-	limited := io.LimitReader(body.Body, s.currentConfig().CacheMaxFileSize+1)
-	progress := &downloadProgressWriter{
-		ctx: r.Context(), db: s.db.SQL, id: downloadID,
-		destination: io.MultiWriter(tmp, hash), lastPersist: time.Now(),
+	key := objectStore.Key(digest)
+	contentType := meta.ContentType
+	if body != nil && body.Header.Get("Content-Type") != "" {
+		contentType = body.Header.Get("Content-Type")
 	}
-	size, err := io.Copy(progress, limited)
-	if err != nil {
-		s.finishDownload(r.Context(), downloadID, size, "upstream_read")
-		writeProblem(w, r, 502, "Upstream transfer failed", "The Hub response could not be completely downloaded.")
-		return
-	}
-	if size > s.currentConfig().CacheMaxFileSize {
-		s.finishDownload(r.Context(), downloadID, size, "size_limit")
-		writeProblem(w, r, 413, "File too large", "The upstream file exceeds the configured cache file limit.")
-		return
-	}
-	digest := hex.EncodeToString(hash.Sum(nil))
-	key := s.currentStorage().Key(digest)
-	contentType := body.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = mime.TypeByExtension(path.Ext(parsed.FilePath))
 	}
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	if err := tmp.Sync(); err != nil {
-		s.finishDownload(r.Context(), downloadID, size, "staging")
-		writeProblem(w, r, 500, "Cache error", "Unable to finalize the staged file.")
-		return
+	if resume == nil {
+		if err := tmp.Sync(); err != nil {
+			s.finishDownload(r.Context(), downloadID, size, "staging")
+			writeProblem(w, r, 500, "Cache error", "Unable to finalize the staged file.")
+			return
+		}
 	}
 	var blobID, existingKey string
 	err = tx.QueryRowContext(r.Context(), `SELECT id,storage_key FROM blobs WHERE sha256=$1`, digest).Scan(&blobID, &existingKey)
 	if err == sql.ErrNoRows {
-		if err = s.currentStorage().UploadFile(r.Context(), tmp, key, contentType, size); err != nil {
+		if err = objectStore.UploadFile(r.Context(), tmp, key, contentType, size); err != nil {
 			s.finishDownload(r.Context(), downloadID, size, "storage")
 			writeProblem(w, r, 502, "Storage error", "The downloaded file could not be published to object storage.")
 			return
@@ -293,12 +347,14 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 	}
 	meta.Size = size
 	meta.ContentType = contentType
-	if meta.ETag == "" {
+	if meta.ETag == "" && body != nil {
 		meta.ETag = body.Header.Get("ETag")
 	}
-	if lm := body.Header.Get("Last-Modified"); lm != "" {
-		if t, e := http.ParseTime(lm); e == nil {
-			meta.LastMod = sql.NullTime{Time: t, Valid: true}
+	if body != nil {
+		if lm := body.Header.Get("Last-Modified"); lm != "" {
+			if t, e := http.ParseTime(lm); e == nil {
+				meta.LastMod = sql.NullTime{Time: t, Valid: true}
+			}
 		}
 	}
 	artifactID := db.NewID()
@@ -312,6 +368,11 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 		s.finishDownload(r.Context(), downloadID, size, "metadata")
 		writeProblem(w, r, 500, "Cache metadata error", "Unable to commit artifact metadata.")
 		return
+	}
+	if resume != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		s.finishDownloadResume(cleanupCtx, objectStore, resume)
+		cancel()
 	}
 	s.finishDownload(r.Context(), downloadID, size, "")
 	cached, err = s.findArtifact(r.Context(), s.db.SQL, repoPK, commit, parsed.FilePath)

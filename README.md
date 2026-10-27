@@ -123,6 +123,8 @@ For production:
 5. Back up PostgreSQL and the bucket together. Restore both to preserve the links between artifacts and blobs.
 6. Restrict egress to Hugging Face and validated HF CDN hosts. The upstream token should have only the minimum scopes and gated access required.
 
+Known-size Hub downloads are checkpointed in 64 MiB blocks in the S3-compatible bucket. Retrying a failed preload resumes from the last complete block when the upstream honors HTTP Range requests; otherwise hfproxy safely falls back to a full transfer. Abandoned checkpoints are removed after seven days. The current block is downloaded again if a transfer fails before that block is stored.
+
 Health endpoints: `/healthz` provides liveness without dependency checks; `/readyz` checks PostgreSQL and S3. JSON logs include request ID, route, duration, status, and bytes, without query strings, bearer tokens, or signed URLs.
 
 ## Current limitations
