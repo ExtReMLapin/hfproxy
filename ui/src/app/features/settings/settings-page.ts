@@ -23,6 +23,7 @@ export class SettingsPageComponent implements OnInit {
   protected readonly loading = signal(true);
   protected readonly busy = signal(false);
   protected readonly section = signal<SettingsSection>('connections');
+  protected proxyURLVisible = false;
   protected draft: SettingsDraft | null = null;
 
   protected readonly sections: { id: SettingsSection; label: string; icon: string }[] = [

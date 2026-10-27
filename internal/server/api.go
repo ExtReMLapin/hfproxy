@@ -383,7 +383,7 @@ func (s *Server) apiTestHub(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := newHFHTTPClient(cfg).Do(req)
 	if err != nil {
-		writeProblem(w, r, http.StatusBadGateway, "Hugging Face connection failed", "Check the Hub URL, network access, and token.")
+		writeProblem(w, r, http.StatusBadGateway, "Hugging Face connection failed", "Check the Hub URL, proxy scheme and credentials, network access, and token.")
 		return
 	}
 	defer resp.Body.Close()

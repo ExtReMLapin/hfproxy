@@ -110,17 +110,29 @@
                 /></label>
                 <label class="field md:col-span-2">
                   Optional outbound proxy URL
-                  <input
-                    class="control"
-                    name="hfProxy"
-                    [(ngModel)]="settings.hf_proxy_url"
-                    type="password"
-                    autocomplete="new-password"
-                    placeholder="http://proxy.example:3128"
-                  />
+                  <span class="relative block">
+                    <input
+                      class="control pr-11"
+                      name="hfProxy"
+                      [(ngModel)]="settings.hf_proxy_url"
+                      [type]="proxyURLVisible ? 'text' : 'password'"
+                      autocomplete="new-password"
+                      placeholder="http://proxy.example:3128 or socks5://proxy.example:1080"
+                    />
+                    <button
+                      type="button"
+                      class="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-600"
+                      (click)="proxyURLVisible = !proxyURLVisible"
+                      [attr.aria-label]="proxyURLVisible ? 'Hide proxy URL' : 'Show proxy URL'"
+                      [attr.aria-pressed]="proxyURLVisible"
+                    >
+                      <app-icon [name]="proxyURLVisible ? 'eye-off' : 'eye'" [size]="18" />
+                    </button>
+                  </span>
                   <span class="hint"
-                    >Use an HTTP or HTTPS proxy. You can include user:password credentials in the
-                    URL; use HTTPS to protect them on the network.</span
+                    >Supported: HTTP, HTTPS, SOCKS4, SOCKS4a, and SOCKS5. HTTP(S) and SOCKS5 accept
+                    user:password credentials; SOCKS4 accepts a user ID only. Use HTTPS for an
+                    HTTP proxy with credentials.</span
                   >
                 </label>
               </div>

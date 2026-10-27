@@ -120,13 +120,29 @@ func (c Config) Validate() error {
 	}
 	if c.HFProxyURL != "" {
 		proxy, proxyErr := url.Parse(c.HFProxyURL)
-		if proxyErr != nil || proxy.Hostname() == "" || (proxy.Scheme != "http" && proxy.Scheme != "https") || proxy.RawQuery != "" || proxy.Fragment != "" || (proxy.Path != "" && proxy.Path != "/") {
-			return fmt.Errorf("HFPROXY_HF_PROXY_URL must be an HTTP(S) proxy URL without a path, query, or fragment")
+		if proxyErr != nil || proxy.Hostname() == "" || proxy.RawQuery != "" || proxy.Fragment != "" || (proxy.Path != "" && proxy.Path != "/") {
+			return fmt.Errorf("HFPROXY_HF_PROXY_URL must be a proxy URL without a path, query, or fragment")
+		}
+		proxyScheme := strings.ToLower(proxy.Scheme)
+		if proxyScheme != "http" && proxyScheme != "https" && proxyScheme != "socks4" && proxyScheme != "socks4a" && proxyScheme != "socks5" && proxyScheme != "socks5h" {
+			return fmt.Errorf("HFPROXY_HF_PROXY_URL scheme must be http, https, socks4, socks4a, socks5, or socks5h")
 		}
 		if port := proxy.Port(); port != "" {
 			parsedPort, portErr := strconv.Atoi(port)
 			if portErr != nil || parsedPort < 1 || parsedPort > 65535 {
 				return fmt.Errorf("HFPROXY_HF_PROXY_URL contains an invalid port")
+			}
+		}
+		if proxy.User != nil {
+			username := proxy.User.Username()
+			password, hasPassword := proxy.User.Password()
+			if strings.HasPrefix(proxyScheme, "socks4") {
+				if hasPassword || len(username) > 255 || strings.ContainsRune(username, '\x00') {
+					return fmt.Errorf("SOCKS4 supports a user ID only, up to 255 bytes")
+				}
+			}
+			if strings.HasPrefix(proxyScheme, "socks5") && (len(username) > 255 || len(password) > 255 || (hasPassword && username == "")) {
+				return fmt.Errorf("SOCKS5 username and password must each be at most 255 bytes")
 			}
 		}
 	}

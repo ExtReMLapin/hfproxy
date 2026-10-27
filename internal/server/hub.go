@@ -638,10 +638,14 @@ func newEgressDialer(allowLoopback bool, proxy *url.URL) func(context.Context, s
 			return nil, err
 		}
 		if proxy != nil {
+			proxyScheme := strings.ToLower(proxy.Scheme)
+			if strings.HasPrefix(proxyScheme, "socks4") || strings.HasPrefix(proxyScheme, "socks5") {
+				return dialSOCKS(ctx, network, address, dialer, proxy, allowLoopback)
+			}
 			proxyPort := proxy.Port()
 			if proxyPort == "" {
 				proxyPort = "80"
-				if proxy.Scheme == "https" {
+				if proxyScheme == "https" {
 					proxyPort = "443"
 				}
 			}
@@ -655,29 +659,7 @@ func newEgressDialer(allowLoopback bool, proxy *url.URL) func(context.Context, s
 			if !sameHost || port != proxyPort {
 				return nil, fmt.Errorf("egress target does not match the configured Hugging Face proxy")
 			}
-			if ip, parseErr := netip.ParseAddr(proxyHost); parseErr == nil {
-				return dialer.DialContext(ctx, network, net.JoinHostPort(ip.Unmap().String(), port))
-			}
-			addresses, lookupErr := net.DefaultResolver.LookupIPAddr(ctx, proxyHost)
-			if lookupErr != nil {
-				return nil, lookupErr
-			}
-			var lastErr error
-			for _, candidate := range addresses {
-				ip, ok := netip.AddrFromSlice(candidate.IP)
-				if !ok || ip.IsUnspecified() || ip.IsMulticast() {
-					continue
-				}
-				conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.Unmap().String(), port))
-				if dialErr == nil {
-					return conn, nil
-				}
-				lastErr = dialErr
-			}
-			if lastErr == nil {
-				lastErr = fmt.Errorf("configured proxy resolved to no usable IP addresses")
-			}
-			return nil, lastErr
+			return dialConfiguredProxy(ctx, network, dialer, proxy)
 		}
 		checkAndDial := func(ip netip.Addr) (net.Conn, error) {
 			ip = ip.Unmap()
@@ -721,7 +703,13 @@ func newHFHTTPClient(cfg config.Config) *http.Client {
 	var proxy *url.URL
 	if cfg.HFProxyURL != "" {
 		proxy, _ = url.Parse(cfg.HFProxyURL)
-		transport.Proxy = http.ProxyURL(proxy)
+		proxy.Scheme = strings.ToLower(proxy.Scheme)
+		switch proxy.Scheme {
+		case "http", "https":
+			transport.Proxy = http.ProxyURL(proxy)
+		default:
+			transport.Proxy = nil
+		}
 	}
 	transport.DialContext = newEgressDialer(configLoopback(base.Hostname()), proxy)
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
