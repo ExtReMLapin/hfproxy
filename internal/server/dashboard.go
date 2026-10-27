@@ -93,8 +93,8 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderDashboard(w http.ResponseWriter, r *http.Request, p *Principal, message string, status int) {
-	data := dashboardData{Principal: p, IsAdmin: p.Role == "admin", PublicRead: s.config.AnonymousPublicRead,
-		HFBase: s.config.HFBaseURL, PublicURL: s.config.PublicURL, OIDCEnabled: s.oidcConfig != nil, AuthMode: s.config.AuthMode, Message: message}
+	data := dashboardData{Principal: p, IsAdmin: p.Role == "admin", PublicRead: s.currentConfig().AnonymousPublicRead,
+		HFBase: s.currentConfig().HFBaseURL, PublicURL: s.currentConfig().PublicURL, OIDCEnabled: s.currentOIDCConfig() != nil, AuthMode: s.currentConfig().AuthMode, Message: message}
 	if csrf, err := r.Cookie("hfproxy_csrf"); err == nil {
 		data.CSRF = csrf.Value
 		data.Logout = s.renderDashboardLogout(w, csrf.Value)

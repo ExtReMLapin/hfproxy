@@ -1,0 +1,134 @@
+<app-page-heading
+  title="Cache"
+  subtitle="Inspect files stored by the proxy and remove artifacts when you need to reclaim space."
+  eyebrow="Object storage"
+/>
+
+<section
+  class="mb-5 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm shadow-slate-900/[0.02] sm:p-5"
+>
+  <form class="grid gap-3 sm:grid-cols-[1fr_1fr_auto]" (ngSubmit)="search()">
+    <label class="relative"
+      ><span class="sr-only">Repository ID</span
+      ><app-icon
+        class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+        name="box"
+        [size]="16" /><input
+        class="w-full rounded-xl border border-slate-200 py-2.5 pl-9 pr-3 text-sm outline-none placeholder:text-slate-400 focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10"
+        name="repo"
+        [(ngModel)]="filters.repo_id"
+        placeholder="Filter by repository ID"
+    /></label>
+    <label class="relative"
+      ><span class="sr-only">File path</span
+      ><app-icon
+        class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+        name="search"
+        [size]="16" /><input
+        class="w-full rounded-xl border border-slate-200 py-2.5 pl-9 pr-3 text-sm outline-none placeholder:text-slate-400 focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10"
+        name="path"
+        [(ngModel)]="filters.path"
+        placeholder="Search file path"
+    /></label>
+    <button
+      type="submit"
+      class="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800"
+    >
+      <app-icon name="search" [size]="16" />Search cache
+    </button>
+  </form>
+</section>
+
+<section
+  class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm shadow-slate-900/[0.02]"
+>
+  <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-6">
+    <div>
+      <h2 class="text-sm font-semibold text-slate-900">Cached artifacts</h2>
+      <p class="mt-1 text-xs text-slate-400">{{ entries().length }} results · newest first</p>
+    </div>
+    <button
+      type="button"
+      (click)="search()"
+      class="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+      aria-label="Refresh"
+    >
+      <app-icon name="refresh" [size]="16" />
+    </button>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-full min-w-[850px] text-left">
+      <thead
+        class="bg-slate-50/70 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400"
+      >
+        <tr>
+          <th class="px-5 py-3 font-semibold">Artifact</th>
+          <th class="px-4 py-3 font-semibold">Repository</th>
+          <th class="px-4 py-3 font-semibold">Size</th>
+          <th class="px-4 py-3 font-semibold">Commit</th>
+          <th class="px-4 py-3 font-semibold">Cached</th>
+          <th class="px-5 py-3 text-right font-semibold">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        @if (loading()) {
+          <tr>
+            <td colspan="6" class="px-5 py-12 text-center text-sm text-slate-400">
+              Searching cache…
+            </td>
+          </tr>
+        }
+        @for (entry of entries(); track entry.id) {
+          <tr class="border-t border-slate-100 hover:bg-slate-50/60">
+            <td class="max-w-[300px] px-5 py-4">
+              <p class="truncate text-xs font-semibold text-slate-800" [title]="entry.path">
+                {{ entry.path }}
+              </p>
+              <p class="mt-1 text-[10px] text-slate-400">{{ typeLabel(entry.repo_type) }}</p>
+            </td>
+            <td class="px-4 py-4 text-xs font-medium text-slate-600">{{ entry.repo_id }}</td>
+            <td class="px-4 py-4 text-xs tabular-nums text-slate-500">
+              {{ bytes(entry.size_bytes) }}
+            </td>
+            <td class="px-4 py-4">
+              <code class="rounded bg-slate-100 px-2 py-1 text-[10px] text-slate-500">{{
+                entry.commit_sha.slice(0, 8)
+              }}</code>
+            </td>
+            <td class="whitespace-nowrap px-4 py-4 text-xs text-slate-400">
+              {{ entry.cached_at | date: 'medium' }}
+            </td>
+            <td class="px-5 py-4 text-right">
+              <button
+                type="button"
+                (click)="purge(entry)"
+                [disabled]="busy()"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-rose-100 px-2.5 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-50 disabled:opacity-50"
+              >
+                <app-icon name="trash" [size]="14" />Purge
+              </button>
+            </td>
+          </tr>
+        } @empty {
+          @if (!loading()) {
+            <tr>
+              <td colspan="6" class="px-5 py-14 text-center">
+                <div
+                  class="mx-auto grid h-11 w-11 place-items-center rounded-xl bg-slate-100 text-slate-400"
+                >
+                  <app-icon name="database" [size]="20" />
+                </div>
+                <p class="mt-3 text-sm font-semibold text-slate-700">No cached artifacts found</p>
+                <p class="mt-1 text-xs text-slate-400">Try a different repository or file path.</p>
+              </td>
+            </tr>
+          }
+        }
+      </tbody>
+    </table>
+  </div>
+  <div class="border-t border-slate-100 px-5 py-3.5 text-[11px] leading-5 text-slate-400 sm:px-6">
+    Purging removes the cached object from storage. It will be fetched again from Hugging Face on
+    the next request.
+  </div>
+</section>

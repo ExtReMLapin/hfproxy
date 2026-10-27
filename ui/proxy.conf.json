@@ -1,0 +1,11 @@
+{
+  "/api": { "target": "http://127.0.0.1:8080", "secure": false, "changeOrigin": true },
+  "/auth": { "target": "http://127.0.0.1:8080", "secure": false, "changeOrigin": true },
+  "/login": { "target": "http://127.0.0.1:8080", "secure": false, "changeOrigin": true },
+  "/logout": { "target": "http://127.0.0.1:8080", "secure": false, "changeOrigin": true },
+  "/healthz": { "target": "http://127.0.0.1:8080", "secure": false, "changeOrigin": true },
+  "/readyz": { "target": "http://127.0.0.1:8080", "secure": false, "changeOrigin": true },
+  "/models": { "target": "http://127.0.0.1:8080", "secure": false, "changeOrigin": true },
+  "/datasets": { "target": "http://127.0.0.1:8080", "secure": false, "changeOrigin": true },
+  "/spaces": { "target": "http://127.0.0.1:8080", "secure": false, "changeOrigin": true }
+}

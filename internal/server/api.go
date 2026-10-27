@@ -5,13 +5,17 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/mail"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nicolas/hfproxy/internal/config"
 	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/nicolas/hfproxy/internal/storage"
 )
 
 func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {
@@ -19,10 +23,14 @@ func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if isMutation(r.Method) && !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") && !s.checkCSRF(r) {
+		writeProblem(w, r, http.StatusForbidden, "CSRF validation failed", "Reload the page and retry the action.")
+		return
+	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/")
 	switch {
 	case path == "auth/providers" && r.Method == http.MethodGet:
-		providers := map[string]any{"local": s.config.AuthMode == "local", "oidc": s.oidcConfig != nil, "ldap": s.config.LDAPURL != ""}
+		providers := map[string]any{"local": s.currentConfig().AuthMode == "local", "oidc": s.currentOIDCConfig() != nil, "ldap": s.currentConfig().LDAPURL != ""}
 		writeJSON(w, http.StatusOK, providers)
 	case path == "me" && r.Method == http.MethodGet:
 		p, err := s.authenticate(r)
@@ -35,6 +43,8 @@ func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	case path == "stats" && r.Method == http.MethodGet:
 		s.apiStats(w, r)
+	case path == "downloads/active" && r.Method == http.MethodGet:
+		s.apiActiveDownloads(w, r)
 	case path == "repos":
 		s.apiRepos(w, r)
 	case strings.HasPrefix(path, "repos/"):
@@ -45,7 +55,7 @@ func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {
 		s.apiCacheEntry(w, r, strings.TrimPrefix(path, "cache/entries/"))
 	case path == "cache/purge" && r.Method == http.MethodPost:
 		s.apiPurge(w, r)
-	case path == "users" && r.Method == http.MethodGet:
+	case path == "users" && (r.Method == http.MethodGet || r.Method == http.MethodPost):
 		s.apiUsers(w, r)
 	case strings.HasPrefix(path, "users/") && r.Method == http.MethodPatch:
 		s.apiUserPatch(w, r, strings.TrimPrefix(path, "users/"))
@@ -56,10 +66,325 @@ func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {
 	case path == "audit-events" && r.Method == http.MethodGet:
 		s.apiAudit(w, r)
 	case path == "settings/public" && r.Method == http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"auth_mode": s.config.AuthMode, "anonymous_public_read": s.config.AnonymousPublicRead, "oidc_enabled": s.oidcConfig != nil, "ldap_enabled": s.config.LDAPURL != "", "ldap_auto_provision": s.config.LDAPAutoProvision, "s3_enabled": true, "hub_base_url": s.config.HFBaseURL, "presigned_urls": false})
+		writeJSON(w, http.StatusOK, map[string]any{"auth_mode": s.currentConfig().AuthMode, "anonymous_public_read": s.currentConfig().AnonymousPublicRead, "oidc_enabled": s.currentOIDCConfig() != nil, "ldap_enabled": s.currentConfig().LDAPURL != "", "ldap_auto_provision": s.currentConfig().LDAPAutoProvision, "s3_enabled": true, "hub_base_url": s.currentConfig().HFBaseURL, "presigned_urls": false})
+	case path == "settings":
+		s.apiSettings(w, r)
+	case path == "settings/test-s3" && r.Method == http.MethodPost:
+		s.apiTestS3(w, r)
+	case path == "settings/test-hub" && r.Method == http.MethodPost:
+		s.apiTestHub(w, r)
 	default:
 		writeProblem(w, r, http.StatusNotFound, "Not found", "This hfproxy API route is not implemented.")
 	}
+}
+
+func isMutation(method string) bool {
+	return method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch || method == http.MethodDelete
+}
+
+type settingsResponse struct {
+	PublicURL              string   `json:"public_url"`
+	HFBaseURL              string   `json:"hf_base_url"`
+	HFAllowedHosts         []string `json:"hf_allowed_hosts"`
+	HFTimeout              string   `json:"hf_timeout"`
+	HFTokenSet             bool     `json:"hf_token_set"`
+	S3Endpoint             string   `json:"s3_endpoint"`
+	S3Region               string   `json:"s3_region"`
+	S3Bucket               string   `json:"s3_bucket"`
+	S3Prefix               string   `json:"s3_prefix"`
+	S3ForcePathStyle       bool     `json:"s3_force_path_style"`
+	S3ServerSideEncryption bool     `json:"s3_server_side_encryption"`
+	S3AccessKeySet         bool     `json:"s3_access_key_set"`
+	S3SecretKeySet         bool     `json:"s3_secret_key_set"`
+	AuthMode               string   `json:"auth_mode"`
+	AnonymousPublicRead    bool     `json:"anonymous_public_read"`
+	SessionIdleTTL         string   `json:"session_idle_ttl"`
+	SessionAbsoluteTTL     string   `json:"session_absolute_ttl"`
+	CacheMaxFileSize       int64    `json:"cache_max_file_size"`
+	CacheRefTTL            string   `json:"cache_ref_ttl"`
+	CacheNegativeTTL       string   `json:"cache_negative_ttl"`
+	CacheGCGrace           string   `json:"cache_gc_grace"`
+	OIDCIssuer             string   `json:"oidc_issuer"`
+	OIDCClientID           string   `json:"oidc_client_id"`
+	OIDCClientSecretSet    bool     `json:"oidc_client_secret_set"`
+	OIDCRedirectURL        string   `json:"oidc_redirect_url"`
+	OIDCAutoProvision      bool     `json:"oidc_auto_provision"`
+	LDAPURL                string   `json:"ldap_url"`
+	LDAPStartTLS           bool     `json:"ldap_starttls"`
+	LDAPBindDN             string   `json:"ldap_bind_dn"`
+	LDAPBindPasswordSet    bool     `json:"ldap_bind_password_set"`
+	LDAPBaseDN             string   `json:"ldap_base_dn"`
+	LDAPUserFilter         string   `json:"ldap_user_filter"`
+	LDAPAutoProvision      bool     `json:"ldap_auto_provision"`
+}
+
+type settingsInput struct {
+	PublicURL              string   `json:"public_url"`
+	HFBaseURL              string   `json:"hf_base_url"`
+	HFAllowedHosts         []string `json:"hf_allowed_hosts"`
+	HFTimeout              string   `json:"hf_timeout"`
+	HFToken                string   `json:"hf_token"`
+	ClearHFToken           bool     `json:"clear_hf_token"`
+	S3Endpoint             string   `json:"s3_endpoint"`
+	S3Region               string   `json:"s3_region"`
+	S3Bucket               string   `json:"s3_bucket"`
+	S3Prefix               string   `json:"s3_prefix"`
+	S3ForcePathStyle       bool     `json:"s3_force_path_style"`
+	S3ServerSideEncryption bool     `json:"s3_server_side_encryption"`
+	S3AccessKey            string   `json:"s3_access_key"`
+	S3SecretKey            string   `json:"s3_secret_key"`
+	ClearS3Credentials     bool     `json:"clear_s3_credentials"`
+	AuthMode               string   `json:"auth_mode"`
+	AnonymousPublicRead    bool     `json:"anonymous_public_read"`
+	SessionIdleTTL         string   `json:"session_idle_ttl"`
+	SessionAbsoluteTTL     string   `json:"session_absolute_ttl"`
+	CacheMaxFileSize       int64    `json:"cache_max_file_size"`
+	CacheRefTTL            string   `json:"cache_ref_ttl"`
+	CacheNegativeTTL       string   `json:"cache_negative_ttl"`
+	CacheGCGrace           string   `json:"cache_gc_grace"`
+	OIDCIssuer             string   `json:"oidc_issuer"`
+	OIDCClientID           string   `json:"oidc_client_id"`
+	OIDCClientSecret       string   `json:"oidc_client_secret"`
+	ClearOIDCSecret        bool     `json:"clear_oidc_client_secret"`
+	OIDCRedirectURL        string   `json:"oidc_redirect_url"`
+	OIDCAutoProvision      bool     `json:"oidc_auto_provision"`
+	LDAPURL                string   `json:"ldap_url"`
+	LDAPStartTLS           bool     `json:"ldap_starttls"`
+	LDAPBindDN             string   `json:"ldap_bind_dn"`
+	LDAPBindPassword       string   `json:"ldap_bind_password"`
+	ClearLDAPPassword      bool     `json:"clear_ldap_bind_password"`
+	LDAPBaseDN             string   `json:"ldap_base_dn"`
+	LDAPUserFilter         string   `json:"ldap_user_filter"`
+	LDAPAutoProvision      bool     `json:"ldap_auto_provision"`
+}
+
+func settingsView(cfg config.Config) settingsResponse {
+	return settingsResponse{
+		PublicURL: cfg.PublicURL, HFBaseURL: cfg.HFBaseURL, HFAllowedHosts: cfg.HFAllowedHosts, HFTimeout: cfg.HFTimeout.String(), HFTokenSet: cfg.HFToken != "",
+		S3Endpoint: cfg.S3Endpoint, S3Region: cfg.S3Region, S3Bucket: cfg.S3Bucket, S3Prefix: cfg.S3Prefix, S3ForcePathStyle: cfg.S3ForcePathStyle, S3ServerSideEncryption: cfg.S3ServerSideEncryption,
+		S3AccessKeySet: cfg.S3AccessKey != "", S3SecretKeySet: cfg.S3SecretKey != "", AuthMode: cfg.AuthMode, AnonymousPublicRead: cfg.AnonymousPublicRead,
+		SessionIdleTTL: cfg.SessionIdleTTL.String(), SessionAbsoluteTTL: cfg.SessionAbsoluteTTL.String(), CacheMaxFileSize: cfg.CacheMaxFileSize,
+		CacheRefTTL: cfg.CacheRefTTL.String(), CacheNegativeTTL: cfg.CacheNegativeTTL.String(), CacheGCGrace: cfg.CacheGCGrace.String(),
+		OIDCIssuer: cfg.OIDCIssuer, OIDCClientID: cfg.OIDCClientID, OIDCClientSecretSet: cfg.OIDCClientSecret != "", OIDCRedirectURL: cfg.OIDCRedirectURL,
+		OIDCAutoProvision: cfg.OIDCAutoProvision, LDAPURL: cfg.LDAPURL, LDAPStartTLS: cfg.LDAPStartTLS, LDAPBindDN: cfg.LDAPBindDN,
+		LDAPBindPasswordSet: cfg.LDAPBindPassword != "", LDAPBaseDN: cfg.LDAPBaseDN, LDAPUserFilter: cfg.LDAPUserFilter, LDAPAutoProvision: cfg.LDAPAutoProvision,
+	}
+}
+
+func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, settingsView(s.currentConfig()))
+	case http.MethodPut:
+		var input settingsInput
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		cfg, err := input.apply(s.currentConfig())
+		if err != nil {
+			writeProblem(w, r, http.StatusBadRequest, "Invalid settings", err.Error())
+			return
+		}
+		if err := s.applyConfig(r.Context(), cfg, p.ID); err != nil {
+			s.logger.Warn("settings update failed", "request_id", requestID(r.Context()))
+			writeProblem(w, r, http.StatusBadRequest, "Settings could not be applied", "Check provider availability and configuration, then retry.")
+			return
+		}
+		fields := []string{"public_url", "huggingface", "s3", "authentication", "cache"}
+		s.audit(r.Context(), p.ID, "settings.update", "settings", "runtime", map[string]any{"updated_sections": fields})
+		writeJSON(w, http.StatusOK, settingsView(cfg))
+	case http.MethodDelete:
+		writeProblem(w, r, http.StatusNotImplemented, "Reset unavailable", "Edit settings directly; environment settings are not reloaded while the process is running.")
+	default:
+		methodNotAllowed(w)
+	}
+}
+
+func (in settingsInput) apply(cfg config.Config) (config.Config, error) {
+	parseDuration := func(name, value string, current time.Duration) (time.Duration, error) {
+		if value == "" {
+			return current, nil
+		}
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return 0, fmt.Errorf("%s must be a valid Go duration", name)
+		}
+		return parsed, nil
+	}
+	var err error
+	cfg.PublicURL, cfg.HFBaseURL, cfg.HFAllowedHosts = strings.TrimSpace(in.PublicURL), strings.TrimSpace(in.HFBaseURL), in.HFAllowedHosts
+	cfg.HFTimeout, err = parseDuration("HF timeout", in.HFTimeout, cfg.HFTimeout)
+	if err != nil {
+		return config.Config{}, err
+	}
+	cfg.S3Endpoint, cfg.S3Region, cfg.S3Bucket, cfg.S3Prefix, cfg.S3ForcePathStyle, cfg.S3ServerSideEncryption = strings.TrimSpace(in.S3Endpoint), strings.TrimSpace(in.S3Region), strings.TrimSpace(in.S3Bucket), strings.Trim(in.S3Prefix, "/"), in.S3ForcePathStyle, in.S3ServerSideEncryption
+	cfg.AuthMode, cfg.AnonymousPublicRead = in.AuthMode, in.AnonymousPublicRead
+	cfg.CacheMaxFileSize = in.CacheMaxFileSize
+	cfg.SessionIdleTTL, err = parseDuration("session idle TTL", in.SessionIdleTTL, cfg.SessionIdleTTL)
+	if err != nil {
+		return config.Config{}, err
+	}
+	cfg.SessionAbsoluteTTL, err = parseDuration("session absolute TTL", in.SessionAbsoluteTTL, cfg.SessionAbsoluteTTL)
+	if err != nil {
+		return config.Config{}, err
+	}
+	cfg.CacheRefTTL, err = parseDuration("reference TTL", in.CacheRefTTL, cfg.CacheRefTTL)
+	if err != nil {
+		return config.Config{}, err
+	}
+	cfg.CacheNegativeTTL, err = parseDuration("negative cache TTL", in.CacheNegativeTTL, cfg.CacheNegativeTTL)
+	if err != nil {
+		return config.Config{}, err
+	}
+	cfg.CacheGCGrace, err = parseDuration("cache GC grace", in.CacheGCGrace, cfg.CacheGCGrace)
+	if err != nil {
+		return config.Config{}, err
+	}
+	cfg.OIDCIssuer, cfg.OIDCClientID, cfg.OIDCRedirectURL, cfg.OIDCAutoProvision = strings.TrimSpace(in.OIDCIssuer), strings.TrimSpace(in.OIDCClientID), strings.TrimSpace(in.OIDCRedirectURL), in.OIDCAutoProvision
+	cfg.LDAPURL, cfg.LDAPStartTLS, cfg.LDAPBindDN = strings.TrimSpace(in.LDAPURL), in.LDAPStartTLS, strings.TrimSpace(in.LDAPBindDN)
+	cfg.LDAPBaseDN, cfg.LDAPUserFilter, cfg.LDAPAutoProvision = strings.TrimSpace(in.LDAPBaseDN), strings.TrimSpace(in.LDAPUserFilter), in.LDAPAutoProvision
+	if in.ClearHFToken {
+		cfg.HFToken = ""
+	} else if in.HFToken != "" {
+		cfg.HFToken = in.HFToken
+	}
+	if in.ClearS3Credentials {
+		cfg.S3AccessKey, cfg.S3SecretKey = "", ""
+	} else {
+		if in.S3AccessKey != "" {
+			cfg.S3AccessKey = in.S3AccessKey
+		}
+		if in.S3SecretKey != "" {
+			cfg.S3SecretKey = in.S3SecretKey
+		}
+	}
+	if in.ClearOIDCSecret {
+		cfg.OIDCClientSecret = ""
+	} else if in.OIDCClientSecret != "" {
+		cfg.OIDCClientSecret = in.OIDCClientSecret
+	}
+	if in.ClearLDAPPassword {
+		cfg.LDAPBindPassword = ""
+	} else if in.LDAPBindPassword != "" {
+		cfg.LDAPBindPassword = in.LDAPBindPassword
+	}
+	if cfg.S3Bucket == "" {
+		return config.Config{}, fmt.Errorf("S3 bucket is required before applying settings")
+	}
+	if err := cfg.Validate(); err != nil {
+		return config.Config{}, err
+	}
+	return cfg, nil
+}
+
+func (s *Server) apiTestS3(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	var input struct {
+		Endpoint             string `json:"s3_endpoint"`
+		Region               string `json:"s3_region"`
+		Bucket               string `json:"s3_bucket"`
+		Prefix               string `json:"s3_prefix"`
+		ForcePathStyle       bool   `json:"s3_force_path_style"`
+		ServerSideEncryption bool   `json:"s3_server_side_encryption"`
+		AccessKey            string `json:"s3_access_key"`
+		SecretKey            string `json:"s3_secret_key"`
+		Clear                bool   `json:"clear_s3_credentials"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	cfg := s.currentConfig()
+	cfg.S3Endpoint, cfg.S3Region, cfg.S3Bucket, cfg.S3Prefix, cfg.S3ForcePathStyle, cfg.S3ServerSideEncryption = strings.TrimSpace(input.Endpoint), strings.TrimSpace(input.Region), strings.TrimSpace(input.Bucket), strings.Trim(input.Prefix, "/"), input.ForcePathStyle, input.ServerSideEncryption
+	if cfg.S3Bucket == "" {
+		writeProblem(w, r, http.StatusBadRequest, "Invalid S3 settings", "An S3 bucket is required.")
+		return
+	}
+	if input.Clear {
+		cfg.S3AccessKey, cfg.S3SecretKey = "", ""
+	} else {
+		if input.AccessKey != "" {
+			cfg.S3AccessKey = input.AccessKey
+		}
+		if input.SecretKey != "" {
+			cfg.S3SecretKey = input.SecretKey
+		}
+	}
+	if err := cfg.Validate(); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "Invalid S3 settings", err.Error())
+		return
+	}
+	objects, err := storage.New(r.Context(), cfg.S3Endpoint, cfg.S3Region, cfg.S3Bucket, cfg.S3Prefix, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3ForcePathStyle, cfg.S3ServerSideEncryption)
+	if err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "Invalid S3 settings", "Check the endpoint, bucket, region, and credentials.")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if err := objects.Ready(ctx); err != nil {
+		writeProblem(w, r, http.StatusBadGateway, "S3 connection failed", "Check the endpoint, bucket, region, and credentials.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "s3"})
+}
+
+func (s *Server) apiTestHub(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	var input struct {
+		BaseURL string `json:"hf_base_url"`
+		Token   string `json:"hf_token"`
+		Clear   bool   `json:"clear_hf_token"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	cfg := s.currentConfig()
+	cfg.HFBaseURL = strings.TrimSpace(input.BaseURL)
+	if input.Clear {
+		cfg.HFToken = ""
+	} else if input.Token != "" {
+		cfg.HFToken = input.Token
+	}
+	if err := cfg.Validate(); err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "Invalid Hub settings", err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(cfg.HFBaseURL, "/")+"/api/whoami-v2", nil)
+	if err != nil {
+		writeProblem(w, r, http.StatusBadRequest, "Invalid Hub settings", "Check the Hub URL.")
+		return
+	}
+	if cfg.HFToken != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.HFToken)
+	}
+	resp, err := newHFHTTPClient(cfg).Do(req)
+	if err != nil {
+		writeProblem(w, r, http.StatusBadGateway, "Hugging Face connection failed", "Check the Hub URL, network access, and token.")
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized && cfg.HFToken == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "huggingface", "token_configured": false})
+		return
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		writeProblem(w, r, http.StatusBadGateway, "Hugging Face rejected the token", "The Hub is reachable, but the configured token is missing or does not have access.")
+		return
+	}
+	if resp.StatusCode >= 500 {
+		writeProblem(w, r, http.StatusBadGateway, "Hugging Face is unavailable", "The Hub returned a server error.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "huggingface"})
 }
 
 func (s *Server) apiStats(w http.ResponseWriter, r *http.Request) {
@@ -89,6 +414,47 @@ func (s *Server) apiStats(w http.ResponseWriter, r *http.Request) {
 		}
 		return float64(hits) / float64(hits+misses)
 	}(), "downloads_in_progress": active, "actor_role": p.Role})
+}
+
+func (s *Server) apiActiveDownloads(w http.ResponseWriter, r *http.Request) {
+	p, err := s.authenticate(r)
+	if err != nil {
+		writeProblem(w, r, http.StatusUnauthorized, "Authentication required", "Sign in to view active downloads.")
+		return
+	}
+	rows, err := s.db.SQL.QueryContext(r.Context(), `SELECT d.id,r.repo_type,r.repo_id,d.path,d.bytes,d.started_at
+		FROM downloads d JOIN repositories r ON r.id=d.repository_id
+		WHERE d.status='downloading' AND r.deleted_at IS NULL
+		AND ($1='admin' OR r.access_policy='public'
+			OR EXISTS(SELECT 1 FROM repo_grants g WHERE g.repository_id=r.id AND g.subject_type='user' AND g.subject_id=$2)
+			OR EXISTS(SELECT 1 FROM repo_grants g JOIN group_members m ON m.group_id=g.subject_id WHERE g.repository_id=r.id AND g.subject_type='group' AND m.user_id=$2))
+		ORDER BY d.started_at DESC LIMIT 50`, p.Role, p.ID)
+	if err != nil {
+		writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to read active downloads.")
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var id, repoType, repoID, path string
+		var bytes int64
+		var started time.Time
+		if err := rows.Scan(&id, &repoType, &repoID, &path, &bytes, &started); err != nil {
+			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to read active downloads.")
+			return
+		}
+		items = append(items, map[string]any{"id": id, "repo_type": repoType, "repo_id": repoID, "path": path, "bytes": bytes, "started_at": started})
+	}
+	if err := rows.Err(); err != nil {
+		writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to read active downloads.")
+		return
+	}
+	preloads, err := s.preloadSnapshots(r.Context(), p)
+	if err != nil {
+		writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to read preload status.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "preloads": preloads})
 }
 
 func (s *Server) apiRepos(w http.ResponseWriter, r *http.Request) {
@@ -152,6 +518,10 @@ func (s *Server) apiRepo(w http.ResponseWriter, r *http.Request, path string) {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) == 2 && parts[1] == "grants" {
 		s.apiRepoGrants(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "preload" && r.Method == http.MethodPost {
+		s.startRepoPreload(w, r, parts[0])
 		return
 	}
 	if len(parts) != 1 {
@@ -412,13 +782,66 @@ func (s *Server) purgeArtifact(ctx context.Context, id string) error {
 		return err
 	}
 	if refs == 0 {
-		return s.storage.Delete(ctx, key)
+		return s.currentStorage().Delete(ctx, key)
 	}
 	return nil
 }
 
 func (s *Server) apiUsers(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireAdmin(w, r); !ok {
+	p, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if r.Method == http.MethodPost {
+		var input struct {
+			Username    string `json:"username"`
+			Email       string `json:"email"`
+			DisplayName string `json:"display_name"`
+			Password    string `json:"password"`
+			Role        string `json:"role"`
+		}
+		if !decodeJSON(w, r, &input) {
+			return
+		}
+		input.Username = strings.TrimSpace(input.Username)
+		input.Email = strings.TrimSpace(input.Email)
+		input.DisplayName = strings.TrimSpace(input.DisplayName)
+		if input.Role == "" {
+			input.Role = "reader"
+		}
+		if !validLocalUsername(input.Username) {
+			writeProblem(w, r, http.StatusBadRequest, "Invalid username", "Use 1 to 64 letters, digits, dots, underscores, or hyphens.")
+			return
+		}
+		if len(input.Email) > 254 || (input.Email != "" && !validEmail(input.Email)) || len(input.DisplayName) > 200 {
+			writeProblem(w, r, http.StatusBadRequest, "Invalid profile", "Check the email address and keep the display name under 200 characters.")
+			return
+		}
+		if input.Role != "admin" && input.Role != "operator" && input.Role != "reader" {
+			writeProblem(w, r, http.StatusBadRequest, "Invalid role", "role must be admin, operator, or reader.")
+			return
+		}
+		hash, err := HashPassword(input.Password)
+		if err != nil {
+			writeProblem(w, r, http.StatusBadRequest, "Invalid password", "Password must contain 12 to 1024 bytes.")
+			return
+		}
+		id := db.NewID()
+		_, err = s.db.SQL.ExecContext(r.Context(), `INSERT INTO users(id,username,email,display_name,password_hash,role) VALUES($1,$2,$3,$4,$5,$6)`, id, input.Username, input.Email, input.DisplayName, hash, input.Role)
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") || strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+				writeProblem(w, r, http.StatusConflict, "Username already exists", "Choose a different username.")
+				return
+			}
+			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to create user.")
+			return
+		}
+		s.audit(r.Context(), p.ID, "user.create", "user", id, map[string]any{"username": input.Username, "role": input.Role})
+		writeJSON(w, http.StatusCreated, map[string]string{"id": id, "username": input.Username, "role": input.Role, "status": "active"})
+		return
+	}
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
 		return
 	}
 	rows, err := s.db.SQL.QueryContext(r.Context(), `SELECT id,username,email,display_name,role,status,created_at FROM users ORDER BY username LIMIT 200`)
@@ -436,6 +859,23 @@ func (s *Server) apiUsers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]any{"items": items, "limit": 200, "cursor": ""})
+}
+
+func validLocalUsername(username string) bool {
+	if username == "" || len(username) > 64 {
+		return false
+	}
+	for _, r := range username {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-", r)) {
+			return false
+		}
+	}
+	return true
+}
+
+func validEmail(address string) bool {
+	parsed, err := mail.ParseAddress(address)
+	return err == nil && parsed.Address == address
 }
 
 func (s *Server) apiUserPatch(w http.ResponseWriter, r *http.Request, id string) {
@@ -544,12 +984,38 @@ func (s *Server) apiGroups(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiGroup(w http.ResponseWriter, r *http.Request, id string) {
-	if r.Method != http.MethodPatch || id == "" || strings.Contains(id, "/") {
+	if (r.Method != http.MethodPatch && r.Method != http.MethodGet) || id == "" || strings.Contains(id, "/") {
 		methodNotAllowed(w)
 		return
 	}
 	p, ok := s.requireAdmin(w, r)
 	if !ok {
+		return
+	}
+	if r.Method == http.MethodGet {
+		var name, source string
+		if err := s.db.SQL.QueryRowContext(r.Context(), `SELECT name,source FROM groups WHERE id=$1`, id).Scan(&name, &source); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeProblem(w, r, http.StatusNotFound, "Group not found", "The group does not exist.")
+			} else {
+				writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to load the group.")
+			}
+			return
+		}
+		rows, err := s.db.SQL.QueryContext(r.Context(), `SELECT u.id,u.username,u.role FROM group_members m JOIN users u ON u.id=m.user_id WHERE m.group_id=$1 ORDER BY u.username`, id)
+		if err != nil {
+			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to list group members.")
+			return
+		}
+		defer rows.Close()
+		members := []map[string]string{}
+		for rows.Next() {
+			var memberID, username, role string
+			if rows.Scan(&memberID, &username, &role) == nil {
+				members = append(members, map[string]string{"id": memberID, "username": username, "role": role})
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": id, "name": name, "source": source, "members": members})
 		return
 	}
 	var input struct {

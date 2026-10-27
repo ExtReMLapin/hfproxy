@@ -1,0 +1,534 @@
+<app-page-heading
+  title="Settings"
+  subtitle="Configure upstream access, storage, authentication, and cache behavior."
+  eyebrow="Instance configuration"
+>
+  <button
+    type="button"
+    (click)="refresh()"
+    [disabled]="busy()"
+    class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+  >
+    <app-icon name="refresh" [size]="15" />Reload
+  </button>
+</app-page-heading>
+
+@if (loading()) {
+  <div
+    class="grid min-h-64 place-items-center rounded-2xl border border-slate-200 bg-white text-sm text-slate-400"
+  >
+    Loading current settings…
+  </div>
+} @else if (draft; as settings) {
+  <form (ngSubmit)="save()">
+    <div class="grid gap-5 xl:grid-cols-[220px_minmax(0,1fr)]">
+      <nav
+        class="flex gap-1 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white p-2 shadow-sm xl:block xl:h-fit xl:space-y-1"
+        aria-label="Settings sections"
+      >
+        @for (item of sections; track item.id) {
+          <button
+            type="button"
+            (click)="section.set(item.id)"
+            [class.bg-emerald-50]="section() === item.id"
+            [class.text-emerald-800]="section() === item.id"
+            [class.text-slate-500]="section() !== item.id"
+            class="flex shrink-0 items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-semibold transition hover:bg-slate-50 xl:w-full"
+          >
+            <app-icon [name]="item.icon" [size]="16" /><span>{{ item.label }}</span>
+          </button>
+        }
+      </nav>
+
+      <div class="min-w-0">
+        @switch (section()) {
+          @case ('connections') {
+            <section
+              class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] sm:p-7"
+            >
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700">
+                    Upstream
+                  </p>
+                  <h2 class="mt-1 text-lg font-semibold text-slate-950">Hugging Face Hub</h2>
+                  <p class="mt-1 max-w-xl text-xs leading-5 text-slate-500">
+                    The token lets hfproxy access private repositories. It is stored encrypted and
+                    never sent back to this page.
+                  </p>
+                </div>
+                <span
+                  [class.bg-emerald-50]="settings.hf_token_set"
+                  [class.text-emerald-700]="settings.hf_token_set"
+                  [class.bg-amber-50]="!settings.hf_token_set"
+                  [class.text-amber-700]="!settings.hf_token_set"
+                  class="rounded-full px-2.5 py-1 text-[10px] font-bold"
+                  >{{ settings.hf_token_set ? 'Token configured' : 'No token saved' }}</span
+                >
+              </div>
+              <div class="mt-6 grid gap-4 md:grid-cols-2">
+                <label class="field"
+                  >Hub base URL<input
+                    class="control"
+                    name="hfBase"
+                    [(ngModel)]="settings.hf_base_url"
+                    placeholder="https://huggingface.co" /></label
+                ><label class="field"
+                  >Request timeout<input
+                    class="control"
+                    name="hfTimeout"
+                    [(ngModel)]="settings.hf_timeout"
+                    placeholder="2m"
+                  /><span class="hint">Go duration, for example 30s or 2m.</span></label
+                ><label class="field md:col-span-2"
+                  >Allowed redirect hosts<input
+                    class="control"
+                    name="hfHosts"
+                    [(ngModel)]="settings.hf_allowed_hosts_text"
+                    placeholder="huggingface.co, *.hf.co"
+                  /><span class="hint"
+                    >Comma separated. Keep this list narrow to protect browser redirects.</span
+                  ></label
+                ><label class="field md:col-span-2"
+                  >Hub read token<input
+                    class="control"
+                    name="hfToken"
+                    [(ngModel)]="settings.hf_token"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="Leave blank to keep the saved token"
+                /></label>
+              </div>
+              @if (settings.hf_token_set) {
+                <label class="toggle-row mt-4"
+                  ><input
+                    type="checkbox"
+                    name="clearHF"
+                    [(ngModel)]="settings.clear_hf_token"
+                  /><span>Clear the saved Hugging Face token</span></label
+                >
+              }
+              <div class="mt-6 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  (click)="testHub()"
+                  [disabled]="busy()"
+                  class="secondary-button"
+                >
+                  <app-icon name="arrow" [size]="15" />Test Hub connection</button
+                ><span class="text-[11px] text-slate-400"
+                  >Uses the current form values without saving them.</span
+                >
+              </div>
+            </section>
+          }
+          @case ('storage') {
+            <section
+              class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] sm:p-7"
+            >
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700">
+                    Object storage
+                  </p>
+                  <h2 class="mt-1 text-lg font-semibold text-slate-950">S3-compatible storage</h2>
+                  <p class="mt-1 max-w-xl text-xs leading-5 text-slate-500">
+                    Connect Garage, AWS S3, or another S3-compatible service. Credentials are stored
+                    encrypted.
+                  </p>
+                </div>
+                <span
+                  [class.bg-emerald-50]="settings.s3_secret_key_set"
+                  [class.text-emerald-700]="settings.s3_secret_key_set"
+                  [class.bg-slate-100]="!settings.s3_secret_key_set"
+                  [class.text-slate-600]="!settings.s3_secret_key_set"
+                  class="rounded-full px-2.5 py-1 text-[10px] font-bold"
+                  >{{
+                    settings.s3_secret_key_set ? 'Credentials saved' : 'Default credential chain'
+                  }}</span
+                >
+              </div>
+              <div class="mt-6 grid gap-4 sm:grid-cols-2">
+                <label class="field sm:col-span-2"
+                  >Endpoint URL<input
+                    class="control"
+                    name="s3Endpoint"
+                    [(ngModel)]="settings.s3_endpoint"
+                    placeholder="https://s3.example.com"
+                  /><span class="hint">Leave empty to use the standard cloud endpoint.</span></label
+                ><label class="field"
+                  >Region<input
+                    class="control"
+                    name="s3Region"
+                    [(ngModel)]="settings.s3_region"
+                    placeholder="us-east-1" /></label
+                ><label class="field"
+                  >Bucket<input
+                    class="control"
+                    name="s3Bucket"
+                    [(ngModel)]="settings.s3_bucket"
+                    required /></label
+                ><label class="field sm:col-span-2"
+                  >Key prefix<input
+                    class="control"
+                    name="s3Prefix"
+                    [(ngModel)]="settings.s3_prefix"
+                    placeholder="hfproxy" /></label
+                ><label class="field"
+                  >Access key<input
+                    class="control"
+                    name="s3Access"
+                    [(ngModel)]="settings.s3_access_key"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="Leave blank to keep current key" /></label
+                ><label class="field"
+                  >Secret key<input
+                    class="control"
+                    name="s3Secret"
+                    [(ngModel)]="settings.s3_secret_key"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="Leave blank to keep current key"
+                /></label>
+              </div>
+              <div class="mt-5 space-y-3">
+                <label class="toggle-row"
+                  ><input
+                    type="checkbox"
+                    name="pathStyle"
+                    [(ngModel)]="settings.s3_force_path_style"
+                  /><span
+                    >Use path-style URLs
+                    <span class="font-normal text-slate-400"
+                      >(required by many S3-compatible services)</span
+                    ></span
+                  ></label
+                ><label class="toggle-row"
+                  ><input
+                    type="checkbox"
+                    name="s3Encryption"
+                    [(ngModel)]="settings.s3_server_side_encryption"
+                  /><span>Request AES256 server-side encryption</span></label
+                >
+                @if (settings.s3_secret_key_set) {
+                  <label class="toggle-row text-rose-700"
+                    ><input
+                      type="checkbox"
+                      name="clearS3"
+                      [(ngModel)]="settings.clear_s3_credentials"
+                    /><span>Clear saved S3 credentials</span></label
+                  >
+                }
+              </div>
+              <div
+                class="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900"
+              >
+                <span class="font-semibold">Garage:</span> Garage does not support S3-managed AES256
+                encryption; leave that option off and use encrypted disks for at-rest protection.
+                Changing the bucket or prefix does not move existing objects.
+              </div>
+              <div class="mt-6">
+                <button
+                  type="button"
+                  (click)="testS3()"
+                  [disabled]="busy()"
+                  class="secondary-button"
+                >
+                  <app-icon name="arrow" [size]="15" />Test storage connection
+                </button>
+              </div>
+            </section>
+          }
+          @case ('access') {
+            <section
+              class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] sm:p-7"
+            >
+              <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700">
+                Authentication
+              </p>
+              <h2 class="mt-1 text-lg font-semibold text-slate-950">Access & sessions</h2>
+              <p class="mt-1 text-xs leading-5 text-slate-500">
+                Local accounts are always available. SSO and directory sign-in can be configured
+                separately.
+              </p>
+              <div class="mt-6 grid gap-4 sm:grid-cols-2">
+                <label class="field"
+                  >Primary sign-in mode<select
+                    class="control"
+                    name="authMode"
+                    [(ngModel)]="settings.auth_mode"
+                  >
+                    <option value="local">Local accounts</option>
+                    <option value="oidc">OIDC single sign-on</option>
+                  </select></label
+                ><label class="field"
+                  >Public URL<input
+                    class="control"
+                    name="publicUrl"
+                    [(ngModel)]="settings.public_url"
+                    placeholder="https://hfproxy.example.com"
+                  /><span class="hint"
+                    >Used when creating external authentication callbacks.</span
+                  ></label
+                ><label class="field"
+                  >Idle session lifetime<input
+                    class="control"
+                    name="idleTTL"
+                    [(ngModel)]="settings.session_idle_ttl"
+                    placeholder="8h" /></label
+                ><label class="field"
+                  >Absolute session lifetime<input
+                    class="control"
+                    name="absoluteTTL"
+                    [(ngModel)]="settings.session_absolute_ttl"
+                    placeholder="24h"
+                /></label>
+              </div>
+              <label class="toggle-row mt-5"
+                ><input
+                  type="checkbox"
+                  name="anonRead"
+                  [(ngModel)]="settings.anonymous_public_read"
+                /><span>Allow unauthenticated reads for repositories marked public</span></label
+              >
+              <div class="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500">
+                Database connection and session encryption are bootstrap settings and remain in the
+                environment.
+              </div>
+            </section>
+          }
+          @case ('oidc') {
+            <section
+              class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] sm:p-7"
+            >
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700">
+                    Optional provider
+                  </p>
+                  <h2 class="mt-1 text-lg font-semibold text-slate-950">OIDC single sign-on</h2>
+                  <p class="mt-1 max-w-xl text-xs leading-5 text-slate-500">
+                    When the issuer is configured, users can sign in with your identity provider.
+                  </p>
+                </div>
+                <span
+                  [class.bg-emerald-50]="settings.oidc_client_secret_set"
+                  [class.text-emerald-700]="settings.oidc_client_secret_set"
+                  [class.bg-slate-100]="!settings.oidc_client_secret_set"
+                  [class.text-slate-500]="!settings.oidc_client_secret_set"
+                  class="rounded-full px-2.5 py-1 text-[10px] font-bold"
+                  >{{ settings.oidc_client_secret_set ? 'Configured' : 'Disabled' }}</span
+                >
+              </div>
+              <div class="mt-6 grid gap-4 sm:grid-cols-2">
+                <label class="field sm:col-span-2"
+                  >Issuer URL<input
+                    class="control"
+                    name="oidcIssuer"
+                    [(ngModel)]="settings.oidc_issuer"
+                    placeholder="https://identity.example.com/issuer" /></label
+                ><label class="field"
+                  >Client ID<input
+                    class="control"
+                    name="oidcClientID"
+                    [(ngModel)]="settings.oidc_client_id" /></label
+                ><label class="field"
+                  >Client secret<input
+                    class="control"
+                    name="oidcSecret"
+                    [(ngModel)]="settings.oidc_client_secret"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="Leave blank to keep saved secret" /></label
+                ><label class="field sm:col-span-2"
+                  >Callback URL<input
+                    class="control"
+                    name="oidcCallback"
+                    [(ngModel)]="settings.oidc_redirect_url"
+                    placeholder="https://hfproxy.example.com/auth/callback"
+                /></label>
+              </div>
+              @if (settings.oidc_client_secret_set) {
+                <label class="toggle-row mt-4 text-rose-700"
+                  ><input
+                    type="checkbox"
+                    name="clearOIDC"
+                    [(ngModel)]="settings.clear_oidc_client_secret"
+                  /><span>Clear saved client secret</span></label
+                >
+              }
+              <label class="toggle-row mt-4"
+                ><input
+                  type="checkbox"
+                  name="oidcProvision"
+                  [(ngModel)]="settings.oidc_auto_provision"
+                /><span>Provision verified OIDC identities as reader accounts</span></label
+              >
+              <p class="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500">
+                Applying the issuer performs provider discovery before activating the configuration.
+              </p>
+            </section>
+          }
+          @case ('ldap') {
+            <section
+              class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] sm:p-7"
+            >
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700">
+                    Optional provider
+                  </p>
+                  <h2 class="mt-1 text-lg font-semibold text-slate-950">LDAP / Active Directory</h2>
+                  <p class="mt-1 max-w-xl text-xs leading-5 text-slate-500">
+                    Directory passwords are used only to authenticate with LDAP and are never stored
+                    or logged.
+                  </p>
+                </div>
+                <span
+                  [class.bg-emerald-50]="!!settings.ldap_url"
+                  [class.text-emerald-700]="!!settings.ldap_url"
+                  [class.bg-slate-100]="!settings.ldap_url"
+                  [class.text-slate-500]="!settings.ldap_url"
+                  class="rounded-full px-2.5 py-1 text-[10px] font-bold"
+                  >{{ settings.ldap_url ? 'Configured' : 'Disabled' }}</span
+                >
+              </div>
+              <div class="mt-6 grid gap-4 sm:grid-cols-2">
+                <label class="field sm:col-span-2"
+                  >LDAP URL<input
+                    class="control"
+                    name="ldapURL"
+                    [(ngModel)]="settings.ldap_url"
+                    placeholder="ldaps://directory.example.com:636" /></label
+                ><label class="field sm:col-span-2"
+                  >Bind DN <span class="font-normal text-slate-400">(optional)</span
+                  ><input
+                    class="control"
+                    name="ldapBindDN"
+                    [(ngModel)]="settings.ldap_bind_dn" /></label
+                ><label class="field sm:col-span-2"
+                  >Bind password<input
+                    class="control"
+                    name="ldapPassword"
+                    [(ngModel)]="settings.ldap_bind_password"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="Leave blank to keep saved password" /></label
+                ><label class="field sm:col-span-2"
+                  >Search base DN<input
+                    class="control"
+                    name="ldapBase"
+                    [(ngModel)]="settings.ldap_base_dn"
+                    placeholder="ou=users,dc=example,dc=com" /></label
+                ><label class="field sm:col-span-2"
+                  >User search filter<input
+                    class="control font-mono text-xs"
+                    name="ldapFilter"
+                    [(ngModel)]="settings.ldap_user_filter"
+                    placeholder="(uid={username})"
+                /></label>
+              </div>
+              <div class="mt-5 space-y-3">
+                <label class="toggle-row"
+                  ><input
+                    type="checkbox"
+                    name="ldapTLS"
+                    [(ngModel)]="settings.ldap_starttls"
+                  /><span>Use StartTLS when using ldap://</span></label
+                ><label class="toggle-row"
+                  ><input
+                    type="checkbox"
+                    name="ldapProvision"
+                    [(ngModel)]="settings.ldap_auto_provision"
+                  /><span>Provision matching directory users as reader accounts</span></label
+                >
+                @if (settings.ldap_bind_password_set) {
+                  <label class="toggle-row text-rose-700"
+                    ><input
+                      type="checkbox"
+                      name="clearLDAP"
+                      [(ngModel)]="settings.clear_ldap_bind_password"
+                    /><span>Clear saved bind password</span></label
+                  >
+                }
+              </div>
+              <p class="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500">
+                Users enter their directory username and password on the standard sign-in form.
+              </p>
+            </section>
+          }
+          @case ('cache') {
+            <section
+              class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] sm:p-7"
+            >
+              <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700">
+                Proxy behavior
+              </p>
+              <h2 class="mt-1 text-lg font-semibold text-slate-950">Cache rules</h2>
+              <p class="mt-1 text-xs leading-5 text-slate-500">
+                Control limits and expiry using Go duration syntax, for example 60s, 2m, or 24h.
+              </p>
+              <div class="mt-6 grid gap-4 sm:grid-cols-2">
+                <label class="field"
+                  >Maximum file size <span class="font-normal text-slate-400">(bytes)</span
+                  ><input
+                    class="control"
+                    name="maxSize"
+                    type="number"
+                    min="1"
+                    [(ngModel)]="settings.cache_max_file_size" /></label
+                ><label class="field"
+                  >Reference TTL<input
+                    class="control"
+                    name="refTTL"
+                    [(ngModel)]="settings.cache_ref_ttl"
+                    placeholder="24h" /></label
+                ><label class="field"
+                  >Negative cache TTL<input
+                    class="control"
+                    name="negativeTTL"
+                    [(ngModel)]="settings.cache_negative_ttl"
+                    placeholder="30s" /></label
+                ><label class="field"
+                  >Blob garbage collection grace<input
+                    class="control"
+                    name="gcGrace"
+                    [(ngModel)]="settings.cache_gc_grace"
+                    placeholder="1h"
+                /></label>
+              </div>
+              <div
+                class="mt-6 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-800"
+              >
+                Cache size and contents can be inspected on the Cache page. Changing the storage
+                bucket does not migrate existing objects.
+              </div>
+            </section>
+          }
+        }
+
+        <div class="mt-5 flex flex-col-reverse justify-between gap-3 sm:flex-row sm:items-center">
+          <p class="text-[11px] leading-5 text-slate-400">
+            Credentials and tokens are write-only and encrypted with the session secret.
+          </p>
+          <div class="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              (click)="refresh()"
+              class="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+            >
+              Discard changes</button
+            ><button
+              type="submit"
+              [disabled]="busy()"
+              class="inline-flex min-w-36 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-800 disabled:opacity-50"
+            >
+              <app-icon name="check" [size]="15" />{{ busy() ? 'Applying…' : 'Save and apply' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </form>
+}

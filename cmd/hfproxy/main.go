@@ -77,6 +77,7 @@ Usage:
   hfproxy serve
   hfproxy migrate up|status
   hfproxy admin create-user --username NAME --password-file PATH
+  hfproxy admin reset-password --username NAME --password-file PATH
   hfproxy admin token create --username NAME [--name NAME] [--expires 720h]
   hfproxy admin token list|revoke --id ID
   hfproxy admin repo add --type models --id org/repo --policy public
@@ -128,10 +129,17 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
-	if version == 0 {
+	if version < 2 {
 		return fmt.Errorf("database is not migrated; run hfproxy migrate up")
 	}
-	objects, err := storage.New(ctx, cfg.S3Endpoint, cfg.S3Region, cfg.S3Bucket, cfg.S3Prefix, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3ForcePathStyle)
+	cfg, err = config.LoadPersisted(ctx, store.SQL, cfg)
+	if err != nil {
+		return err
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	objects, err := storage.New(ctx, cfg.S3Endpoint, cfg.S3Region, cfg.S3Bucket, cfg.S3Prefix, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3ForcePathStyle, cfg.S3ServerSideEncryption)
 	if err != nil {
 		return err
 	}
@@ -174,7 +182,7 @@ func migrate(args []string) error {
 
 func admin(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: hfproxy admin create-user|token|repo")
+		return fmt.Errorf("usage: hfproxy admin create-user|reset-password|token|repo")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -199,21 +207,7 @@ func admin(args []string) error {
 		if *username == "" || *passwordFile == "" {
 			return fmt.Errorf("--username and --password-file are required")
 		}
-		var data []byte
-		if *passwordFile == "-" {
-			data, err = io.ReadAll(io.LimitReader(os.Stdin, 2048))
-		} else {
-			data, err = os.ReadFile(*passwordFile)
-		}
-		if err != nil {
-			return fmt.Errorf("read password file: %w", err)
-		}
-		password := strings.TrimRight(string(data), "\r\n")
-		hash, err := server.HashPassword(password)
-		for i := range data {
-			data[i] = 0
-		}
-		password = ""
+		hash, err := passwordHashFromFile(*passwordFile)
 		if err != nil {
 			return err
 		}
@@ -233,6 +227,45 @@ func admin(args []string) error {
 			return fmt.Errorf("create admin user: %w", err)
 		}
 		fmt.Printf("Created admin user %q (%s).\n", *username, id)
+		return nil
+	}
+	if args[0] == "reset-password" {
+		flags := flag.NewFlagSet("admin reset-password", flag.ContinueOnError)
+		username := flags.String("username", "", "existing local admin login name")
+		passwordFile := flags.String("password-file", "", "path to a secret file mounted for this command")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if !validUsername(*username) || *passwordFile == "" {
+			return fmt.Errorf("a valid --username and --password-file are required")
+		}
+		hash, err := passwordHashFromFile(*passwordFile)
+		if err != nil {
+			return err
+		}
+		tx, err := store.SQL.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("start password reset: %w", err)
+		}
+		defer tx.Rollback()
+		var userID string
+		err = tx.QueryRowContext(ctx, `UPDATE users SET password_hash=$1,updated_at=now() WHERE username=$2 AND role='admin' RETURNING id`, hash, *username).Scan(&userID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("admin user %q not found", *username)
+		}
+		if err != nil {
+			return fmt.Errorf("reset admin password: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=$1`, userID); err != nil {
+			return fmt.Errorf("revoke admin sessions: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO audit_events(id,action,target_type,target_id) VALUES($1,'admin.password.reset','user',$2)`, db.NewID(), userID); err != nil {
+			return fmt.Errorf("record password reset: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("save admin password: %w", err)
+		}
+		fmt.Printf("Reset password for admin user %q. Existing web sessions were revoked.\n", *username)
 		return nil
 	}
 	if args[0] == "token" {
@@ -307,6 +340,26 @@ func admin(args []string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown admin command %q", args[0])
+}
+
+func passwordHashFromFile(path string) (string, error) {
+	var data []byte
+	var err error
+	if path == "-" {
+		data, err = io.ReadAll(io.LimitReader(os.Stdin, 2048))
+	} else {
+		data, err = os.ReadFile(path)
+	}
+	if err != nil {
+		return "", fmt.Errorf("read password file: %w", err)
+	}
+	password := strings.TrimRight(string(data), "\r\n")
+	hash, err := server.HashPassword(password)
+	for i := range data {
+		data[i] = 0
+	}
+	password = ""
+	return hash, err
 }
 
 func tokenCommand(ctx context.Context, store *db.Store, cfg config.Config, args []string) error {
@@ -415,7 +468,14 @@ func cache(args []string) error {
 	if err := db.Migrate(ctx, store.SQL); err != nil {
 		return err
 	}
-	objects, err := storage.New(ctx, cfg.S3Endpoint, cfg.S3Region, cfg.S3Bucket, cfg.S3Prefix, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3ForcePathStyle)
+	cfg, err = config.LoadPersisted(ctx, store.SQL, cfg)
+	if err != nil {
+		return err
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	objects, err := storage.New(ctx, cfg.S3Endpoint, cfg.S3Region, cfg.S3Bucket, cfg.S3Prefix, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3ForcePathStyle, cfg.S3ServerSideEncryption)
 	if err != nil {
 		return err
 	}

@@ -41,24 +41,36 @@ func Migrate(ctx context.Context, sqlDB *sql.DB) error {
 	if err := sqlDB.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
 		return fmt.Errorf("read migration version: %w", err)
 	}
-	if version >= 1 {
-		return nil
+	if version < 1 {
+		if err := applyMigration(ctx, sqlDB, 1, schemaV1); err != nil {
+			return err
+		}
+		version = 1
 	}
+	if version < 2 {
+		if err := applyMigration(ctx, sqlDB, 2, schemaV2); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyMigration(ctx context.Context, sqlDB *sql.DB, version int64, schema string) error {
 	tx, err := sqlDB.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("start migration: %w", err)
+		return fmt.Errorf("start migration %d: %w", version, err)
 	}
 	defer tx.Rollback()
-	for _, statement := range strings.Split(schemaV1, ";") {
+	for _, statement := range strings.Split(schema, ";") {
 		if strings.TrimSpace(statement) == "" {
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("apply schema migration 1: %w", err)
+			return fmt.Errorf("apply schema migration %d: %w", version, err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version) VALUES (1) ON CONFLICT DO NOTHING`); err != nil {
-		return fmt.Errorf("record migration: %w", err)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version) VALUES ($1) ON CONFLICT DO NOTHING`, version); err != nil {
+		return fmt.Errorf("record migration %d: %w", version, err)
 	}
 	return tx.Commit()
 }
@@ -212,4 +224,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     expires_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
+`
+
+const schemaV2 = `
+CREATE TABLE IF NOT EXISTS app_settings (
+    setting_key TEXT PRIMARY KEY,
+    ciphertext BYTEA NOT NULL,
+    updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 `

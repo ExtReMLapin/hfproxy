@@ -40,6 +40,33 @@ type artifact struct {
 
 type resolvePath struct{ RepoType, RepoID, Revision, FilePath string }
 
+type downloadProgressWriter struct {
+	ctx         context.Context
+	db          *sql.DB
+	id          string
+	destination io.Writer
+	bytes       int64
+	lastPersist time.Time
+}
+
+func (w *downloadProgressWriter) Write(chunk []byte) (int, error) {
+	n, err := w.destination.Write(chunk)
+	w.bytes += int64(n)
+	if time.Since(w.lastPersist) >= time.Second {
+		w.lastPersist = time.Now()
+		_, _ = w.db.ExecContext(w.ctx, `UPDATE downloads SET bytes=$2 WHERE id=$1 AND status='downloading'`, w.id, w.bytes)
+	}
+	return n, err
+}
+
+func upstreamResolvePath(parsed resolvePath) string {
+	repoTypePrefix := ""
+	if parsed.RepoType != "models" {
+		repoTypePrefix = parsed.RepoType + "/"
+	}
+	return "/" + repoTypePrefix + escapeRepoPath(parsed.RepoID) + "/resolve/" + url.PathEscape(parsed.Revision) + "/" + escapeFilePath(parsed.FilePath)
+}
+
 func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		methodNotAllowed(w)
@@ -60,7 +87,7 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 	if validCommit(parsed.Revision) {
 		resolvedCommit = parsed.Revision
 	} else {
-		_ = s.db.SQL.QueryRowContext(r.Context(), `SELECT commit_sha FROM revisions WHERE repository_id=$1 AND requested_ref=$2 AND resolved_at>now()-($3 * interval '1 second')`, repoPK, parsed.Revision, s.config.CacheRefTTL.Seconds()).Scan(&resolvedCommit)
+		_ = s.db.SQL.QueryRowContext(r.Context(), `SELECT commit_sha FROM revisions WHERE repository_id=$1 AND requested_ref=$2 AND resolved_at>now()-($3 * interval '1 second')`, repoPK, parsed.Revision, s.currentConfig().CacheRefTTL.Seconds()).Scan(&resolvedCommit)
 		if !validCommit(resolvedCommit) {
 			resolvedCommit = ""
 		}
@@ -69,14 +96,14 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 		if cached, lookupErr := s.findArtifact(r.Context(), s.db.SQL, repoPK, resolvedCommit, parsed.FilePath); lookupErr == nil {
 			_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE artifacts SET last_accessed_at=now() WHERE id=$1`, cached.ID)
 			s.recordDownload(r.Context(), repoPK, resolvedCommit, parsed.FilePath, "hit", cached.Size, "")
-			s.serveArtifact(w, r, cached, "HIT")
+			s.serveOrAcknowledgePreload(w, r, cached, "HIT")
 			return
 		} else if !isNoRows(lookupErr) {
 			writeProblem(w, r, 500, "Cache metadata error", "Unable to read cache metadata.")
 			return
 		}
 	}
-	requestURL := "/" + parsed.RepoType + "/" + escapeRepoPath(parsed.RepoID) + "/resolve/" + url.PathEscape(parsed.Revision) + "/" + escapeFilePath(parsed.FilePath)
+	requestURL := upstreamResolvePath(parsed)
 	upstream, firstHeaders, err := s.fetchHub(r.Context(), http.MethodHead, requestURL, safeResolveQuery(r.URL.Query()), nil)
 	if err != nil {
 		s.hubFailure(w, r, err)
@@ -130,7 +157,7 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 	if cacheErr == nil {
 		_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE artifacts SET last_accessed_at=now() WHERE id=$1`, cached.ID)
 		s.recordDownload(r.Context(), repoPK, commit, parsed.FilePath, "hit", cached.Size, "")
-		s.serveArtifact(w, r, cached, "HIT")
+		s.serveOrAcknowledgePreload(w, r, cached, "HIT")
 		return
 	}
 	if r.Method == http.MethodHead {
@@ -169,7 +196,7 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.recordDownload(r.Context(), repoPK, commit, parsed.FilePath, "hit", cached.Size, "")
-		s.serveArtifact(w, r, cached, "HIT")
+		s.serveOrAcknowledgePreload(w, r, cached, "HIT")
 		return
 	} else if !isNoRows(err) {
 		writeProblem(w, r, 500, "Cache metadata error", "Unable to read cache metadata.")
@@ -177,7 +204,7 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 	}
 	downloadID := db.NewID()
 	_, _ = s.db.SQL.ExecContext(r.Context(), `INSERT INTO downloads(id,repository_id,commit_sha,path,status) VALUES($1,$2,$3,$4,'downloading')`, downloadID, repoPK, commit, parsed.FilePath)
-	fetchPath := "/" + parsed.RepoType + "/" + escapeRepoPath(parsed.RepoID) + "/resolve/" + url.PathEscape(parsed.Revision) + "/" + escapeFilePath(parsed.FilePath)
+	fetchPath := upstreamResolvePath(parsed)
 	body, headers, fetchErr := s.fetchHub(r.Context(), http.MethodGet, fetchPath, safeResolveQuery(r.URL.Query()), nil)
 	if fetchErr != nil {
 		s.finishDownload(r.Context(), downloadID, 0, "upstream")
@@ -199,7 +226,7 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, http.StatusConflict, "Revision changed", "The requested branch moved during the download; retry against the resolved revision.")
 		return
 	}
-	if body.ContentLength > s.config.CacheMaxFileSize {
+	if body.ContentLength > s.currentConfig().CacheMaxFileSize {
 		s.finishDownload(r.Context(), downloadID, 0, "size_limit")
 		writeProblem(w, r, 413, "File too large", "The upstream file exceeds the configured cache file limit.")
 		return
@@ -213,20 +240,24 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 	defer tmp.Close()
 	defer os.Remove(tmp.Name())
 	hash := sha256.New()
-	limited := io.LimitReader(body.Body, s.config.CacheMaxFileSize+1)
-	size, err := io.Copy(io.MultiWriter(tmp, hash), limited)
+	limited := io.LimitReader(body.Body, s.currentConfig().CacheMaxFileSize+1)
+	progress := &downloadProgressWriter{
+		ctx: r.Context(), db: s.db.SQL, id: downloadID,
+		destination: io.MultiWriter(tmp, hash), lastPersist: time.Now(),
+	}
+	size, err := io.Copy(progress, limited)
 	if err != nil {
 		s.finishDownload(r.Context(), downloadID, size, "upstream_read")
 		writeProblem(w, r, 502, "Upstream transfer failed", "The Hub response could not be completely downloaded.")
 		return
 	}
-	if size > s.config.CacheMaxFileSize {
+	if size > s.currentConfig().CacheMaxFileSize {
 		s.finishDownload(r.Context(), downloadID, size, "size_limit")
 		writeProblem(w, r, 413, "File too large", "The upstream file exceeds the configured cache file limit.")
 		return
 	}
 	digest := hex.EncodeToString(hash.Sum(nil))
-	key := s.storage.Key(digest)
+	key := s.currentStorage().Key(digest)
 	contentType := body.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = mime.TypeByExtension(path.Ext(parsed.FilePath))
@@ -242,7 +273,7 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 	var blobID, existingKey string
 	err = tx.QueryRowContext(r.Context(), `SELECT id,storage_key FROM blobs WHERE sha256=$1`, digest).Scan(&blobID, &existingKey)
 	if err == sql.ErrNoRows {
-		if err = s.storage.UploadFile(r.Context(), tmp, key, contentType, size); err != nil {
+		if err = s.currentStorage().UploadFile(r.Context(), tmp, key, contentType, size); err != nil {
 			s.finishDownload(r.Context(), downloadID, size, "storage")
 			writeProblem(w, r, 502, "Storage error", "The downloaded file could not be published to object storage.")
 			return
@@ -288,7 +319,7 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, 500, "Cache metadata error", "The artifact was stored but could not be read back.")
 		return
 	}
-	s.serveArtifact(w, r, cached, "MISS")
+	s.serveOrAcknowledgePreload(w, r, cached, "MISS")
 }
 
 func parseResolvePath(escaped string) (resolvePath, error) {
@@ -296,15 +327,17 @@ func parseResolvePath(escaped string) (resolvePath, error) {
 		return resolvePath{}, fmt.Errorf("request path exceeds the configured limit")
 	}
 	parts := strings.Split(strings.TrimPrefix(escaped, "/"), "/")
-	if len(parts) < 5 {
-		return resolvePath{}, fmt.Errorf("expected /{models|datasets|spaces}/{repo}/resolve/{revision}/{file}")
+	repoStart := 0
+	repoType := "models"
+	if len(parts) > 0 && validRepoType(parts[0]) {
+		repoType = parts[0]
+		repoStart = 1
 	}
-	repoType := parts[0]
-	if !validRepoType(repoType) {
-		return resolvePath{}, fmt.Errorf("repository type must be models, datasets, or spaces")
+	if len(parts) < repoStart+4 {
+		return resolvePath{}, fmt.Errorf("expected /{repo}/resolve/{revision}/{file} or /{models|datasets|spaces}/{repo}/resolve/{revision}/{file}")
 	}
 	marker := -1
-	for i := 2; i+2 < len(parts); i++ {
+	for i := repoStart + 1; i+2 < len(parts); i++ {
 		if parts[i] == "resolve" {
 			marker = i
 			break
@@ -313,8 +346,8 @@ func parseResolvePath(escaped string) (resolvePath, error) {
 	if marker < 0 {
 		return resolvePath{}, fmt.Errorf("resolve route is incomplete")
 	}
-	repoParts := make([]string, marker-1)
-	for i := 1; i < marker; i++ {
+	repoParts := make([]string, marker-repoStart)
+	for i := repoStart; i < marker; i++ {
 		if strings.Contains(strings.ToLower(parts[i]), "%2f") || strings.Contains(strings.ToLower(parts[i]), "%5c") {
 			return resolvePath{}, fmt.Errorf("encoded path separators are not allowed in repository identifiers")
 		}
@@ -322,7 +355,7 @@ func parseResolvePath(escaped string) (resolvePath, error) {
 		if err != nil {
 			return resolvePath{}, fmt.Errorf("invalid URL encoding")
 		}
-		repoParts[i-1] = decoded
+		repoParts[i-repoStart] = decoded
 	}
 	repoID := strings.Join(repoParts, "/")
 	if !validRepoID(repoID) {
@@ -415,7 +448,7 @@ func (s *Server) repositoryAccess(ctx context.Context, p *Principal, authErr err
 		return "", "", err
 	}
 	if p == nil {
-		if authErr != errNoCredentials || !s.config.AnonymousPublicRead || policy != "public" {
+		if authErr != errNoCredentials || !s.currentConfig().AnonymousPublicRead || policy != "public" {
 			return "", "", accessError{http.StatusUnauthorized, "Authentication required", "Sign in to access this repository."}
 		}
 		return id, policy, nil
@@ -461,11 +494,11 @@ type fetchResult struct {
 }
 
 func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query url.Values, headers http.Header) (*http.Response, http.Header, error) {
-	target := strings.TrimRight(s.config.HFBaseURL, "/") + requestPath
+	target := strings.TrimRight(s.currentConfig().HFBaseURL, "/") + requestPath
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}
-	baseURL, _ := url.Parse(s.config.HFBaseURL)
+	baseURL, _ := url.Parse(s.currentConfig().HFBaseURL)
 	baseHost := strings.ToLower(baseURL.Hostname())
 	var first http.Header
 	for hops := 0; hops <= 5; hops++ {
@@ -496,10 +529,10 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 				req.Header.Add(key, value)
 			}
 		}
-		if s.config.HFToken != "" && strings.EqualFold(u.Hostname(), baseHost) {
-			req.Header.Set("Authorization", "Bearer "+s.config.HFToken)
+		if s.currentConfig().HFToken != "" && strings.EqualFold(u.Hostname(), baseHost) {
+			req.Header.Set("Authorization", "Bearer "+s.currentConfig().HFToken)
 		}
-		resp, err := s.httpClient.Do(req)
+		resp, err := s.currentHTTPClient().Do(req)
 		if err != nil {
 			return nil, nil, fmt.Errorf("upstream request failed")
 		}
@@ -587,14 +620,14 @@ func newHFHTTPClient(cfg config.Config) *http.Client {
 	return &http.Client{Timeout: cfg.HFTimeout, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 func (s *Server) allowedRedirectHost(host string) bool {
-	base, _ := url.Parse(s.config.HFBaseURL)
+	base, _ := url.Parse(s.currentConfig().HFBaseURL)
 	if strings.EqualFold(host, base.Hostname()) {
 		return true
 	}
 	if ip, err := netip.ParseAddr(host); err == nil && !ip.IsGlobalUnicast() {
 		return false
 	}
-	for _, allowed := range s.config.HFAllowedHosts {
+	for _, allowed := range s.currentConfig().HFAllowedHosts {
 		if strings.HasPrefix(allowed, "*.") {
 			suffix := strings.TrimPrefix(allowed, "*")
 			if strings.HasSuffix(host, suffix) && host != strings.TrimPrefix(suffix, ".") {
@@ -686,7 +719,7 @@ func (s *Server) serveArtifact(w http.ResponseWriter, r *http.Request, a artifac
 		w.WriteHeader(status)
 		return
 	}
-	out, err := s.storage.Get(r.Context(), a.StorageKey, byteRange)
+	out, err := s.currentStorage().Get(r.Context(), a.StorageKey, byteRange)
 	if err != nil {
 		s.logger.Error("cache object read failed", "sha256", a.SHA256)
 		writeProblem(w, r, 502, "Storage error", "The cached artifact is temporarily unavailable.")

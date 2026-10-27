@@ -1,0 +1,159 @@
+package config
+
+import (
+	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"time"
+)
+
+type managedSettings struct {
+	PublicURL              string        `json:"public_url"`
+	HFBaseURL              string        `json:"hf_base_url"`
+	HFToken                string        `json:"hf_token"`
+	HFAllowedHosts         []string      `json:"hf_allowed_hosts"`
+	HFTimeout              time.Duration `json:"hf_timeout"`
+	S3Endpoint             string        `json:"s3_endpoint"`
+	S3Region               string        `json:"s3_region"`
+	S3Bucket               string        `json:"s3_bucket"`
+	S3Prefix               string        `json:"s3_prefix"`
+	S3ForcePathStyle       bool          `json:"s3_force_path_style"`
+	S3AccessKey            string        `json:"s3_access_key"`
+	S3SecretKey            string        `json:"s3_secret_key"`
+	S3ServerSideEncryption *bool         `json:"s3_server_side_encryption"`
+	AuthMode               string        `json:"auth_mode"`
+	AnonymousPublicRead    bool          `json:"anonymous_public_read"`
+	SessionIdleTTL         time.Duration `json:"session_idle_ttl"`
+	SessionAbsoluteTTL     time.Duration `json:"session_absolute_ttl"`
+	CacheMaxFileSize       int64         `json:"cache_max_file_size"`
+	CacheRefTTL            time.Duration `json:"cache_ref_ttl"`
+	CacheNegativeTTL       time.Duration `json:"cache_negative_ttl"`
+	CacheGCGrace           time.Duration `json:"cache_gc_grace"`
+	OIDCIssuer             string        `json:"oidc_issuer"`
+	OIDCClientID           string        `json:"oidc_client_id"`
+	OIDCClientSecret       string        `json:"oidc_client_secret"`
+	OIDCRedirectURL        string        `json:"oidc_redirect_url"`
+	OIDCAutoProvision      bool          `json:"oidc_auto_provision"`
+	LDAPURL                string        `json:"ldap_url"`
+	LDAPStartTLS           bool          `json:"ldap_starttls"`
+	LDAPBindDN             string        `json:"ldap_bind_dn"`
+	LDAPBindPassword       string        `json:"ldap_bind_password"`
+	LDAPBaseDN             string        `json:"ldap_base_dn"`
+	LDAPUserFilter         string        `json:"ldap_user_filter"`
+	LDAPAutoProvision      bool          `json:"ldap_auto_provision"`
+}
+
+func LoadPersisted(ctx context.Context, sqlDB *sql.DB, base Config) (Config, error) {
+	var ciphertext []byte
+	err := sqlDB.QueryRowContext(ctx, `SELECT ciphertext FROM app_settings WHERE setting_key='runtime'`).Scan(&ciphertext)
+	if errors.Is(err, sql.ErrNoRows) {
+		return base, nil
+	}
+	if err != nil {
+		return Config{}, fmt.Errorf("load saved settings: %w", err)
+	}
+	plaintext, err := decryptSettings(base.SessionSecret, ciphertext)
+	if err != nil {
+		return Config{}, fmt.Errorf("saved settings cannot be decrypted; check the session secret")
+	}
+	var saved managedSettings
+	if err := json.Unmarshal(plaintext, &saved); err != nil {
+		return Config{}, fmt.Errorf("saved settings are invalid")
+	}
+	return saved.apply(base), nil
+}
+
+func SavePersisted(ctx context.Context, sqlDB *sql.DB, cfg Config, actorID string) error {
+	plaintext, err := json.Marshal(managedFromConfig(cfg))
+	if err != nil {
+		return fmt.Errorf("encode settings")
+	}
+	ciphertext, err := encryptSettings(cfg.SessionSecret, plaintext)
+	if err != nil {
+		return fmt.Errorf("encrypt settings")
+	}
+	_, err = sqlDB.ExecContext(ctx, `INSERT INTO app_settings(setting_key,ciphertext,updated_by,updated_at)
+		VALUES('runtime',$1,$2,now()) ON CONFLICT(setting_key) DO UPDATE SET ciphertext=EXCLUDED.ciphertext,updated_by=EXCLUDED.updated_by,updated_at=now()`, ciphertext, actorID)
+	if err != nil {
+		return fmt.Errorf("save settings: %w", err)
+	}
+	return nil
+}
+
+func DeletePersisted(ctx context.Context, sqlDB *sql.DB) error {
+	_, err := sqlDB.ExecContext(ctx, `DELETE FROM app_settings WHERE setting_key='runtime'`)
+	if err != nil {
+		return fmt.Errorf("reset saved settings: %w", err)
+	}
+	return nil
+}
+
+func managedFromConfig(c Config) managedSettings {
+	return managedSettings{
+		PublicURL: c.PublicURL, HFBaseURL: c.HFBaseURL, HFToken: c.HFToken, HFAllowedHosts: c.HFAllowedHosts, HFTimeout: c.HFTimeout,
+		S3Endpoint: c.S3Endpoint, S3Region: c.S3Region, S3Bucket: c.S3Bucket, S3Prefix: c.S3Prefix, S3ForcePathStyle: c.S3ForcePathStyle,
+		S3AccessKey: c.S3AccessKey, S3SecretKey: c.S3SecretKey, S3ServerSideEncryption: boolPointer(c.S3ServerSideEncryption), AuthMode: c.AuthMode, AnonymousPublicRead: c.AnonymousPublicRead,
+		SessionIdleTTL: c.SessionIdleTTL, SessionAbsoluteTTL: c.SessionAbsoluteTTL, CacheMaxFileSize: c.CacheMaxFileSize,
+		CacheRefTTL: c.CacheRefTTL, CacheNegativeTTL: c.CacheNegativeTTL, CacheGCGrace: c.CacheGCGrace,
+		OIDCIssuer: c.OIDCIssuer, OIDCClientID: c.OIDCClientID, OIDCClientSecret: c.OIDCClientSecret, OIDCRedirectURL: c.OIDCRedirectURL,
+		OIDCAutoProvision: c.OIDCAutoProvision, LDAPURL: c.LDAPURL, LDAPStartTLS: c.LDAPStartTLS, LDAPBindDN: c.LDAPBindDN,
+		LDAPBindPassword: c.LDAPBindPassword, LDAPBaseDN: c.LDAPBaseDN, LDAPUserFilter: c.LDAPUserFilter, LDAPAutoProvision: c.LDAPAutoProvision,
+	}
+}
+
+func (s managedSettings) apply(c Config) Config {
+	c.PublicURL, c.HFBaseURL, c.HFToken, c.HFAllowedHosts, c.HFTimeout = s.PublicURL, s.HFBaseURL, s.HFToken, s.HFAllowedHosts, s.HFTimeout
+	c.S3Endpoint, c.S3Region, c.S3Bucket, c.S3Prefix, c.S3ForcePathStyle = s.S3Endpoint, s.S3Region, s.S3Bucket, s.S3Prefix, s.S3ForcePathStyle
+	c.S3AccessKey, c.S3SecretKey, c.AuthMode, c.AnonymousPublicRead = s.S3AccessKey, s.S3SecretKey, s.AuthMode, s.AnonymousPublicRead
+	if s.S3ServerSideEncryption != nil {
+		c.S3ServerSideEncryption = *s.S3ServerSideEncryption
+	}
+	c.SessionIdleTTL, c.SessionAbsoluteTTL, c.CacheMaxFileSize = s.SessionIdleTTL, s.SessionAbsoluteTTL, s.CacheMaxFileSize
+	c.CacheRefTTL, c.CacheNegativeTTL, c.CacheGCGrace = s.CacheRefTTL, s.CacheNegativeTTL, s.CacheGCGrace
+	c.OIDCIssuer, c.OIDCClientID, c.OIDCClientSecret, c.OIDCRedirectURL = s.OIDCIssuer, s.OIDCClientID, s.OIDCClientSecret, s.OIDCRedirectURL
+	c.OIDCAutoProvision, c.LDAPURL, c.LDAPStartTLS = s.OIDCAutoProvision, s.LDAPURL, s.LDAPStartTLS
+	c.LDAPBindDN, c.LDAPBindPassword, c.LDAPBaseDN, c.LDAPUserFilter, c.LDAPAutoProvision = s.LDAPBindDN, s.LDAPBindPassword, s.LDAPBaseDN, s.LDAPUserFilter, s.LDAPAutoProvision
+	return c
+}
+
+func boolPointer(value bool) *bool { return &value }
+
+func encryptSettings(secret string, plaintext []byte) ([]byte, error) {
+	gcm, err := settingsCipher(secret)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+	return gcm.Seal(nonce, nonce, plaintext, []byte("hfproxy-runtime-settings-v1")), nil
+}
+
+func decryptSettings(secret string, ciphertext []byte) ([]byte, error) {
+	gcm, err := settingsCipher(secret)
+	if err != nil {
+		return nil, err
+	}
+	if len(ciphertext) < gcm.NonceSize() {
+		return nil, fmt.Errorf("invalid ciphertext")
+	}
+	nonce, encrypted := ciphertext[:gcm.NonceSize()], ciphertext[gcm.NonceSize():]
+	return gcm.Open(nil, nonce, encrypted, []byte("hfproxy-runtime-settings-v1"))
+}
+
+func settingsCipher(secret string) (cipher.AEAD, error) {
+	key := sha256.Sum256([]byte("hfproxy settings encryption v1:" + secret))
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}

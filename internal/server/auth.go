@@ -42,11 +42,11 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	data := loginData{Local: s.config.AuthMode == "local" || s.config.LDAPURL != "", OIDC: s.oidcConfig != nil}
+	data := loginData{Local: s.currentConfig().AuthMode == "local" || s.currentConfig().LDAPURL != "", OIDC: s.currentOIDCConfig() != nil}
 	if r.Method == http.MethodGet {
 		cookie, err := r.Cookie("hfproxy_login_csrf")
 		if err != nil || cookie.Value == "" {
-			cookie = &http.Cookie{Name: "hfproxy_login_csrf", Value: randomSecret(24), Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: strings.HasPrefix(s.config.PublicURL, "https://"), MaxAge: 600}
+			cookie = &http.Cookie{Name: "hfproxy_login_csrf", Value: randomSecret(24), Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: strings.HasPrefix(s.currentConfig().PublicURL, "https://"), MaxAge: 600}
 			http.SetCookie(w, cookie)
 		}
 		data.CSRF = cookie.Value
@@ -65,12 +65,23 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	username := strings.TrimSpace(r.FormValue("username"))
 	password := r.FormValue("password")
-	var userID, storedHash, status string
-	err = s.db.SQL.QueryRowContext(r.Context(), `SELECT id,password_hash,status FROM users WHERE username=$1`, username).Scan(&userID, &storedHash, &status)
+	var userID string
+	var authErr error
 	provider := "local"
-	if err != nil || status != "active" || !verifyPassword(storedHash, password) {
+	if s.currentConfig().AuthMode == "local" {
+		var storedHash, status string
+		authErr = s.db.SQL.QueryRowContext(r.Context(), `SELECT id,password_hash,status FROM users WHERE username=$1`, username).Scan(&userID, &storedHash, &status)
+		if authErr == nil && (status != "active" || !verifyPassword(storedHash, password)) {
+			authErr = sql.ErrNoRows
+		}
+	} else {
+		authErr = sql.ErrNoRows
+	}
+	if authErr != nil && s.currentConfig().LDAPURL != "" {
 		userID, err = s.authenticateLDAP(r.Context(), username, password)
 		provider = "ldap"
+	} else {
+		err = authErr
 	}
 	if err != nil || userID == "" {
 		s.audit(r.Context(), "", "auth.login_failed", "user", username, map[string]any{"provider": provider})
@@ -109,7 +120,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("hfproxy_session")
 	var actorID string
 	if err == nil && cookie.Value != "" {
-		digest := HashToken(cookie.Value, s.config.SessionSecret)
+		digest := HashToken(cookie.Value, s.currentConfig().SessionSecret)
 		_ = s.db.SQL.QueryRowContext(r.Context(), `SELECT user_id FROM sessions WHERE token_hash=$1`, digest).Scan(&actorID)
 		_, _ = s.db.SQL.ExecContext(r.Context(), `DELETE FROM sessions WHERE token_hash=$1`, digest)
 	}
@@ -131,14 +142,14 @@ func (s *Server) oidcLogin(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	if s.oidcConfig == nil {
+	if s.currentOIDCConfig() == nil {
 		http.NotFound(w, r)
 		return
 	}
 	state := oidcState{State: randomSecret(24), Nonce: randomSecret(24), Verifier: oauth2.GenerateVerifier(), Expires: time.Now().Add(10 * time.Minute)}
 	encoded, _ := json.Marshal(state)
-	http.SetCookie(w, &http.Cookie{Name: "hfproxy_oidc", Value: base64.RawURLEncoding.EncodeToString(encoded), Path: "/auth/callback", HttpOnly: true, Secure: strings.HasPrefix(s.config.OIDCRedirectURL, "https://"), SameSite: http.SameSiteLaxMode, MaxAge: 600})
-	url := s.oidcConfig.AuthCodeURL(state.State, oauth2.S256ChallengeOption(state.Verifier), oauth2.SetAuthURLParam("nonce", state.Nonce))
+	http.SetCookie(w, &http.Cookie{Name: "hfproxy_oidc", Value: base64.RawURLEncoding.EncodeToString(encoded), Path: "/auth/callback", HttpOnly: true, Secure: strings.HasPrefix(s.currentConfig().OIDCRedirectURL, "https://"), SameSite: http.SameSiteLaxMode, MaxAge: 600})
+	url := s.currentOIDCConfig().AuthCodeURL(state.State, oauth2.S256ChallengeOption(state.Verifier), oauth2.SetAuthURLParam("nonce", state.Nonce))
 	http.Redirect(w, r, url, http.StatusFound)
 }
 
@@ -147,11 +158,11 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	if s.oidcConfig == nil || s.oidcVerifier == nil {
+	if s.currentOIDCConfig() == nil || s.currentOIDCVerifier() == nil {
 		http.NotFound(w, r)
 		return
 	}
-	defer http.SetCookie(w, &http.Cookie{Name: "hfproxy_oidc", Value: "", Path: "/auth/callback", MaxAge: -1, HttpOnly: true, Secure: strings.HasPrefix(s.config.OIDCRedirectURL, "https://"), SameSite: http.SameSiteLaxMode})
+	defer http.SetCookie(w, &http.Cookie{Name: "hfproxy_oidc", Value: "", Path: "/auth/callback", MaxAge: -1, HttpOnly: true, Secure: strings.HasPrefix(s.currentConfig().OIDCRedirectURL, "https://"), SameSite: http.SameSiteLaxMode})
 	cookie, err := r.Cookie("hfproxy_oidc")
 	if err != nil {
 		http.Redirect(w, r, "/login?error=invalid_state", http.StatusSeeOther)
@@ -163,7 +174,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login?error=invalid_state", http.StatusSeeOther)
 		return
 	}
-	token, err := s.oidcConfig.Exchange(r.Context(), r.URL.Query().Get("code"), oauth2.VerifierOption(state.Verifier))
+	token, err := s.currentOIDCConfig().Exchange(r.Context(), r.URL.Query().Get("code"), oauth2.VerifierOption(state.Verifier))
 	if err != nil {
 		s.logger.Warn("OIDC code exchange failed")
 		http.Redirect(w, r, "/login?error=login_failed", http.StatusSeeOther)
@@ -174,7 +185,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login?error=login_failed", http.StatusSeeOther)
 		return
 	}
-	idToken, err := s.oidcVerifier.Verify(r.Context(), rawIDToken)
+	idToken, err := s.currentOIDCVerifier().Verify(r.Context(), rawIDToken)
 	if err != nil {
 		s.logger.Warn("OIDC ID token validation failed")
 		http.Redirect(w, r, "/login?error=login_failed", http.StatusSeeOther)
@@ -220,7 +231,7 @@ func (s *Server) oidcUser(ctx context.Context, issuer string, claims struct {
 		}
 		return userID, nil
 	}
-	if err != sql.ErrNoRows || !s.config.OIDCAutoProvision || !claims.EmailVerified {
+	if err != sql.ErrNoRows || !s.currentConfig().OIDCAutoProvision || !claims.EmailVerified {
 		return "", fmt.Errorf("identity is not provisioned")
 	}
 	email, err := mail.ParseAddress(claims.Email)
@@ -250,31 +261,31 @@ func (s *Server) oidcUser(ctx context.Context, issuer string, claims struct {
 }
 
 func (s *Server) authenticateLDAP(ctx context.Context, username, password string) (string, error) {
-	if s.config.LDAPURL == "" || username == "" || password == "" {
+	if s.currentConfig().LDAPURL == "" || username == "" || password == "" {
 		return "", fmt.Errorf("LDAP authentication is not available")
 	}
-	conn, err := ldap.DialURL(s.config.LDAPURL)
+	conn, err := ldap.DialURL(s.currentConfig().LDAPURL)
 	if err != nil {
 		return "", fmt.Errorf("LDAP connection failed")
 	}
 	defer conn.Close()
 	conn.SetTimeout(5 * time.Second)
-	parsedURL, err := url.Parse(s.config.LDAPURL)
+	parsedURL, err := url.Parse(s.currentConfig().LDAPURL)
 	if err != nil {
 		return "", fmt.Errorf("LDAP configuration is invalid")
 	}
-	if parsedURL.Scheme == "ldap" && s.config.LDAPStartTLS {
+	if parsedURL.Scheme == "ldap" && s.currentConfig().LDAPStartTLS {
 		if err := conn.StartTLS(&tls.Config{MinVersion: tls.VersionTLS12}); err != nil {
 			return "", fmt.Errorf("LDAP StartTLS failed")
 		}
 	}
-	if s.config.LDAPBindDN != "" {
-		if err := conn.Bind(s.config.LDAPBindDN, s.config.LDAPBindPassword); err != nil {
+	if s.currentConfig().LDAPBindDN != "" {
+		if err := conn.Bind(s.currentConfig().LDAPBindDN, s.currentConfig().LDAPBindPassword); err != nil {
 			return "", fmt.Errorf("LDAP service bind failed")
 		}
 	}
-	filter := strings.ReplaceAll(s.config.LDAPUserFilter, "{username}", ldap.EscapeFilter(username))
-	request := ldap.NewSearchRequest(s.config.LDAPBaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2, 5, false, filter, []string{"mail", "cn", "displayName"}, nil)
+	filter := strings.ReplaceAll(s.currentConfig().LDAPUserFilter, "{username}", ldap.EscapeFilter(username))
+	request := ldap.NewSearchRequest(s.currentConfig().LDAPBaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2, 5, false, filter, []string{"mail", "cn", "displayName"}, nil)
 	result, err := conn.Search(request)
 	if err != nil || len(result.Entries) != 1 {
 		return "", fmt.Errorf("LDAP user lookup failed")
@@ -283,7 +294,7 @@ func (s *Server) authenticateLDAP(ctx context.Context, username, password string
 	if err := conn.Bind(entry.DN, password); err != nil {
 		return "", fmt.Errorf("LDAP credentials rejected")
 	}
-	issuer := s.config.LDAPURL
+	issuer := s.currentConfig().LDAPURL
 	var userID, status string
 	err = s.db.SQL.QueryRowContext(ctx, "SELECT u.id,u.status FROM external_identities x JOIN users u ON u.id=x.user_id WHERE x.issuer=$1 AND x.subject=$2", issuer, entry.DN).Scan(&userID, &status)
 	if err == nil {
@@ -292,7 +303,7 @@ func (s *Server) authenticateLDAP(ctx context.Context, username, password string
 		}
 		return userID, nil
 	}
-	if err != sql.ErrNoRows || !s.config.LDAPAutoProvision {
+	if err != sql.ErrNoRows || !s.currentConfig().LDAPAutoProvision {
 		return "", fmt.Errorf("LDAP identity is not provisioned")
 	}
 	localUsername := usernameFromLogin(username)

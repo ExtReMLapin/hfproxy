@@ -8,8 +8,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
+	"path"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -22,15 +27,25 @@ import (
 //go:embed dashboard.html
 var dashboardFS embed.FS
 
-type Server struct {
+//go:embed all:web
+var frontendFS embed.FS
+
+type runtimeState struct {
 	config       config.Config
-	db           *db.Store
 	storage      *storage.S3
 	httpClient   *http.Client
-	logger       *slog.Logger
 	oidcProvider *oidc.Provider
 	oidcConfig   *oauth2.Config
 	oidcVerifier *oidc.IDTokenVerifier
+}
+
+type Server struct {
+	runtime      atomic.Pointer[runtimeState]
+	db           *db.Store
+	logger       *slog.Logger
+	preloadsMu   sync.RWMutex
+	preloads     map[string]*preloadJob
+	preloadSlots chan struct{}
 }
 
 type Principal struct {
@@ -44,28 +59,66 @@ type Principal struct {
 }
 
 func New(ctx context.Context, cfg config.Config, store *db.Store, objectStore *storage.S3, logger *slog.Logger) (*Server, error) {
-	s := &Server{
-		config:     cfg,
-		db:         store,
-		storage:    objectStore,
-		logger:     logger,
-		httpClient: newHFHTTPClient(cfg),
+	state, err := makeRuntimeState(ctx, cfg, objectStore, nil)
+	if err != nil {
+		return nil, err
 	}
+	s := &Server{
+		db: store, logger: logger, preloads: make(map[string]*preloadJob),
+		preloadSlots: make(chan struct{}, 2),
+	}
+	s.runtime.Store(state)
+	return s, nil
+}
+
+func makeRuntimeState(ctx context.Context, cfg config.Config, objectStore *storage.S3, previous *runtimeState) (*runtimeState, error) {
+	state := &runtimeState{config: cfg, storage: objectStore, httpClient: newHFHTTPClient(cfg)}
 	if cfg.OIDCIssuer != "" {
-		provider, err := oidc.NewProvider(ctx, cfg.OIDCIssuer)
-		if err != nil {
-			return nil, fmt.Errorf("discover OIDC provider: %w", err)
+		var provider *oidc.Provider
+		if previous != nil && previous.config.OIDCIssuer == cfg.OIDCIssuer {
+			provider = previous.oidcProvider
+		} else {
+			var err error
+			provider, err = oidc.NewProvider(ctx, cfg.OIDCIssuer)
+			if err != nil {
+				return nil, fmt.Errorf("discover OIDC provider: %w", err)
+			}
 		}
-		s.oidcProvider = provider
-		s.oidcConfig = &oauth2.Config{
+		state.oidcProvider = provider
+		state.oidcConfig = &oauth2.Config{
 			ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCClientSecret,
 			RedirectURL: cfg.OIDCRedirectURL,
 			Endpoint:    provider.Endpoint(),
 			Scopes:      []string{oidc.ScopeOpenID, "profile", "email"},
 		}
-		s.oidcVerifier = provider.Verifier(&oidc.Config{ClientID: cfg.OIDCClientID})
+		state.oidcVerifier = provider.Verifier(&oidc.Config{ClientID: cfg.OIDCClientID})
 	}
-	return s, nil
+	return state, nil
+}
+
+func (s *Server) currentConfig() config.Config               { return s.runtime.Load().config }
+func (s *Server) currentStorage() *storage.S3                { return s.runtime.Load().storage }
+func (s *Server) currentHTTPClient() *http.Client            { return s.runtime.Load().httpClient }
+func (s *Server) currentOIDCConfig() *oauth2.Config          { return s.runtime.Load().oidcConfig }
+func (s *Server) currentOIDCVerifier() *oidc.IDTokenVerifier { return s.runtime.Load().oidcVerifier }
+
+func (s *Server) applyConfig(ctx context.Context, cfg config.Config, actorID string) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	objects, err := storage.New(ctx, cfg.S3Endpoint, cfg.S3Region, cfg.S3Bucket, cfg.S3Prefix, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3ForcePathStyle, cfg.S3ServerSideEncryption)
+	if err != nil {
+		return fmt.Errorf("prepare S3 settings")
+	}
+	state, err := makeRuntimeState(ctx, cfg, objects, s.runtime.Load())
+	if err != nil {
+		return err
+	}
+	if err := config.SavePersisted(ctx, s.db.SQL, cfg, actorID); err != nil {
+		return err
+	}
+	s.runtime.Store(state)
+	return nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -88,13 +141,13 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	server := &http.Server{
-		Addr: s.config.ListenAddr, Handler: s.Handler(),
+		Addr: s.currentConfig().ListenAddr, Handler: s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- server.ListenAndServe() }()
-	s.logger.Info("http server started", "address", s.config.ListenAddr)
+	s.logger.Info("http server started", "address", s.currentConfig().ListenAddr)
 	select {
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -132,7 +185,7 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 	version, migrationErr := db.MigrationStatus(ctx, s.db.SQL)
-	if s.db.SQL.PingContext(ctx) != nil || migrationErr != nil || version == 0 || s.storage.Ready(ctx) != nil {
+	if s.db.SQL.PingContext(ctx) != nil || migrationErr != nil || version < 2 || s.currentStorage().Ready(ctx) != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
 		return
 	}
@@ -141,14 +194,61 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) dashboardOrResolve(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/" {
-		s.dashboard(w, r)
+		s.frontend(w, r)
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/models/") || strings.HasPrefix(r.URL.Path, "/datasets/") || strings.HasPrefix(r.URL.Path, "/spaces/") {
 		s.resolveFile(w, r)
 		return
 	}
-	http.NotFound(w, r)
+	// huggingface_hub omits the repository type for model downloads, using
+	// /{repo_id}/resolve/{revision}/{filename}. Treat that standard form as
+	// the models equivalent while keeping the SPA fallback for other paths.
+	if _, err := parseResolvePath("/models" + r.URL.EscapedPath()); err == nil {
+		s.resolveFile(w, r)
+		return
+	}
+	s.frontend(w, r)
+}
+
+func (s *Server) frontend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		methodNotAllowed(w)
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/")
+	if name == "" || strings.Contains(name, "\\") || strings.Contains(name, "..") {
+		name = "index.html"
+	}
+	asset := "web/dist/" + name
+	content, err := frontendFS.ReadFile(asset)
+	if err != nil {
+		content, err = frontendFS.ReadFile("web/dist/index.html")
+		name = "index.html"
+	}
+	if err != nil {
+		content, err = frontendFS.ReadFile("web/index.html")
+		name = "index.html"
+	}
+	if err != nil {
+		http.Error(w, "admin interface is not built", http.StatusServiceUnavailable)
+		return
+	}
+	contentType := mime.TypeByExtension(path.Ext(name))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	if name == "index.html" {
+		contentType = "text/html; charset=utf-8"
+		w.Header().Set("Cache-Control", "no-cache")
+	} else {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(content)
+	}
 }
 
 type responseRecorder struct {
@@ -259,6 +359,10 @@ func (s *Server) audit(ctx context.Context, actorID, action, targetType, targetI
 }
 
 func (s *Server) authenticate(r *http.Request) (*Principal, error) {
+	if p, ok := r.Context().Value(localPrincipalContextKey{}).(*Principal); ok && p != nil {
+		principal := *p
+		return &principal, nil
+	}
 	if header := r.Header.Get("Authorization"); header != "" {
 		if !strings.HasPrefix(header, "Bearer ") {
 			return nil, errUnauthenticated
@@ -267,7 +371,7 @@ func (s *Server) authenticate(r *http.Request) (*Principal, error) {
 		if len(token) < 24 || strings.ContainsAny(token, " \t\r\n") {
 			return nil, errUnauthenticated
 		}
-		digest := HashToken(token, s.config.SessionSecret)
+		digest := HashToken(token, s.currentConfig().SessionSecret)
 		var p Principal
 		var status string
 		err := s.db.SQL.QueryRowContext(r.Context(), `SELECT u.id,u.username,u.email,u.display_name,u.role,u.status,t.id
@@ -288,7 +392,7 @@ func (s *Server) authenticate(r *http.Request) (*Principal, error) {
 	if cookie.Value == "" {
 		return nil, errUnauthenticated
 	}
-	digest := HashToken(cookie.Value, s.config.SessionSecret)
+	digest := HashToken(cookie.Value, s.currentConfig().SessionSecret)
 	var p Principal
 	var status string
 	err = s.db.SQL.QueryRowContext(r.Context(), `SELECT u.id,u.username,u.email,u.display_name,u.role,u.status
@@ -300,7 +404,7 @@ func (s *Server) authenticate(r *http.Request) (*Principal, error) {
 	}
 	p.Authenticated = true
 	_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE sessions SET last_seen_at=now(), expires_at=LEAST(created_at + $2::interval, now() + $1::interval) WHERE token_hash=$3`,
-		s.config.SessionIdleTTL.String(), s.config.SessionAbsoluteTTL.String(), digest)
+		s.currentConfig().SessionIdleTTL.String(), s.currentConfig().SessionAbsoluteTTL.String(), digest)
 	return &p, nil
 }
 
@@ -312,16 +416,16 @@ func (s *Server) currentPrincipal(r *http.Request) *Principal {
 func (s *Server) createSession(ctx context.Context, userID string, w http.ResponseWriter, r *http.Request) (string, error) {
 	token := randomSecret(32)
 	csrf := randomSecret(32)
-	tokenHash := HashToken(token, s.config.SessionSecret)
-	csrfHash := HashToken(csrf, s.config.SessionSecret)
+	tokenHash := HashToken(token, s.currentConfig().SessionSecret)
+	csrfHash := HashToken(csrf, s.currentConfig().SessionSecret)
 	_, err := s.db.SQL.ExecContext(ctx, `INSERT INTO sessions(token_hash,user_id,csrf_hash,expires_at) VALUES ($1,$2,$3,$4)`,
-		tokenHash, userID, csrfHash, time.Now().Add(s.config.SessionIdleTTL))
+		tokenHash, userID, csrfHash, time.Now().Add(s.currentConfig().SessionIdleTTL))
 	if err != nil {
 		return "", err
 	}
-	secure := strings.HasPrefix(s.config.PublicURL, "https://") || strings.HasPrefix(s.config.OIDCRedirectURL, "https://")
-	http.SetCookie(w, &http.Cookie{Name: "hfproxy_session", Value: token, Path: "/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: int(s.config.SessionIdleTTL.Seconds())})
-	http.SetCookie(w, &http.Cookie{Name: "hfproxy_csrf", Value: csrf, Path: "/", Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: int(s.config.SessionIdleTTL.Seconds())})
+	secure := strings.HasPrefix(s.currentConfig().PublicURL, "https://") || strings.HasPrefix(s.currentConfig().OIDCRedirectURL, "https://")
+	http.SetCookie(w, &http.Cookie{Name: "hfproxy_session", Value: token, Path: "/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: int(s.currentConfig().SessionIdleTTL.Seconds())})
+	http.SetCookie(w, &http.Cookie{Name: "hfproxy_csrf", Value: csrf, Path: "/", Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: int(s.currentConfig().SessionIdleTTL.Seconds())})
 	return csrf, nil
 }
 
@@ -341,12 +445,12 @@ func (s *Server) checkCSRF(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	digest := HashToken(cookie.Value, s.config.SessionSecret)
+	digest := HashToken(cookie.Value, s.currentConfig().SessionSecret)
 	var stored []byte
 	if err := s.db.SQL.QueryRowContext(r.Context(), `SELECT csrf_hash FROM sessions WHERE token_hash=$1 AND expires_at>now()`, digest).Scan(&stored); err != nil {
 		return false
 	}
-	return constantEqualBytes(stored, HashToken(provided, s.config.SessionSecret))
+	return constantEqualBytes(stored, HashToken(provided, s.currentConfig().SessionSecret))
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (*Principal, bool) {

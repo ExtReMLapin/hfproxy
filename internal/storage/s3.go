@@ -15,13 +15,14 @@ import (
 )
 
 type S3 struct {
-	client *s3.Client
-	upload *manager.Uploader
-	bucket string
-	prefix string
+	client               *s3.Client
+	upload               *manager.Uploader
+	bucket               string
+	prefix               string
+	serverSideEncryption bool
 }
 
-func New(ctx context.Context, endpoint, region, bucket, prefix, accessKey, secretKey string, pathStyle bool) (*S3, error) {
+func New(ctx context.Context, endpoint, region, bucket, prefix, accessKey, secretKey string, pathStyle, serverSideEncryption bool) (*S3, error) {
 	options := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}
 	if accessKey != "" {
 		options = append(options, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")))
@@ -39,7 +40,7 @@ func New(ctx context.Context, endpoint, region, bucket, prefix, accessKey, secre
 	return &S3{client: client, upload: manager.NewUploader(client, func(u *manager.Uploader) {
 		u.PartSize = 64 << 20
 		u.Concurrency = 3
-	}), bucket: bucket, prefix: strings.Trim(prefix, "/")}, nil
+	}), bucket: bucket, prefix: strings.Trim(prefix, "/"), serverSideEncryption: serverSideEncryption}, nil
 }
 
 func (s *S3) Key(sha256 string) string {
@@ -54,11 +55,14 @@ func (s *S3) UploadFile(ctx context.Context, file *os.File, key, contentType str
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	_, err := s.upload.Upload(ctx, &s3.PutObjectInput{
+	input := &s3.PutObjectInput{
 		Bucket: aws.String(s.bucket), Key: aws.String(key), Body: file,
 		ContentLength: aws.Int64(size), ContentType: aws.String(contentType),
-		ServerSideEncryption: "AES256",
-	})
+	}
+	if s.serverSideEncryption {
+		input.ServerSideEncryption = "AES256"
+	}
+	_, err := s.upload.Upload(ctx, input)
 	if err != nil {
 		return fmt.Errorf("upload object to S3: %w", err)
 	}

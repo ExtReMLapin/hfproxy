@@ -10,43 +10,44 @@ import (
 )
 
 type Config struct {
-	ListenAddr          string
-	PublicURL           string
-	LogLevel            string
-	DatabaseURL         string
-	AutoMigrate         bool
-	HFBaseURL           string
-	HFToken             string
-	HFAllowedHosts      []string
-	HFTimeout           time.Duration
-	S3Endpoint          string
-	S3Region            string
-	S3Bucket            string
-	S3Prefix            string
-	S3ForcePathStyle    bool
-	S3AccessKey         string
-	S3SecretKey         string
-	AuthMode            string
-	AnonymousPublicRead bool
-	SessionSecret       string
-	SessionIdleTTL      time.Duration
-	SessionAbsoluteTTL  time.Duration
-	CacheMaxFileSize    int64
-	CacheRefTTL         time.Duration
-	CacheNegativeTTL    time.Duration
-	CacheGCGrace        time.Duration
-	OIDCIssuer          string
-	OIDCClientID        string
-	OIDCClientSecret    string
-	OIDCRedirectURL     string
-	OIDCAutoProvision   bool
-	LDAPURL             string
-	LDAPStartTLS        bool
-	LDAPBindDN          string
-	LDAPBindPassword    string
-	LDAPBaseDN          string
-	LDAPUserFilter      string
-	LDAPAutoProvision   bool
+	ListenAddr             string
+	PublicURL              string
+	LogLevel               string
+	DatabaseURL            string
+	AutoMigrate            bool
+	HFBaseURL              string
+	HFToken                string
+	HFAllowedHosts         []string
+	HFTimeout              time.Duration
+	S3Endpoint             string
+	S3Region               string
+	S3Bucket               string
+	S3Prefix               string
+	S3ForcePathStyle       bool
+	S3AccessKey            string
+	S3SecretKey            string
+	S3ServerSideEncryption bool
+	AuthMode               string
+	AnonymousPublicRead    bool
+	SessionSecret          string
+	SessionIdleTTL         time.Duration
+	SessionAbsoluteTTL     time.Duration
+	CacheMaxFileSize       int64
+	CacheRefTTL            time.Duration
+	CacheNegativeTTL       time.Duration
+	CacheGCGrace           time.Duration
+	OIDCIssuer             string
+	OIDCClientID           string
+	OIDCClientSecret       string
+	OIDCRedirectURL        string
+	OIDCAutoProvision      bool
+	LDAPURL                string
+	LDAPStartTLS           bool
+	LDAPBindDN             string
+	LDAPBindPassword       string
+	LDAPBaseDN             string
+	LDAPUserFilter         string
+	LDAPAutoProvision      bool
 }
 
 func Load() (Config, error) {
@@ -67,6 +68,7 @@ func Load() (Config, error) {
 	c.S3ForcePathStyle = boolean("S3_FORCE_PATH_STYLE", true)
 	c.S3AccessKey = secret("S3_ACCESS_KEY", "")
 	c.S3SecretKey = secret("S3_SECRET_KEY", "")
+	c.S3ServerSideEncryption = boolean("S3_SERVER_SIDE_ENCRYPTION", true)
 	c.AuthMode = strings.ToLower(value("AUTH_MODE", "local"))
 	c.AnonymousPublicRead = boolean("ANONYMOUS_PUBLIC_READ", false)
 	c.SessionSecret = secret("SESSION_SECRET", "")
@@ -97,6 +99,15 @@ func Load() (Config, error) {
 func (c Config) Validate() error {
 	if c.LogLevel != "debug" && c.LogLevel != "info" && c.LogLevel != "warn" && c.LogLevel != "error" {
 		return fmt.Errorf("HFPROXY_LOG_LEVEL must be debug, info, warn, or error")
+	}
+	if c.PublicURL != "" {
+		public, publicErr := url.Parse(c.PublicURL)
+		if publicErr != nil || public.Host == "" || public.User != nil || public.RawQuery != "" || public.Fragment != "" || (public.Scheme != "https" && public.Scheme != "http") {
+			return fmt.Errorf("HFPROXY_PUBLIC_URL must be an HTTP(S) URL without credentials, query, or fragment")
+		}
+		if public.Scheme != "https" && !isLoopbackHost(public.Hostname()) {
+			return fmt.Errorf("HFPROXY_PUBLIC_URL must use HTTPS outside loopback development")
+		}
 	}
 	base, err := url.Parse(c.HFBaseURL)
 	if err != nil || base.Host == "" || (base.Scheme != "https" && base.Scheme != "http") || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
@@ -143,9 +154,6 @@ func (c Config) Validate() error {
 	}
 	if c.DatabaseURL == "" {
 		return fmt.Errorf("HFPROXY_DATABASE_URL is required")
-	}
-	if c.S3Bucket == "" {
-		return fmt.Errorf("HFPROXY_S3_BUCKET is required")
 	}
 	if c.S3Endpoint != "" {
 		endpoint, endpointErr := url.Parse(c.S3Endpoint)
