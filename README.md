@@ -1,8 +1,30 @@
 # hfproxy
 
+<p align="center">
+  <a href="https://github.com/hfproxy/hfproxy/actions/workflows/ci.yml"><img src="https://github.com/hfproxy/hfproxy/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status: formatting, vet, tests, and build"></a>
+  <a href="https://github.com/hfproxy/hfproxy/tags"><img src="https://img.shields.io/github/v/tag/hfproxy/hfproxy?label=version" alt="Latest version tag"></a>
+  <a href="https://github.com/hfproxy/hfproxy/pkgs/container/hfproxy"><img src="https://img.shields.io/badge/container-GHCR-2496ED?logo=docker&amp;logoColor=white" alt="Container image on GitHub Container Registry"></a>
+  <img src="https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-blue?logo=docker&amp;logoColor=white" alt="Supported container platforms: amd64 and arm64">
+</p>
+
 hfproxy is an internal Hugging Face Hub proxy written in Go. It applies local access policies before every request, fetches files from the Hub, deduplicates them by SHA-256 in a private S3-compatible bucket, and stores the catalog in PostgreSQL.
 
 hfproxy includes a browser-based administration console built with Angular 22 and Tailwind CSS. It manages access policies and runtime service settings while keeping upstream credentials on the server.
+
+The GitHub Actions CI workflow checks Go formatting, runs `go vet` and `go test ./...`, and builds the Go binary.
+
+## Administration console
+
+<table>
+  <tr>
+    <td width="50%" align="center"><img src="images/overview.png" alt="hfproxy administration overview showing repository, cache, storage, and hit-rate metrics" width="100%"></td>
+    <td width="50%" align="center"><img src="images/repository.png" alt="hfproxy repository administration showing policies, cache status, and preload controls" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Overview — cache and service health at a glance</sub></td>
+    <td align="center"><sub>Repositories — access policies and preload status</sub></td>
+  </tr>
+</table>
 
 ## Run locally
 

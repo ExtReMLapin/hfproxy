@@ -1,4 +1,4 @@
-name: Go build
+name: CI
 
 on:
   push:
@@ -23,5 +23,7 @@ jobs:
         run: test -z "$(gofmt -l cmd internal)"
       - name: Vet
         run: go vet ./...
+      - name: Test
+        run: go test ./...
       - name: Build
         run: go build -trimpath ./cmd/hfproxy
