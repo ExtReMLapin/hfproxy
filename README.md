@@ -1,6 +1,10 @@
 # hfproxy
 
 <p align="center">
+  <img src="ui/public/hfproxy-logo.svg" alt="hfproxy — Hugging Face Proxy" width="250">
+</p>
+
+<p align="center">
   <a href="https://github.com/hfproxy/hfproxy/actions/workflows/ci.yml"><img src="https://github.com/hfproxy/hfproxy/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status: formatting, vet, tests, and build"></a>
   <a href="https://github.com/hfproxy/hfproxy/tags"><img src="https://img.shields.io/github/v/tag/hfproxy/hfproxy?label=version" alt="Latest version tag"></a>
   <a href="https://github.com/hfproxy/hfproxy/pkgs/container/hfproxy"><img src="https://img.shields.io/badge/container-GHCR-2496ED?logo=docker&amp;logoColor=white" alt="Container image on GitHub Container Registry"></a>
