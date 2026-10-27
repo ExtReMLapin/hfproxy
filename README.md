@@ -123,14 +123,23 @@ For production:
 5. Back up PostgreSQL and the bucket together. Restore both to preserve the links between artifacts and blobs.
 6. Restrict egress to Hugging Face and validated HF CDN hosts. The upstream token should have only the minimum scopes and gated access required.
 
-### Release images
+### Published Docker image
 
-Push a semantic version tag to publish a multi-platform image to GitHub Container Registry:
+The release workflow builds and publishes a multi-platform image (`linux/amd64` and `linux/arm64`) to GitHub Container Registry whenever a semantic version tag is pushed. The image includes the administration UI, runs as a non-root user, and embeds its version and source commit.
 
-    git tag v1.2.3
-    git push origin v1.2.3
+The current release is `v0.0.1`:
 
-The workflow publishes `ghcr.io/nikolas03/hfproxy:v1.2.3` for every `v*` tag and also updates `:latest` for stable tags. The application version and commit are embedded in the image. GitHub creates the package as private by default; change its visibility in the package settings if it should be publicly pullable.
+    docker pull ghcr.io/hfproxy/hfproxy:v0.0.1
+    docker run --rm ghcr.io/hfproxy/hfproxy:v0.0.1 version
+
+Use a pinned version in production. The `latest` tag follows the newest stable version. To use the image in a Compose deployment, set the service image to `ghcr.io/hfproxy/hfproxy:v0.0.1` instead of building it locally.
+
+The first GHCR package is private by default. Sign in with `docker login ghcr.io` to pull a private image, or change the package visibility to Public in the package settings to allow anonymous pulls.
+
+To publish a later release, push another version tag, for example `v0.0.2`:
+
+    git tag v0.0.2
+    git push origin v0.0.2
 
 Known-size Hub downloads are checkpointed in 64 MiB blocks in the S3-compatible bucket. Retrying a failed preload resumes from the last complete block when the upstream honors HTTP Range requests; otherwise hfproxy safely falls back to a full transfer. Abandoned checkpoints are removed after seven days. The current block is downloaded again if a transfer fails before that block is stored.
 
