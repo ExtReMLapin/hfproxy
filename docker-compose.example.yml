@@ -9,6 +9,7 @@ services:
       HFPROXY_DATABASE_URL_FILE: /run/secrets/database_url
       HFPROXY_AUTO_MIGRATE: "false"
       HFPROXY_HF_BASE_URL: https://huggingface.co
+      HFPROXY_HF_PROXY_URL: ${HFPROXY_HF_PROXY_URL:-}
       HFPROXY_HF_TOKEN_FILE: /run/secrets/hf_token
       HFPROXY_HF_ALLOWED_REDIRECT_HOSTS: ${HFPROXY_HF_ALLOWED_REDIRECT_HOSTS:-huggingface.co,hf.co,*.huggingface.co,*.hf.co,*.xethub.hf.co}
       HFPROXY_S3_ENDPOINT: ${HFPROXY_S3_ENDPOINT:?Set the S3 endpoint}

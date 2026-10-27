@@ -40,7 +40,7 @@ When `HFPROXY_ANONYMOUS_PUBLIC_READ=true`, clients can read repositories registe
 
 ### Administration console
 
-The console is served by the Go service at `/` and is available after creating the first administrator. Open **Settings** to configure the Hugging Face Hub URL and optional upstream token, Garage or another S3-compatible endpoint/bucket/credentials, cache limits, public URL, and session lifetimes. Changes are validated and applied immediately; the Hub and S3 settings have connection checks. Credentials are write-only in the API and encrypted in PostgreSQL with AES-GCM.
+The console is served by the Go service at `/` and is available after creating the first administrator. Open **Settings** to configure the Hugging Face Hub URL, optional upstream token and HTTP(S) proxy, Garage or another S3-compatible endpoint/bucket/credentials, cache limits, public URL, and session lifetimes. Changes are validated and applied immediately; the Hub and S3 settings have connection checks. Credentials are write-only in the API and encrypted in PostgreSQL with AES-GCM.
 
 The Angular source is in `ui/`. For frontend development, start the Go service on port 8080, then run `nvm use && npm ci && npm start` from `ui/`; `.nvmrc` pins Node 24.22.1. Angular serves the UI on port 4200 and proxies API requests to Go. The Docker build compiles and embeds the production UI.
 

@@ -16,6 +16,7 @@ type Config struct {
 	DatabaseURL            string
 	AutoMigrate            bool
 	HFBaseURL              string
+	HFProxyURL             string
 	HFToken                string
 	HFAllowedHosts         []string
 	HFTimeout              time.Duration
@@ -58,6 +59,7 @@ func Load() (Config, error) {
 	c.DatabaseURL = secret("DATABASE_URL", "")
 	c.AutoMigrate = boolean("AUTO_MIGRATE", false)
 	c.HFBaseURL = value("HF_BASE_URL", "https://huggingface.co")
+	c.HFProxyURL = secret("HF_PROXY_URL", "")
 	c.HFToken = secret("HF_TOKEN", "")
 	c.HFAllowedHosts = split(value("HF_ALLOWED_REDIRECT_HOSTS", "huggingface.co,hf.co,*.huggingface.co,*.hf.co,*.xethub.hf.co"))
 	c.HFTimeout = duration("HF_TIMEOUT", 2*time.Minute)
@@ -115,6 +117,18 @@ func (c Config) Validate() error {
 	}
 	if base.Scheme != "https" && !isLoopbackHost(base.Hostname()) {
 		return fmt.Errorf("HFPROXY_HF_BASE_URL must use HTTPS outside loopback development")
+	}
+	if c.HFProxyURL != "" {
+		proxy, proxyErr := url.Parse(c.HFProxyURL)
+		if proxyErr != nil || proxy.Hostname() == "" || (proxy.Scheme != "http" && proxy.Scheme != "https") || proxy.RawQuery != "" || proxy.Fragment != "" || (proxy.Path != "" && proxy.Path != "/") {
+			return fmt.Errorf("HFPROXY_HF_PROXY_URL must be an HTTP(S) proxy URL without a path, query, or fragment")
+		}
+		if port := proxy.Port(); port != "" {
+			parsedPort, portErr := strconv.Atoi(port)
+			if portErr != nil || parsedPort < 1 || parsedPort > 65535 {
+				return fmt.Errorf("HFPROXY_HF_PROXY_URL contains an invalid port")
+			}
+		}
 	}
 	if c.HFTimeout <= 0 || c.CacheMaxFileSize <= 0 {
 		return fmt.Errorf("HFPROXY_HF_TIMEOUT and HFPROXY_CACHE_MAX_FILE_SIZE must be positive")

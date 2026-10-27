@@ -17,6 +17,7 @@ import (
 type managedSettings struct {
 	PublicURL              string        `json:"public_url"`
 	HFBaseURL              string        `json:"hf_base_url"`
+	HFProxyURL             *string       `json:"hf_proxy_url,omitempty"`
 	HFToken                string        `json:"hf_token"`
 	HFAllowedHosts         []string      `json:"hf_allowed_hosts"`
 	HFTimeout              time.Duration `json:"hf_timeout"`
@@ -97,7 +98,7 @@ func DeletePersisted(ctx context.Context, sqlDB *sql.DB) error {
 
 func managedFromConfig(c Config) managedSettings {
 	return managedSettings{
-		PublicURL: c.PublicURL, HFBaseURL: c.HFBaseURL, HFToken: c.HFToken, HFAllowedHosts: c.HFAllowedHosts, HFTimeout: c.HFTimeout,
+		PublicURL: c.PublicURL, HFBaseURL: c.HFBaseURL, HFProxyURL: stringPointer(c.HFProxyURL), HFToken: c.HFToken, HFAllowedHosts: c.HFAllowedHosts, HFTimeout: c.HFTimeout,
 		S3Endpoint: c.S3Endpoint, S3Region: c.S3Region, S3Bucket: c.S3Bucket, S3Prefix: c.S3Prefix, S3ForcePathStyle: c.S3ForcePathStyle,
 		S3AccessKey: c.S3AccessKey, S3SecretKey: c.S3SecretKey, S3ServerSideEncryption: boolPointer(c.S3ServerSideEncryption), AuthMode: c.AuthMode, AnonymousPublicRead: c.AnonymousPublicRead,
 		SessionIdleTTL: c.SessionIdleTTL, SessionAbsoluteTTL: c.SessionAbsoluteTTL, CacheMaxFileSize: c.CacheMaxFileSize,
@@ -110,6 +111,9 @@ func managedFromConfig(c Config) managedSettings {
 
 func (s managedSettings) apply(c Config) Config {
 	c.PublicURL, c.HFBaseURL, c.HFToken, c.HFAllowedHosts, c.HFTimeout = s.PublicURL, s.HFBaseURL, s.HFToken, s.HFAllowedHosts, s.HFTimeout
+	if s.HFProxyURL != nil {
+		c.HFProxyURL = *s.HFProxyURL
+	}
 	c.S3Endpoint, c.S3Region, c.S3Bucket, c.S3Prefix, c.S3ForcePathStyle = s.S3Endpoint, s.S3Region, s.S3Bucket, s.S3Prefix, s.S3ForcePathStyle
 	c.S3AccessKey, c.S3SecretKey, c.AuthMode, c.AnonymousPublicRead = s.S3AccessKey, s.S3SecretKey, s.AuthMode, s.AnonymousPublicRead
 	if s.S3ServerSideEncryption != nil {
@@ -123,7 +127,8 @@ func (s managedSettings) apply(c Config) Config {
 	return c
 }
 
-func boolPointer(value bool) *bool { return &value }
+func boolPointer(value bool) *bool       { return &value }
+func stringPointer(value string) *string { return &value }
 
 func encryptSettings(secret string, plaintext []byte) ([]byte, error) {
 	gcm, err := settingsCipher(secret)

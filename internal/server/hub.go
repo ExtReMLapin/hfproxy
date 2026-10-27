@@ -630,12 +630,54 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 func configLoopback(host string) bool {
 	return host == "localhost" || strings.HasPrefix(host, "127.") || host == "::1"
 }
-func newEgressDialer(allowLoopback bool) func(context.Context, string, string) (net.Conn, error) {
+func newEgressDialer(allowLoopback bool, proxy *url.URL) func(context.Context, string, string) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
 			return nil, err
+		}
+		if proxy != nil {
+			proxyPort := proxy.Port()
+			if proxyPort == "" {
+				proxyPort = "80"
+				if proxy.Scheme == "https" {
+					proxyPort = "443"
+				}
+			}
+			proxyHost := proxy.Hostname()
+			sameHost := strings.EqualFold(host, proxyHost)
+			if hostIP, hostErr := netip.ParseAddr(host); hostErr == nil {
+				if proxyIP, proxyErr := netip.ParseAddr(proxyHost); proxyErr == nil {
+					sameHost = hostIP.Unmap() == proxyIP.Unmap()
+				}
+			}
+			if !sameHost || port != proxyPort {
+				return nil, fmt.Errorf("egress target does not match the configured Hugging Face proxy")
+			}
+			if ip, parseErr := netip.ParseAddr(proxyHost); parseErr == nil {
+				return dialer.DialContext(ctx, network, net.JoinHostPort(ip.Unmap().String(), port))
+			}
+			addresses, lookupErr := net.DefaultResolver.LookupIPAddr(ctx, proxyHost)
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			var lastErr error
+			for _, candidate := range addresses {
+				ip, ok := netip.AddrFromSlice(candidate.IP)
+				if !ok || ip.IsUnspecified() || ip.IsMulticast() {
+					continue
+				}
+				conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.Unmap().String(), port))
+				if dialErr == nil {
+					return conn, nil
+				}
+				lastErr = dialErr
+			}
+			if lastErr == nil {
+				lastErr = fmt.Errorf("configured proxy resolved to no usable IP addresses")
+			}
+			return nil, lastErr
 		}
 		checkAndDial := func(ip netip.Addr) (net.Conn, error) {
 			ip = ip.Unmap()
@@ -676,7 +718,12 @@ func newEgressDialer(allowLoopback bool) func(context.Context, string, string) (
 func newHFHTTPClient(cfg config.Config) *http.Client {
 	base, _ := url.Parse(cfg.HFBaseURL)
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DialContext = newEgressDialer(configLoopback(base.Hostname()))
+	var proxy *url.URL
+	if cfg.HFProxyURL != "" {
+		proxy, _ = url.Parse(cfg.HFProxyURL)
+		transport.Proxy = http.ProxyURL(proxy)
+	}
+	transport.DialContext = newEgressDialer(configLoopback(base.Hostname()), proxy)
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	return &http.Client{Timeout: cfg.HFTimeout, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }

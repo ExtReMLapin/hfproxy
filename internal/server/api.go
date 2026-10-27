@@ -85,6 +85,7 @@ func isMutation(method string) bool {
 type settingsResponse struct {
 	PublicURL              string   `json:"public_url"`
 	HFBaseURL              string   `json:"hf_base_url"`
+	HFProxySet             bool     `json:"hf_proxy_set"`
 	HFAllowedHosts         []string `json:"hf_allowed_hosts"`
 	HFTimeout              string   `json:"hf_timeout"`
 	HFTokenSet             bool     `json:"hf_token_set"`
@@ -121,6 +122,8 @@ type settingsResponse struct {
 type settingsInput struct {
 	PublicURL              string   `json:"public_url"`
 	HFBaseURL              string   `json:"hf_base_url"`
+	HFProxyURL             string   `json:"hf_proxy_url"`
+	ClearHFProxy           bool     `json:"clear_hf_proxy"`
 	HFAllowedHosts         []string `json:"hf_allowed_hosts"`
 	HFTimeout              string   `json:"hf_timeout"`
 	HFToken                string   `json:"hf_token"`
@@ -160,7 +163,7 @@ type settingsInput struct {
 
 func settingsView(cfg config.Config) settingsResponse {
 	return settingsResponse{
-		PublicURL: cfg.PublicURL, HFBaseURL: cfg.HFBaseURL, HFAllowedHosts: cfg.HFAllowedHosts, HFTimeout: cfg.HFTimeout.String(), HFTokenSet: cfg.HFToken != "",
+		PublicURL: cfg.PublicURL, HFBaseURL: cfg.HFBaseURL, HFProxySet: cfg.HFProxyURL != "", HFAllowedHosts: cfg.HFAllowedHosts, HFTimeout: cfg.HFTimeout.String(), HFTokenSet: cfg.HFToken != "",
 		S3Endpoint: cfg.S3Endpoint, S3Region: cfg.S3Region, S3Bucket: cfg.S3Bucket, S3Prefix: cfg.S3Prefix, S3ForcePathStyle: cfg.S3ForcePathStyle, S3ServerSideEncryption: cfg.S3ServerSideEncryption,
 		S3AccessKeySet: cfg.S3AccessKey != "", S3SecretKeySet: cfg.S3SecretKey != "", AuthMode: cfg.AuthMode, AnonymousPublicRead: cfg.AnonymousPublicRead,
 		SessionIdleTTL: cfg.SessionIdleTTL.String(), SessionAbsoluteTTL: cfg.SessionAbsoluteTTL.String(), CacheMaxFileSize: cfg.CacheMaxFileSize,
@@ -217,6 +220,11 @@ func (in settingsInput) apply(cfg config.Config) (config.Config, error) {
 	}
 	var err error
 	cfg.PublicURL, cfg.HFBaseURL, cfg.HFAllowedHosts = strings.TrimSpace(in.PublicURL), strings.TrimSpace(in.HFBaseURL), in.HFAllowedHosts
+	if in.ClearHFProxy {
+		cfg.HFProxyURL = ""
+	} else if proxyURL := strings.TrimSpace(in.HFProxyURL); proxyURL != "" {
+		cfg.HFProxyURL = proxyURL
+	}
 	cfg.HFTimeout, err = parseDuration("HF timeout", in.HFTimeout, cfg.HFTimeout)
 	if err != nil {
 		return config.Config{}, err
@@ -338,15 +346,22 @@ func (s *Server) apiTestHub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		BaseURL string `json:"hf_base_url"`
-		Token   string `json:"hf_token"`
-		Clear   bool   `json:"clear_hf_token"`
+		BaseURL    string `json:"hf_base_url"`
+		ProxyURL   string `json:"hf_proxy_url"`
+		ClearProxy bool   `json:"clear_hf_proxy"`
+		Token      string `json:"hf_token"`
+		Clear      bool   `json:"clear_hf_token"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
 	}
 	cfg := s.currentConfig()
 	cfg.HFBaseURL = strings.TrimSpace(input.BaseURL)
+	if input.ClearProxy {
+		cfg.HFProxyURL = ""
+	} else if proxyURL := strings.TrimSpace(input.ProxyURL); proxyURL != "" {
+		cfg.HFProxyURL = proxyURL
+	}
 	if input.Clear {
 		cfg.HFToken = ""
 	} else if input.Token != "" {
@@ -378,6 +393,10 @@ func (s *Server) apiTestHub(w http.ResponseWriter, r *http.Request) {
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		writeProblem(w, r, http.StatusBadGateway, "Hugging Face rejected the token", "The Hub is reachable, but the configured token is missing or does not have access.")
+		return
+	}
+	if resp.StatusCode == http.StatusProxyAuthRequired {
+		writeProblem(w, r, http.StatusBadGateway, "Proxy authentication failed", "Check the configured proxy credentials.")
 		return
 	}
 	if resp.StatusCode >= 500 {

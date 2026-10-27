@@ -53,18 +53,28 @@
                   </p>
                   <h2 class="mt-1 text-lg font-semibold text-slate-950">Hugging Face Hub</h2>
                   <p class="mt-1 max-w-xl text-xs leading-5 text-slate-500">
-                    The token lets hfproxy access private repositories. It is stored encrypted and
-                    never sent back to this page.
+                    The token lets hfproxy access private repositories. Hub and proxy credentials
+                    are stored encrypted and never sent back to this page.
                   </p>
                 </div>
-                <span
-                  [class.bg-emerald-50]="settings.hf_token_set"
-                  [class.text-emerald-700]="settings.hf_token_set"
-                  [class.bg-amber-50]="!settings.hf_token_set"
-                  [class.text-amber-700]="!settings.hf_token_set"
-                  class="rounded-full px-2.5 py-1 text-[10px] font-bold"
-                  >{{ settings.hf_token_set ? 'Token configured' : 'No token saved' }}</span
-                >
+                <div class="flex flex-wrap gap-2">
+                  <span
+                    [class.bg-emerald-50]="settings.hf_token_set"
+                    [class.text-emerald-700]="settings.hf_token_set"
+                    [class.bg-amber-50]="!settings.hf_token_set"
+                    [class.text-amber-700]="!settings.hf_token_set"
+                    class="rounded-full px-2.5 py-1 text-[10px] font-bold"
+                    >{{ settings.hf_token_set ? 'Token configured' : 'No token saved' }}</span
+                  >
+                  <span
+                    [class.bg-emerald-50]="settings.hf_proxy_set"
+                    [class.text-emerald-700]="settings.hf_proxy_set"
+                    [class.bg-slate-100]="!settings.hf_proxy_set"
+                    [class.text-slate-600]="!settings.hf_proxy_set"
+                    class="rounded-full px-2.5 py-1 text-[10px] font-bold"
+                    >{{ settings.hf_proxy_set ? 'Proxy configured' : 'No proxy' }}</span
+                  >
+                </div>
               </div>
               <div class="mt-6 grid gap-4 md:grid-cols-2">
                 <label class="field"
@@ -98,7 +108,31 @@
                     autocomplete="new-password"
                     placeholder="Leave blank to keep the saved token"
                 /></label>
+                <label class="field md:col-span-2">
+                  Optional outbound proxy URL
+                  <input
+                    class="control"
+                    name="hfProxy"
+                    [(ngModel)]="settings.hf_proxy_url"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="http://proxy.example:3128"
+                  />
+                  <span class="hint"
+                    >Use an HTTP or HTTPS proxy. You can include user:password credentials in the
+                    URL; use HTTPS to protect them on the network.</span
+                  >
+                </label>
               </div>
+              @if (settings.hf_proxy_set) {
+                <label class="toggle-row mt-4"
+                  ><input
+                    type="checkbox"
+                    name="clearHFProxy"
+                    [(ngModel)]="settings.clear_hf_proxy"
+                  /><span>Clear the saved Hugging Face proxy</span></label
+                >
+              }
               @if (settings.hf_token_set) {
                 <label class="toggle-row mt-4"
                   ><input

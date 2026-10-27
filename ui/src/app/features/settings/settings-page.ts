@@ -62,12 +62,14 @@ export class SettingsPageComponent implements OnInit {
         .filter(Boolean),
     };
     delete payload['hf_allowed_hosts_text'];
+    delete payload['hf_proxy_set'];
     delete payload['hf_token_set'];
     delete payload['s3_access_key_set'];
     delete payload['s3_secret_key_set'];
     delete payload['oidc_client_secret_set'];
     delete payload['ldap_bind_password_set'];
     if (!draft.hf_token) delete payload['hf_token'];
+    if (!draft.hf_proxy_url) delete payload['hf_proxy_url'];
     if (!draft.s3_access_key) delete payload['s3_access_key'];
     if (!draft.s3_secret_key) delete payload['s3_secret_key'];
     if (!draft.oidc_client_secret) delete payload['oidc_client_secret'];
@@ -86,6 +88,8 @@ export class SettingsPageComponent implements OnInit {
     await this.mutate(async () => {
       await this.api.post('/api/v1/settings/test-hub', {
         hf_base_url: settings.hf_base_url,
+        hf_proxy_url: settings.hf_proxy_url,
+        clear_hf_proxy: settings.clear_hf_proxy,
         hf_token: settings.hf_token,
         clear_hf_token: settings.clear_hf_token,
       });
@@ -120,6 +124,8 @@ export class SettingsPageComponent implements OnInit {
     this.draft = {
       ...settings,
       hf_allowed_hosts_text: settings.hf_allowed_hosts.join(', '),
+      hf_proxy_url: '',
+      clear_hf_proxy: false,
       hf_token: '',
       clear_hf_token: false,
       s3_access_key: '',

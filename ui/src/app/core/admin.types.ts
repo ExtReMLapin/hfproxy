@@ -116,6 +116,7 @@ export interface AuditItem {
 export interface ManagedSettings {
   public_url: string;
   hf_base_url: string;
+  hf_proxy_set: boolean;
   hf_allowed_hosts: string[];
   hf_timeout: string;
   hf_token_set: boolean;
@@ -151,6 +152,8 @@ export interface ManagedSettings {
 
 export interface SettingsDraft extends ManagedSettings {
   hf_allowed_hosts_text: string;
+  hf_proxy_url: string;
+  clear_hf_proxy: boolean;
   hf_token: string;
   clear_hf_token: boolean;
   s3_access_key: string;
