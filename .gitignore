@@ -8,3 +8,4 @@ test
 __pycache__/
 *.py[cod]
 tests/
+SPEC.md
