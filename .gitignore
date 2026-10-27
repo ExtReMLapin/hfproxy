@@ -4,3 +4,7 @@ secrets/
 *.log
 bin/
 dist/
+test
+__pycache__/
+*.py[cod]
+tests/
