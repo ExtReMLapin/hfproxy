@@ -8,6 +8,7 @@ import { AuthProviders, Principal } from './admin.types';
 export class AuthService {
   private readonly http = inject(HttpClient);
   private readonly api = inject(AdminApiService);
+  private initialization?: Promise<void>;
 
   readonly principal = signal<Principal | null>(null);
   readonly providers = signal<AuthProviders>({ local: true, oidc: false, ldap: false });
@@ -15,7 +16,12 @@ export class AuthService {
   readonly busy = signal(false);
   readonly error = signal('');
 
-  async initialize(): Promise<void> {
+  initialize(): Promise<void> {
+    this.initialization ??= this.loadPrincipal();
+    return this.initialization;
+  }
+
+  private async loadPrincipal(): Promise<void> {
     this.loading.set(true);
     try {
       this.principal.set(await this.api.get<Principal>('/api/v1/me'));

@@ -10,9 +10,11 @@ import { SettingsPageComponent } from './features/settings/settings-page';
 import { UsersPageComponent } from './features/users/users-page';
 import { AdminShellComponent } from './layout/admin-shell';
 
-const adminOnly: CanActivateFn = () => {
+const adminOnly: CanActivateFn = async () => {
   const auth = inject(AuthService);
-  return auth.principal()?.role === 'admin' ? true : inject(Router).parseUrl('/overview');
+  const router = inject(Router);
+  await auth.initialize();
+  return auth.principal()?.role === 'admin' ? true : router.parseUrl('/overview');
 };
 
 export const routes: Routes = [
