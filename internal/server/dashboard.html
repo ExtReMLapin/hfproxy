@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f6f2">
+  <title>Vue d’ensemble · hfproxy</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="/"><span class="brand-mark">h</span><span>hfproxy<small>MODEL GATEWAY</small></span></a>
+      <div class="workspace"><span class="workspace-icon">⌘</span><span><strong>Workspace interne</strong><small>Hub privé</small></span><span class="chevron">⌄</span></div>
+      <div class="nav-label">ESPACE DE TRAVAIL</div>
+      <nav class="nav">
+        <a class="active" href="/"><span class="nav-icon">◫</span>Vue d’ensemble</a>
+        <a href="#repositories"><span class="nav-icon">◈</span>Dépôts<span class="nav-count">{{.RepoCount}}</span></a>
+        <a href="#cache"><span class="nav-icon">▤</span>Cache</a>
+      </nav>
+      <div class="nav-label section-label">GOUVERNANCE</div>
+      <nav class="nav">
+        <a href="/api/v1/users"><span class="nav-icon">♙</span>Utilisateurs</a>
+        <a href="/api/v1/audit-events"><span class="nav-icon">◷</span>Journal d’audit</a>
+        <a href="/api/v1/settings/public"><span class="nav-icon">⚙</span>Paramètres</a>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="help-card"><div class="help-icon">↗</div><strong>Connecter un client</strong><p>Pointez vos outils ML vers cette instance.</p><code>HF_ENDPOINT={{.PublicURL}}</code></div>
+        <div class="profile"><span class="avatar">{{avatar .Principal.Username}}</span><span class="profile-name"><strong>{{if .Principal.DisplayName}}{{.Principal.DisplayName}}{{else}}{{.Principal.Username}}{{end}}</strong><small>{{.Principal.Role}}</small></span>{{.Logout}}</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar"><div class="crumb">Infrastructure <span>/</span> Vue d’ensemble</div><div class="top-actions"><span class="top-status"><i></i> Instance active</span><span class="top-avatar">{{avatar .Principal.Username}}</span></div></header>
+      <div class="content">
+        <section class="heading-row"><div><div class="eyebrow">PASSERELLE HUB · CACHE PRIVÉ</div><h1>Vue d’ensemble</h1><p class="subtitle">Votre passerelle Hugging Face est prête. Voici l’activité récente de votre cache.</p></div><div class="heading-actions"><a class="button secondary" href="/readyz">État des services <span>↗</span></a>{{if .IsAdmin}}<a class="button primary" href="#add-repo">Ajouter un dépôt <span>＋</span></a>{{end}}</div></section>
+      {{if .Message}}<div class="notice"><span>✓</span>{{.Message}}</div>{{end}}
+
+        <section class="metric-grid" aria-label="Indicateurs du cache">
+          <article class="metric-card"><div class="metric-top"><span>TAILLE DU CACHE</span><span class="metric-icon green">▤</span></div><div class="metric-value">{{.CacheSize}}</div><div class="metric-foot"><span class="dot green-dot"></span> Stockage objet connecté</div></article>
+          <article class="metric-card"><div class="metric-top"><span>ARTEFACTS EN CACHE</span><span class="metric-icon blue">◈</span></div><div class="metric-value">{{.ArtifactCount}}</div><div class="metric-foot">sur {{.RepoCount}} dépôts enregistrés</div></article>
+          <article class="metric-card"><div class="metric-top"><span>TAUX DE CACHE</span><span class="metric-icon purple">↗</span></div><div class="metric-value">{{.HitRatio}}</div><div class="metric-foot">depuis la création de l’instance</div></article>
+          <article class="metric-card"><div class="metric-top"><span>ACCÈS PUBLIC</span><span class="metric-icon amber">◉</span></div><div class="metric-value state-value">{{if .PublicRead}}Activé{{else}}Désactivé{{end}}</div><div class="metric-foot">{{if .PublicRead}}Dépôts publics uniquement{{else}}Authentification requise{{end}}</div></article>
+        </section>
+
+        <section class="panel-grid">
+          <article class="panel" id="repositories">
+            <div class="panel-head"><div><h2>Dépôts configurés</h2><p>Politiques d’accès appliquées avant chaque lecture.</p></div><a class="text-link" href="/api/v1/repos">Voir l’API <span>→</span></a></div>
+            <div class="table-scroll"><table><thead><tr><th>DÉPÔT</th><th>TYPE</th><th>POLITIQUE</th><th>ARTEFACTS</th><th>DERNIÈRE ACTIVITÉ</th></tr></thead><tbody>
+            {{range .Repos}}<tr><td><span class="repo-glyph">{{repoIcon .Type}}</span><strong class="repo-id">{{.ID}}</strong></td><td><span class="type-pill">{{.Type}}</span></td><td><span class="policy {{.Policy}}"><i></i>{{policyLabel .Policy}}</span></td><td>{{.Artifacts}}</td><td class="muted-cell">{{.LastActive}}</td></tr>{{else}}<tr><td colspan="5" class="empty">Aucun dépôt. Enregistrez une politique avant d’utiliser HF_ENDPOINT.</td></tr>{{end}}
+            </tbody></table></div>
+          </article>
+
+          <article class="panel side-panel"><div class="panel-head"><div><h2>Connexion Hugging Face</h2><p>Les fichiers transitent par le cache hfproxy.</p></div><span class="connection-icon">↗</span></div>
+            <div class="connection-row"><span class="service-logo">HF</span><span><strong>Hub upstream</strong><small>{{.HFBase}}</small></span><span class="health-chip"><i></i>Prêt</span></div>
+            <div class="connection-row"><span class="service-logo storage-logo">▤</span><span><strong>Stockage objet</strong><small>{{.CacheSize}} utilisés</small></span><span class="health-chip"><i></i>Prêt</span></div>
+            <div class="connection-row"><span class="service-logo auth-logo">♙</span><span><strong>Authentification</strong><small>{{if .OIDCEnabled}}OIDC + {{end}}{{.AuthMode}}</small></span><span class="health-chip"><i></i>Active</span></div>
+            <a class="configure-link" href="/api/v1/settings/public">Voir la configuration <span>→</span></a>
+          </article>
+        </section>
+
+        <section class="panel recent-panel" id="cache"><div class="panel-head"><div><h2>Artefacts récemment mis en cache</h2><p>Les téléchargements sont dédupliqués par empreinte SHA-256.</p></div><a class="text-link" href="/api/v1/cache/entries">Explorer le cache <span>→</span></a></div>
+          <div class="table-scroll"><table><thead><tr><th>FICHIER</th><th>DÉPÔT</th><th>RÉVISION</th><th>TAILLE</th><th>AJOUTÉ</th></tr></thead><tbody>
+          {{range .Artifacts}}<tr><td><span class="file-glyph">▧</span><strong class="file-name">{{.Path}}</strong></td><td><span class="repo-small">{{.RepoID}}</span></td><td><code class="commit">{{.Commit}}</code></td><td>{{bytes .Size}}</td><td class="muted-cell">{{.CachedAt}}</td></tr>{{else}}<tr><td colspan="5" class="empty">Les fichiers téléchargés apparaîtront ici.</td></tr>{{end}}
+          </tbody></table></div>
+        </section>
+
+        {{if .IsAdmin}}<section class="panel add-panel" id="add-repo"><div class="panel-head"><div><h2>Enregistrer un dépôt</h2><p>Définissez son accès local avant de le servir depuis le cache.</p></div></div><form class="repo-form" method="post" action="/"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><label>Type<select name="repo_type"><option value="models">Modèle</option><option value="datasets">Dataset</option><option value="spaces">Space</option></select></label><label>Identifiant du dépôt<input name="repo_id" placeholder="organisation/nom-du-modele" required></label><label>Politique<select name="access_policy"><option value="public">Public</option><option value="allowlist">Liste d’autorisation</option><option value="admin_only">Administrateurs uniquement</option></select></label><button class="button primary" type="submit">Enregistrer la politique <span>→</span></button></form><p class="form-hint">Les dépôts en liste d’autorisation sont refusés tant qu’aucun droit de lecture n’est attribué via l’API d’administration.</p></section>{{end}}
+
+        <footer class="footer"><span>hfproxy <b>v1.0.0</b></span><span>Les jetons Hugging Face restent sur le serveur.</span><a href="/readyz">Santé de l’instance</a></footer>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

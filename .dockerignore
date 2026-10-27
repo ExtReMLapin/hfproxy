@@ -1,0 +1,9 @@
+.git
+.agents
+.aws
+.codex
+.secrets
+.env
+*.log
+bin
+dist
