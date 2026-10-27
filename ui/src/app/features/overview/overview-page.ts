@@ -2,6 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { AdminApiService } from '../../core/admin-api.service';
+import { AuthService } from '../../core/auth.service';
 import { FeedbackService } from '../../core/feedback.service';
 import { ActiveDownload, PreloadJob, Repository, Stats } from '../../core/admin.types';
 import { IconComponent } from '../../shared/icon/icon';
@@ -15,6 +16,7 @@ import { PageHeadingComponent } from '../../shared/page-heading/page-heading';
 })
 export class OverviewPageComponent implements OnInit, OnDestroy {
   private readonly api = inject(AdminApiService);
+  protected readonly auth = inject(AuthService);
   private readonly feedback = inject(FeedbackService);
   protected readonly loading = signal(true);
   protected readonly stats = signal<Stats | null>(null);
@@ -61,6 +63,10 @@ export class OverviewPageComponent implements OnInit, OnDestroy {
 
   protected get missCount(): string {
     return this.compact(this.stats()?.cache_misses ?? 0);
+  }
+
+  protected get canManageRepositories(): boolean {
+    return this.auth.principal()?.role === 'admin';
   }
 
   protected typeLabel(type: string): string {

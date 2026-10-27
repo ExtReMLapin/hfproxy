@@ -92,11 +92,21 @@
           <h2 class="text-sm font-semibold text-slate-900">Repositories</h2>
           <p class="mt-1 text-xs text-slate-400">Latest configured access policies</p>
         </div>
-        <a
-          routerLink="/repositories"
-          class="text-xs font-semibold text-emerald-700 hover:text-emerald-900"
-          >Manage all <span aria-hidden="true">→</span></a
-        >
+        @if (canManageRepositories) {
+          <a
+            routerLink="/repositories"
+            class="text-xs font-semibold text-emerald-700 hover:text-emerald-900"
+            >Manage all <span aria-hidden="true">→</span></a
+          >
+        } @else {
+          <button
+            type="button"
+            disabled
+            title="Only administrators can configure repositories."
+            class="cursor-not-allowed text-xs font-semibold text-slate-400"
+            >Manage all · Admin only</button
+          >
+        }
       </div>
       <div class="overflow-x-auto">
         <table class="w-full min-w-[520px] text-left">
@@ -139,11 +149,21 @@
                   <p class="mt-1 text-xs text-slate-400">
                     Add a repository to control who can use it.
                   </p>
-                  <a
-                    routerLink="/repositories"
-                    class="mt-4 inline-flex text-xs font-semibold text-emerald-700"
-                    >Configure a repository →</a
-                  >
+                  @if (canManageRepositories) {
+                    <a
+                      routerLink="/repositories"
+                      class="mt-4 inline-flex text-xs font-semibold text-emerald-700"
+                      >Configure a repository →</a
+                    >
+                  } @else {
+                    <button
+                      type="button"
+                      disabled
+                      title="Only administrators can configure repositories."
+                      class="mt-4 inline-flex cursor-not-allowed text-xs font-semibold text-slate-400"
+                      >Configure a repository · Admin only</button
+                    >
+                  }
                 </td>
               </tr>
             }
