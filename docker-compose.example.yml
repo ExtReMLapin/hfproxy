@@ -16,6 +16,7 @@ services:
       HFPROXY_S3_BUCKET: ${HFPROXY_S3_BUCKET:?Set a private S3 bucket}
       HFPROXY_S3_PREFIX: hfproxy
       HFPROXY_S3_FORCE_PATH_STYLE: ${HFPROXY_S3_FORCE_PATH_STYLE:-false}
+      HFPROXY_S3_SERVER_SIDE_ENCRYPTION: ${HFPROXY_S3_SERVER_SIDE_ENCRYPTION:-true}
       HFPROXY_S3_ACCESS_KEY_FILE: /run/secrets/s3_access_key
       HFPROXY_S3_SECRET_KEY_FILE: /run/secrets/s3_secret_key
       HFPROXY_AUTH_MODE: oidc

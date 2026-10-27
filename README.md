@@ -1,8 +1,8 @@
 # hfproxy
 
-hfproxy is an internal Hugging Face Hub proxy written in Go. It applies local access policies before every request, fetches files from the Hub, deduplicates them by SHA-256 in a private S3 or MinIO bucket, and stores the catalog in PostgreSQL.
+hfproxy is an internal Hugging Face Hub proxy written in Go. It applies local access policies before every request, fetches files from the Hub, deduplicates them by SHA-256 in a private S3-compatible bucket, and stores the catalog in PostgreSQL.
 
-The implementation covers the main read and operations paths. Features outside the current MVP are listed below.
+hfproxy includes a browser-based administration console built with Angular 22 and Tailwind CSS. It manages access policies and runtime service settings while keeping upstream credentials on the server.
 
 ## Run locally
 
@@ -17,6 +17,10 @@ Create the first administrator. Put the password in a protected file or send it 
     umask 077
     # Write the password to .secrets/admin-password using your secrets manager.
     docker compose exec -T hfproxy hfproxy admin create-user --username admin --password-file - < .secrets/admin-password
+
+If the admin account already exists and you need to change its password, use `reset-password`. This keeps the database and other settings; existing web sessions for that admin are revoked.
+
+    docker compose exec -T hfproxy hfproxy admin reset-password --username admin --password-file - < .secrets/admin-password
 
 Register a repository and choose its policy before using it:
 
@@ -34,11 +38,24 @@ Then configure a Python client:
 
 When `HFPROXY_ANONYMOUS_PUBLIC_READ=true`, clients can read repositories registered with the public policy without a token. The administration endpoints and dashboard still require authentication.
 
+### Administration console
+
+The console is served by the Go service at `/` and is available after creating the first administrator. Open **Settings** to configure the Hugging Face Hub URL and optional upstream token, Garage or another S3-compatible endpoint/bucket/credentials, cache limits, public URL, and session lifetimes. Changes are validated and applied immediately; the Hub and S3 settings have connection checks. Credentials are write-only in the API and encrypted in PostgreSQL with AES-GCM.
+
+The Angular source is in `ui/`. For frontend development, start the Go service on port 8080, then run `nvm use && npm ci && npm start` from `ui/`; `.nvmrc` pins Node 24.22.1. Angular serves the UI on port 4200 and proxies API requests to Go. The Docker build compiles and embeds the production UI.
+
+The database URL, listen address, and `SESSION_SECRET` remain bootstrap settings in the environment. Keep `SESSION_SECRET` unchanged: it encrypts saved runtime settings as well as signing sessions. Changing it without migrating the saved settings will make those credentials unreadable. Changing the S3 bucket or prefix does not move existing objects.
+
+For a fresh installation that should configure S3 only through the console, leave `HFPROXY_S3_BUCKET` unset in the environment. hfproxy will serve the sign-in and setup pages, while `/readyz` stays unavailable until a valid bucket is saved. PostgreSQL and `SESSION_SECRET` are still needed at startup. The provided Compose setup preconfigures a single-node Garage instance and its default bucket for local use.
+
+Local username/password authentication is enabled by default. OIDC/SSO and LDAP are optional and remain disabled until configured in **Settings**. OIDC requires an issuer, client ID, client secret, and callback URL; LDAP requires an LDAPS or StartTLS URL and a search base/filter. The first administrator must still be created with the CLI; additional local users and their roles can be managed in **Users**.
+
 ## Commands
 
     hfproxy serve
     hfproxy migrate up|status
     hfproxy admin create-user --username NAME --password-file PATH
+    hfproxy admin reset-password --username NAME --password-file PATH
     hfproxy admin token create|list|revoke
     hfproxy admin repo add
     hfproxy admin identity link
@@ -56,13 +73,13 @@ Environment variables use the `HFPROXY_` prefix. Common settings for local Compo
 | --- | --- |
 | HTTP and database | LISTEN_ADDR, PUBLIC_URL, DATABASE_URL, AUTO_MIGRATE, LOG_LEVEL |
 | Hugging Face | HF_BASE_URL, HF_TOKEN, HF_ALLOWED_REDIRECT_HOSTS, HF_TIMEOUT |
-| S3 | S3_ENDPOINT, S3_REGION, S3_BUCKET, S3_PREFIX, S3_FORCE_PATH_STYLE, S3_ACCESS_KEY, S3_SECRET_KEY |
+| S3 | S3_ENDPOINT, S3_REGION, S3_BUCKET, S3_PREFIX, S3_FORCE_PATH_STYLE, S3_SERVER_SIDE_ENCRYPTION, S3_ACCESS_KEY, S3_SECRET_KEY |
 | Authentication | AUTH_MODE=local or oidc, SESSION_SECRET, ANONYMOUS_PUBLIC_READ |
 | OIDC | OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_REDIRECT_URL, OIDC_AUTO_PROVISION |
 | LDAP | LDAP_URL, LDAP_STARTTLS, LDAP_BIND_DN, LDAP_BIND_PASSWORD, LDAP_BASE_DN, LDAP_USER_FILTER, LDAP_AUTO_PROVISION |
 | Cache limits | CACHE_MAX_FILE_SIZE, CACHE_REF_TTL, CACHE_NEGATIVE_TTL, CACHE_GC_GRACE |
 
-PostgreSQL is required. The S3 bucket must exist, remain private, and allow the service identity to read, write, and delete objects. Standard AWS credentials (IAM role, AWS environment variables, or a mounted profile) work when the S3 access key variables are unset. `S3_FORCE_PATH_STYLE=true` is usually required for MinIO.
+PostgreSQL is required. The S3 bucket must exist, remain private, and allow the service identity to read, write, and delete objects. Standard AWS credentials (IAM role, AWS environment variables, or a mounted profile) work when the S3 access key variables are unset. Use `S3_FORCE_PATH_STYLE=true` with the local Garage endpoint. Garage does not implement S3-managed AES256 encryption, so the Compose setup disables the `S3_SERVER_SIDE_ENCRYPTION` request header; use encrypted disks for at-rest encryption. Other S3 services can keep that option enabled if they support it.
 
 The upstream HF token is optional for public repositories and required for private or gated repositories. It is sent only to the configured HF host, never to the client. Redirects are followed over HTTPS to allowed HF hosts. Add the delivery hosts observed in your environment to `HF_ALLOWED_REDIRECT_HOSTS`.
 
@@ -89,13 +106,13 @@ Supported Hub read routes:
 
 The proxy supports branch, tag, and SHA revisions; nested paths; HEAD; ETag/304; and simple Range requests from the cache. Mutable references are cached for `CACHE_REF_TTL` (60 seconds by default), while a SHA remains immutable. Multi-part ranges are explicitly rejected. Hub metadata uses an allowlist of routes; there is no generic URL proxy.
 
-The operations API is under `/api/v1` and covers identity and providers, statistics, repositories and grants, cache, users, groups (`GET`/`POST /groups`, `PATCH /groups/{id}`), audit, and public settings. Errors use `application/problem+json`. Administrative operations require the admin role.
+The operations API is under `/api/v1` and covers identity and providers, statistics, repositories and grants, cache, users (`GET`/`POST /users`, `PATCH /users/{id}`), groups (`GET`/`POST /groups`, `PATCH /groups/{id}`), audit, and settings (`GET`/`PUT /settings`). Errors use `application/problem+json`. Administrative operations require the admin role and browser mutations require CSRF validation.
 
 A cache hit never bypasses authorization. Anonymous reads apply only to repositories explicitly registered as public. An allowlist policy grants access to explicitly authorized local users and groups; `admin_only` is the default policy.
 
 ## Containers and operations
 
-The multi-stage Dockerfile builds a static binary and runs the final image as UID 65532. `docker-compose.yml` is a local development environment with PostgreSQL and MinIO; it binds the proxy port to loopback only. `docker-compose.example.yml` demonstrates secret injection and TLS termination by a reverse proxy.
+The multi-stage Dockerfile builds a static binary and runs the final image as UID 65532. `docker-compose.yml` is a local development environment with PostgreSQL and single-node Garage; it binds the proxy port to loopback only. Garage's single-node development setup has no redundancy and is not a production storage deployment. `docker-compose.example.yml` demonstrates secret injection and TLS termination by a reverse proxy.
 
 For production:
 
@@ -114,7 +131,7 @@ Health endpoints: `/healthz` provides liveness without dependency checks; `/read
 - The reference TTL applies to cache reads; a cache miss may still query the Hub API for metadata and to confirm the SHA before downloading.
 - OIDC verifies identities and sessions, but IdP group claims are not automatically mapped to local groups.
 - LDAP supports LDAPS/StartTLS and user binds; Active Directory group synchronization is not included.
-- The dashboard provides an overview and repository registration. Detailed user, group, cache, and audit management is available through the API rather than dedicated pages.
+- The administration console manages runtime settings, repositories and grants, users, groups, cache entries, and audit events. Database connection, listen address, and session encryption secret remain environment-managed bootstrap settings.
 - Multi-part Range requests, Prometheus metrics, distributed rate limits, periodic orphan-blob collection, and paginated cache purge still need work before large-scale operation.
 - Negative-result caching is not implemented yet; `CACHE_NEGATIVE_TTL` and `CACHE_GC_GRACE` are reserved settings and currently have no effect.
 - Public policies control local access; they do not replace Hugging Face license terms or gated-access conditions.

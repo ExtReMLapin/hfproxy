@@ -7,3 +7,6 @@
 *.log
 bin
 dist
+ui/node_modules
+ui/.angular
+ui/dist

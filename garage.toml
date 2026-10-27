@@ -1,0 +1,20 @@
+# Local development configuration only. Use private secrets for any shared deployment.
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+replication_factor = 1
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+[s3_api]
+api_bind_addr = "[::]:3900"
+s3_region = "garage"
+root_domain = ".s3.garage.localhost"
+public_endpoint = "http://garage:3900"
+
+[admin]
+api_bind_addr = "127.0.0.1:3903"
+admin_token = "garage-dev-admin-token-change-before-sharing"
+metrics_token = "garage-dev-metrics-token-change-before-sharing"

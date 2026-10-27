@@ -16,36 +16,24 @@ services:
       retries: 15
     restart: unless-stopped
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
+  garage:
+    image: dxflrs/garage:v2.5.0
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-hfproxy_dev}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_dev_password_change_me}
+      GARAGE_DEFAULT_ACCESS_KEY: ${GARAGE_DEFAULT_ACCESS_KEY:-GK0123456789abcdef0123456789abcdef}
+      GARAGE_DEFAULT_SECRET_KEY: ${GARAGE_DEFAULT_SECRET_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      GARAGE_DEFAULT_BUCKET: ${GARAGE_DEFAULT_BUCKET:-hfproxy}
     volumes:
-      - minio-data:/data
+      - ./garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/ready"]
+      test: ["CMD", "/garage", "status"]
       interval: 5s
-      timeout: 3s
+      timeout: 5s
       retries: 20
+      start_period: 10s
     restart: unless-stopped
-
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >-
-        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" &&
-        mc mb --ignore-existing local/hfproxy &&
-        mc anonymous set none local/hfproxy
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-hfproxy_dev}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_dev_password_change_me}
-    restart: "no"
 
   hfproxy:
     build:
@@ -59,21 +47,22 @@ services:
       HFPROXY_AUTO_MIGRATE: "true"
       HFPROXY_HF_BASE_URL: https://huggingface.co
       HFPROXY_HF_TOKEN_FILE: ${HFPROXY_HF_TOKEN_FILE:-/run/secrets/hf_token}
-      HFPROXY_S3_ENDPOINT: http://minio:9000
-      HFPROXY_S3_REGION: us-east-1
-      HFPROXY_S3_BUCKET: hfproxy
+      HFPROXY_S3_ENDPOINT: http://garage:3900
+      HFPROXY_S3_REGION: garage
+      HFPROXY_S3_BUCKET: ${GARAGE_DEFAULT_BUCKET:-hfproxy}
       HFPROXY_S3_PREFIX: hfproxy
       HFPROXY_S3_FORCE_PATH_STYLE: "true"
-      HFPROXY_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-hfproxy_dev}
-      HFPROXY_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minio_dev_password_change_me}
+      HFPROXY_S3_SERVER_SIDE_ENCRYPTION: "false"
+      HFPROXY_S3_ACCESS_KEY: ${GARAGE_DEFAULT_ACCESS_KEY:-GK0123456789abcdef0123456789abcdef}
+      HFPROXY_S3_SECRET_KEY: ${GARAGE_DEFAULT_SECRET_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
       HFPROXY_AUTH_MODE: local
       HFPROXY_ANONYMOUS_PUBLIC_READ: ${HFPROXY_ANONYMOUS_PUBLIC_READ:-true}
       HFPROXY_SESSION_SECRET: ${HFPROXY_SESSION_SECRET:-dev-only-session-secret-change-before-deployment-32-bytes}
     depends_on:
       postgres:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
+      garage:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8080:8080"
     healthcheck:
@@ -86,4 +75,5 @@ services:
 
 volumes:
   postgres-data:
-  minio-data:
+  garage-meta:
+  garage-data:

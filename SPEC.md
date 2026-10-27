@@ -7,14 +7,14 @@
 
 ## 1. Objectif
 
-Construire `hfproxy`, un proxy HTTP interne compatible avec les principaux flux de téléchargement de Hugging Face Hub. Les clients (notamment `huggingface_hub`, Transformers, Diffusers et les outils qui acceptent une URL de Hub personnalisée) interrogent hfproxy. Celui-ci sert une copie locale ou objet déjà en cache ; sinon, il télécharge le contenu depuis le Hub, le place dans un stockage objet S3 compatible (AWS S3 ou MinIO), puis le sert au client.
+Construire `hfproxy`, un proxy HTTP interne compatible avec les principaux flux de téléchargement de Hugging Face Hub. Les clients (notamment `huggingface_hub`, Transformers, Diffusers et les outils qui acceptent une URL de Hub personnalisée) interrogent hfproxy. Celui-ci sert une copie locale ou objet déjà en cache ; sinon, il télécharge le contenu depuis le Hub, le place dans un stockage objet S3 compatible (AWS S3 ou Garage), puis le sert au client.
 
 Le produit comporte un serveur, une CLI d’administration et d’exploitation, et un petit dashboard web. L’identité des utilisateurs est gérée localement via OIDC/SSO ; LDAP/Active Directory est un fournisseur optionnel. Les permissions sont appliquées par hfproxy même lorsque l’accès à un objet est techniquement possible dans S3.
 
 ### Objectifs
 
 - Réduire les téléchargements redondants depuis Hugging Face et fournir une URL stable interne.
-- Cache persistant S3/MinIO avec métadonnées PostgreSQL et déduplication des blobs par contenu.
+- Cache persistant S3/Garage avec métadonnées PostgreSQL et déduplication des blobs par contenu.
 - Supporter les dépôts `models`, `datasets` et `spaces` pour les opérations de lecture ciblées.
 - Contrôler l’accès aux dépôts privés et gated au moyen d’un jeton HF serveur, sans exposer ce jeton aux clients.
 - Donner aux administrateurs les moyens de gérer utilisateurs, rôles, dépôts, cache, configuration des fournisseurs et audit.
@@ -66,7 +66,7 @@ Un binaire Go unique, `hfproxy`, avec sous-commandes `serve`, `migrate`, `admin`
 - **HTTP gateway** : routage, authentification, autorisation, limitation de débit, traduction des erreurs et compatibilité des en-têtes HTTP.
 - **Hub client** : client HTTP sortant vers `HF_BASE_URL` (défaut `https://huggingface.co`), avec bearer token, timeouts, redirections contrôlées et respect des réponses Hub.
 - **Cache service** : résolution de révision, coalescence, téléchargement temporaire, calcul d’empreinte, accès objet et invalidation.
-- **Storage interface** : interface Go minimale (`Put`, `Get`, `Head`, `Delete`, `Presign` si activé) ; implémentation S3 via SDK Go officiel, MinIO via compatibilité S3. Les URL présignées sont désactivées par défaut afin de garder le contrôle d’accès dans hfproxy.
+- **Storage interface** : interface Go minimale (`Put`, `Get`, `Head`, `Delete`, `Presign` si activé) ; implémentation S3 via SDK Go officiel et compatibilité avec Garage. Les URL présignées sont désactivées par défaut afin de garder le contrôle d’accès dans hfproxy.
 - **Repository** : PostgreSQL, migrations versionnées, transactions pour les métadonnées et verrous de coordination distribués en base.
 - **Identity** : sessions web sécurisées, OIDC Authorization Code avec PKCE, et LDAP/AD optionnel avec bind TLS.
 - **Dashboard** : ressources statiques servies par le binaire, interface responsive en français/anglais si le coût est raisonnable ; le serveur reste utilisable sans JavaScript pour les fonctions critiques d’administration CLI.
@@ -184,6 +184,7 @@ Les mutations administratives sont `admin` sauf permissions spécifiques d’`op
 | `hfproxy migrate up` | Applique les migrations ; jamais implicitement en production sauf option explicite au démarrage. |
 | `hfproxy migrate status` | Affiche la version DB sans secrets. |
 | `hfproxy admin create-user` | Crée le premier admin local, mot de passe demandé sans écho ou fourni par canal secret ; hash Argon2id. Refuse si un admin existe. |
+| `hfproxy admin reset-password` | Remplace le mot de passe Argon2id d’un admin local existant via fichier/canal secret et révoque ses sessions web. |
 | `hfproxy admin token create|revoke|list` | Gère les tokens clients hfproxy, affichés une seule fois à la création, hashés en base, scope/expiration optionnels. |
 | `hfproxy cache inspect|purge|verify` | Opérations cache ; purge avec simulation par défaut et confirmation requise. |
 | `hfproxy config validate` | Valide la configuration et signale les erreurs sans imprimer les valeurs secrètes. |
@@ -240,7 +241,7 @@ Ne pas stocker le contenu des modèles, tokens HF upstream, mots de passe LDAP/O
 
 ## 9. Stockage objet et stratégie cache
 
-- Configurer endpoint, région, bucket, prefix, path-style (requis pour de nombreuses configurations MinIO), chiffrement, credentials via secret et CA TLS personnalisable.
+- Configurer endpoint, région, bucket, prefix, path-style, chiffrement, credentials via secret et CA TLS personnalisable. L’environnement local utilise Garage en mode path-style.
 - Bucket privé ; désactiver ACL publiques ; chiffrement côté serveur conseillé. Fournir une politique IAM minimale pour lecture/écriture/suppression dans le préfixe hfproxy.
 - Clé d’objet : `blobs/sha256/<2 premiers hex>/<sha256>` ; temporaires dans `staging/<request-id>` avec suppression par TTL. Ne jamais inclure directement un chemin utilisateur dans une clé S3.
 - Téléchargement en streaming multipart si taille le nécessite ; annulation au départ du dernier demandeur selon politique ; multipart incomplet supprimé par nettoyage périodique.
@@ -328,8 +329,8 @@ Chaque étape doit livrer un logiciel utilisable et conserver les critères ant�
 ### Étape 1 — proxy public et cache objet
 
 - PostgreSQL migrations pour repos/révisions/blobs/artifacts/downloads.
-- S3/MinIO, client HF public sans token, `/resolve/` streaming, résolution SHA, coalescence, cache miss/hit, HEAD, ETag et Range.
-- Premier test de bout en bout avec modèle public de petite taille, MinIO et Postgres en Compose.
+- S3/Garage, client HF public sans token, `/resolve/` streaming, résolution SHA, coalescence, cache miss/hit, HEAD, ETag et Range.
+- Premier test de bout en bout avec modèle public de petite taille, Garage et Postgres en Compose.
 
 ### Étape 2 — Auth et permissions
 
@@ -365,7 +366,7 @@ Les tests ci-dessous sont des critères de livraison et doivent être développ�
 
 - **Unitaires** : parsing/normalisation route et chemins, politique RBAC, mapping d’erreurs, configuration/redaction, token hash, résolveur de révision, calcul de hash et règles cache.
 - **HTTP** : `/resolve/` GET/HEAD, ETag/304, Range/206, 416, erreurs Hub, en-têtes hop-by-hop, redirections et nettoyage des secrets.
-- **Intégration** : PostgreSQL + MinIO, migrations, publication atomique, reprise après échec S3/DB, GC sans suppression de blobs référencés.
+- **Intégration** : PostgreSQL + Garage, migrations, publication atomique, reprise après échec S3/DB, GC sans suppression de blobs référencés.
 - **Concurrence** : plusieurs demandes même clé ne produisent qu’un téléchargement upstream ; annulation et timeout libèrent le verrou ; tests `-race`.
 - **Auth** : OIDC state/nonce/PKCE/issuer invalides, callback forgé, session expiry/rotation/logout, CSRF, LDAP injection, TLS requis, brute force.
 - **RBAC** : lecteur non autorisé refusé avant accès cache ; operator ne peut changer rôles/secrets ; admin peut auditer/purger.
@@ -381,9 +382,9 @@ Les tests externes HF doivent utiliser un dépôt public dédié et stable. Aucu
 Le dépôt d’implémentation attendu après création par Codex doit inclure :
 
 - `Dockerfile` multi-stage, image finale minimale, processus non-root, CA certifiées présentes, binaire statique si compatible ; aucun secret de build.
-- `docker-compose.yml` de développement avec `hfproxy`, PostgreSQL, MinIO et initialisation du bucket. OIDC/LDAP de test peuvent être profils optionnels.
+- `docker-compose.yml` de développement avec `hfproxy`, PostgreSQL, Garage en nœud unique et création du bucket initial. OIDC/LDAP de test peuvent être profils optionnels.
 - `docker-compose.example.yml` ou `.env.example` sans secret réel, avec commentaires sur secrets, TLS, volumes, limites et bootstrap.
-- Volumes persistants DB et MinIO ; healthchecks et dépendances `service_healthy`.
+- Volumes persistants DB et Garage ; healthchecks et dépendances `service_healthy`.
 - Le port HTTP interne ne doit pas être exposé publiquement dans un exemple production sans TLS/reverse proxy et authentification configurés.
 - Documentation pour Kubernetes/Helm hors MVP, mais variables, probes, stockage persistant et SIGTERM doivent rendre cette évolution possible.
 
@@ -391,9 +392,9 @@ Le dépôt d’implémentation attendu après création par Codex doit inclure :
 
 Le MVP est accepté lorsque tous les éléments suivants sont démontrés :
 
-1. `docker compose up` démarre hfproxy, PostgreSQL et MinIO sans credential par défaut en production ; les procédures de bootstrap sont explicites.
+1. `docker compose up` démarre hfproxy, PostgreSQL et Garage avec des identifiants de développement ; la configuration de production injecte ses secrets explicitement.
 2. Une requête `GET /models/{repo}/resolve/{revision}/{path}` sur dépôt public fait un seul téléchargement amont, enregistre l’objet et la métadonnée, puis retourne les octets identiques.
-3. La seconde requête retourne les mêmes octets depuis MinIO sans téléchargement HF supplémentaire ; les compteurs hit/miss sont exacts.
+3. La seconde requête retourne les mêmes octets depuis Garage sans téléchargement HF supplémentaire ; les compteurs hit/miss sont exacts.
 4. Les révisions de branche résolvent un commit SHA et ne mélangent pas les contenus de deux commits ; le TTL de branche est appliqué.
 5. `HEAD`, ETag/304 et les requêtes Range sont correctes ou refusées explicitement si le comportement amont ne permet pas de les satisfaire ; aucune réponse 206 incorrecte.
 6. Les appels à un dépôt privé/gated fonctionnent uniquement lorsque le token HF serveur y a accès et que l’utilisateur local est autorisé ; un utilisateur non autorisé est refusé même si l’objet est en cache.
@@ -405,7 +406,7 @@ Le MVP est accepté lorsque tous les éléments suivants sont démontrés :
 12. Les logs, erreurs, métriques et audit ne contiennent aucun token HF, jeton utilisateur, mot de passe ou URL signée.
 13. Les limites de taille, débit, redirection, timeout et concurrence sont appliquées ; les échecs amont n’entraînent ni publication partielle ni corruption du cache.
 14. Le conteneur fonctionne non-root, répond aux probes, s’arrête proprement et reprend après redémarrage avec cache intact.
-15. Guide d’installation, configuration HF_ENDPOINT, OIDC, LDAP, S3/MinIO, exploitation, backup/restore, limites de compatibilité et dépannage sont présents.
+15. Guide d’installation, configuration HF_ENDPOINT, OIDC, LDAP, S3/Garage, exploitation, backup/restore, limites de compatibilité et dépannage sont présents.
 
 ## 18. Risques et décisions à confirmer pendant le projet
 
