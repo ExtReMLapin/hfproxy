@@ -123,6 +123,15 @@ For production:
 5. Back up PostgreSQL and the bucket together. Restore both to preserve the links between artifacts and blobs.
 6. Restrict egress to Hugging Face and validated HF CDN hosts. The upstream token should have only the minimum scopes and gated access required.
 
+### Release images
+
+Push a semantic version tag to publish a multi-platform image to GitHub Container Registry:
+
+    git tag v1.2.3
+    git push origin v1.2.3
+
+The workflow publishes `ghcr.io/nikolas03/hfproxy:v1.2.3` for every `v*` tag and also updates `:latest` for stable tags. The application version and commit are embedded in the image. GitHub creates the package as private by default; change its visibility in the package settings if it should be publicly pullable.
+
 Known-size Hub downloads are checkpointed in 64 MiB blocks in the S3-compatible bucket. Retrying a failed preload resumes from the last complete block when the upstream honors HTTP Range requests; otherwise hfproxy safely falls back to a full transfer. Abandoned checkpoints are removed after seven days. The current block is downloaded again if a transfer fails before that block is stored.
 
 Health endpoints: `/healthz` provides liveness without dependency checks; `/readyz` checks PostgreSQL and S3. JSON logs include request ID, route, duration, status, and bytes, without query strings, bearer tokens, or signed URLs.
