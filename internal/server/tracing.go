@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nicolas/hfproxy/internal/config"
+	"github.com/hfproxy/hfproxy/internal/config"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -188,7 +188,7 @@ func (s *Server) traceMiddleware(next http.Handler) http.Handler {
 		}
 		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 		route := routeTemplate(r.URL.Path)
-		ctx, span := otel.Tracer("github.com/nicolas/hfproxy/internal/server").Start(ctx, "http.server", trace.WithSpanKind(trace.SpanKindServer), trace.WithAttributes(attribute.String("http.request.method", r.Method), attribute.String("http.route", route)))
+		ctx, span := otel.Tracer("github.com/hfproxy/hfproxy/internal/server").Start(ctx, "http.server", trace.WithSpanKind(trace.SpanKindServer), trace.WithAttributes(attribute.String("http.request.method", r.Method), attribute.String("http.route", route)))
 		wrapped := &traceResponseWriter{ResponseWriter: w}
 		defer func() {
 			status := wrapped.status

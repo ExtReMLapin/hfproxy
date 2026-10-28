@@ -1,4 +1,4 @@
-module github.com/nicolas/hfproxy
+module github.com/hfproxy/hfproxy
 
 go 1.27.0
 

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/db"
 )
 
 const (

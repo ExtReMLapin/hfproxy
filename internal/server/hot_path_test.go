@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/db"
 )
 
 func TestAuthCacheServesRepeatedLookupsAndForgetsOnPurge(t *testing.T) {

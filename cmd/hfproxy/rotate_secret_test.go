@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nicolas/hfproxy/internal/config"
-	"github.com/nicolas/hfproxy/internal/db"
-	"github.com/nicolas/hfproxy/internal/keyring"
+	"github.com/hfproxy/hfproxy/internal/config"
+	"github.com/hfproxy/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/keyring"
 )
 
 func rotationDatabase(t *testing.T) *sql.DB {

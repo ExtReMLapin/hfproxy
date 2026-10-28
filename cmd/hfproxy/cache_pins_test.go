@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/db"
 )
 
 func TestCachePinCommands(t *testing.T) {

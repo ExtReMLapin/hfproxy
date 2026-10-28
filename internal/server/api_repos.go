@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/db"
 )
 
 func (s *Server) apiRepos(w http.ResponseWriter, r *http.Request) {

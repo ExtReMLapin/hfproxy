@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nicolas/hfproxy/internal/config"
-	"github.com/nicolas/hfproxy/internal/storage"
+	"github.com/hfproxy/hfproxy/internal/config"
+	"github.com/hfproxy/hfproxy/internal/storage"
 )
 
 type settingsResponse struct {

@@ -22,11 +22,11 @@ import (
 	"time"
 
 	"github.com/aws/smithy-go"
-	"github.com/nicolas/hfproxy/internal/config"
-	"github.com/nicolas/hfproxy/internal/db"
-	"github.com/nicolas/hfproxy/internal/keyring"
-	"github.com/nicolas/hfproxy/internal/server"
-	"github.com/nicolas/hfproxy/internal/storage"
+	"github.com/hfproxy/hfproxy/internal/config"
+	"github.com/hfproxy/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/keyring"
+	"github.com/hfproxy/hfproxy/internal/server"
+	"github.com/hfproxy/hfproxy/internal/storage"
 )
 
 var (

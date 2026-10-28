@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nicolas/hfproxy/internal/keyring"
+	"github.com/hfproxy/hfproxy/internal/keyring"
 )
 
 type managedSettings struct {

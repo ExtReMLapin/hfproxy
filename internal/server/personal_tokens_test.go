@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nicolas/hfproxy/internal/keyring"
+	"github.com/hfproxy/hfproxy/internal/keyring"
 )
 
 func TestPersonalTokensRequireSession(t *testing.T) {

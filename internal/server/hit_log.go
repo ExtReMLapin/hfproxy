@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/db"
 )
 
 // hitLog writes the download events of cache hits in batches, off the request

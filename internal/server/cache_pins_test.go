@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/db"
 )
 
 func seedPinnedArtifact(t *testing.T, store *db.Store, repo, commit, name string, size int64, age string) string {

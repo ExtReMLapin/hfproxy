@@ -11,7 +11,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/db"
 )
 
 // ldapUserAttributes are requested with the user search: identity, display

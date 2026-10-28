@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
-	"github.com/nicolas/hfproxy/internal/db"
-	"github.com/nicolas/hfproxy/internal/keyring"
+	"github.com/hfproxy/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/keyring"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/oauth2"
 )

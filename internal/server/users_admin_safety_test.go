@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/db"
 )
 
 func TestConcurrentAdminDemotionsKeepAnActiveAdmin(t *testing.T) {

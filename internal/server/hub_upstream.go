@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nicolas/hfproxy/internal/config"
+	"github.com/hfproxy/hfproxy/internal/config"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -154,7 +154,7 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 			}
 			return nil, nil, errUpstreamCircuitOpen
 		}
-		spanCtx, span := otel.Tracer("github.com/nicolas/hfproxy/internal/server").Start(ctx, "upstream.request", trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attribute.String("hfproxy.operation", operation)))
+		spanCtx, span := otel.Tracer("github.com/hfproxy/hfproxy/internal/server").Start(ctx, "upstream.request", trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attribute.String("hfproxy.operation", operation)))
 		otel.GetTextMapPropagator().Inject(spanCtx, propagation.HeaderCarrier(req.Header))
 		req = req.WithContext(spanCtx)
 		attemptStarted := time.Now()

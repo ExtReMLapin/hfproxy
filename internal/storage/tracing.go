@@ -10,7 +10,7 @@ import (
 )
 
 func startStorageSpan(ctx context.Context, operation string) (context.Context, trace.Span) {
-	return otel.Tracer("github.com/nicolas/hfproxy/internal/storage").Start(ctx, "storage."+operation,
+	return otel.Tracer("github.com/hfproxy/hfproxy/internal/storage").Start(ctx, "storage."+operation,
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attribute.String("storage.operation", operation)),
 	)

@@ -14,8 +14,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nicolas/hfproxy/internal/db"
-	"github.com/nicolas/hfproxy/internal/storage"
+	"github.com/hfproxy/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/storage"
 )
 
 // fileResolution carries what the steps of resolveFile learn about one request.

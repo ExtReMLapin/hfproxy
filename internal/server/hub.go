@@ -18,7 +18,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/db"
 )
 
 type artifact = db.Artifact
@@ -307,7 +307,7 @@ func (s *Server) streamUncachedMiss(w http.ResponseWriter, r *http.Request, pars
 }
 
 func (s *Server) findArtifact(ctx context.Context, repoID, commit, file string) (artifact, error) {
-	ctx, span := otel.Tracer("github.com/nicolas/hfproxy/internal/server").Start(ctx, "cache.lookup", trace.WithAttributes(attribute.String("cache.operation", "artifact_lookup")))
+	ctx, span := otel.Tracer("github.com/hfproxy/hfproxy/internal/server").Start(ctx, "cache.lookup", trace.WithAttributes(attribute.String("cache.operation", "artifact_lookup")))
 	defer span.End()
 	started := time.Now()
 	a, err := s.db.FindArtifact(ctx, repoID, commit, file)

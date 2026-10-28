@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nicolas/hfproxy/internal/config"
-	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/config"
+	"github.com/hfproxy/hfproxy/internal/db"
 )
 
 type flushProbe struct {

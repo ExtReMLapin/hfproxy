@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/db"
 )
 
 func ldapEntry(dn string, attrs map[string][]string, raw map[string][]byte) *ldap.Entry {

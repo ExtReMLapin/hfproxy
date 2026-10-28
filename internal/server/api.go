@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/db"
 )
 
 func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {

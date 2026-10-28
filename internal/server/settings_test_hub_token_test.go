@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/db"
 )
 
 func TestTestHubSendsExplicitTokenToNewOrigin(t *testing.T) {

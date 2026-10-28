@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nicolas/hfproxy/internal/config"
+	"github.com/hfproxy/hfproxy/internal/config"
 )
 
 func TestCSRFAndSessionCookiesShareAbsoluteLifetime(t *testing.T) {

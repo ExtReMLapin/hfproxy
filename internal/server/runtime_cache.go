@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/nicolas/hfproxy/internal/storage"
+	"github.com/hfproxy/hfproxy/internal/storage"
 )
 
 const negativeCacheMaxEntries = 10_000

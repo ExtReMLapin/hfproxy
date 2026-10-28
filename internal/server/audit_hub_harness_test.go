@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nicolas/hfproxy/internal/config"
-	"github.com/nicolas/hfproxy/internal/db"
-	"github.com/nicolas/hfproxy/internal/storage"
+	"github.com/hfproxy/hfproxy/internal/config"
+	"github.com/hfproxy/hfproxy/internal/db"
+	"github.com/hfproxy/hfproxy/internal/storage"
 )
 
 func ahubRandHex(n int) string {
