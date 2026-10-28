@@ -97,7 +97,7 @@ jobs:
             go.mod
             go.sum
       - name: Static analysis
-        run: go run honnef.co/go/tools/cmd/staticcheck@2026.1 ./...
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.2 ./...
   ui:
     runs-on: ubuntu-latest
     defaults:
