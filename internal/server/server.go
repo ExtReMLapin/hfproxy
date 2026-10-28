@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -789,32 +790,24 @@ func (s *Server) checkCSRF(r *http.Request) bool {
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (*Principal, bool) {
-	p, err := s.authenticate(r)
-	if err != nil {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="hfproxy"`)
-		writeProblem(w, r, http.StatusUnauthorized, "Authentication required", "Provide a valid hfproxy token or sign in.")
-		return nil, false
-	}
-	if p.Role != "admin" {
-		writeProblem(w, r, http.StatusForbidden, "Forbidden", "Administrator role required.")
-		return nil, false
-	}
-	if !tokenAllowsAdministration(p) {
-		writeProblem(w, r, http.StatusForbidden, "Forbidden", "This token is read-only and cannot use the administration API.")
-		return nil, false
-	}
-	return p, true
+	return s.requireRole(w, r, "Administrator role required.", "admin")
 }
 
 func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request) (*Principal, bool) {
+	return s.requireRole(w, r, "Operator or administrator role required.", "admin", "operator")
+}
+
+// requireRole authenticates the request and checks that the principal holds one
+// of the roles and, for tokens, a scope that allows administration.
+func (s *Server) requireRole(w http.ResponseWriter, r *http.Request, denied string, roles ...string) (*Principal, bool) {
 	p, err := s.authenticate(r)
 	if err != nil {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="hfproxy"`)
 		writeProblem(w, r, http.StatusUnauthorized, "Authentication required", "Provide a valid hfproxy token or sign in.")
 		return nil, false
 	}
-	if p.Role != "admin" && p.Role != "operator" {
-		writeProblem(w, r, http.StatusForbidden, "Forbidden", "Operator or administrator role required.")
+	if !slices.Contains(roles, p.Role) {
+		writeProblem(w, r, http.StatusForbidden, "Forbidden", denied)
 		return nil, false
 	}
 	if !tokenAllowsAdministration(p) {

@@ -93,9 +93,12 @@ Local username/password authentication is enabled by default. OIDC/SSO and LDAP 
     hfproxy cache inspect|purge|verify
     hfproxy cache pin|unpin|pins
     hfproxy config validate
+    hfproxy config show --source
     hfproxy version
 
 `cache purge` is a dry run by default; execution requires `--execute --yes`. `cache verify` reads the objects and checks their SHA-256 hashes. Secrets can be supplied through `HFPROXY_*_FILE`. `config validate` does not reveal configuration values.
+
+**Settings precedence.** Once settings are saved from the console they take precedence over the matching `HFPROXY_*` variables (environment-only settings such as `STAGING_DIR` are never overridden). At startup the server logs the names of the settings that the console overrides. `hfproxy config show --source` prints every setting with its origin (`environment` or `console`); secrets are never printed. To go back to the environment values, reset the saved settings from the console.
 
 ## Configuration
 

@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/nicolas/hfproxy/internal/keyring"
@@ -200,3 +202,58 @@ func OverriddenFields(fromEnvironment, effective Config) []string {
 func boolPointer(value bool) *bool       { return &value }
 func int64Pointer(value int64) *int64    { return &value }
 func stringPointer(value string) *string { return &value }
+
+// SettingSource describes where one setting's effective value comes from.
+type SettingSource struct {
+	Name   string
+	Source string // "environment" or "console" (saved settings)
+	Value  string // redacted: secrets are never shown
+}
+
+// DescribeSources reports, for every setting, whether the effective value
+// comes from the environment or from settings saved in the console.
+func DescribeSources(fromEnvironment, effective Config) []SettingSource {
+	overridden := map[string]bool{}
+	for _, name := range OverriddenFields(fromEnvironment, effective) {
+		overridden[name] = true
+	}
+	v, t := reflect.ValueOf(effective), reflect.TypeOf(effective)
+	out := make([]SettingSource, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		name := t.Field(i).Name
+		source := "environment"
+		if overridden[name] {
+			source = "console"
+		}
+		out = append(out, SettingSource{Name: name, Source: source, Value: redactedValue(name, v.Field(i).Interface())})
+	}
+	return out
+}
+
+func redactedValue(name string, value any) string {
+	text := fmt.Sprint(value)
+	switch value := value.(type) {
+	case string:
+		text = value
+	case []string:
+		text = strings.Join(value, ",")
+	}
+	for _, marker := range []string{"Secret", "Token", "Password", "AccessKey"} {
+		if strings.Contains(name, marker) {
+			if text == "" || text == "[]" {
+				return "(unset)"
+			}
+			return "(set, hidden)"
+		}
+	}
+	if name == "DatabaseURL" || name == "HFProxyURL" || name == "OTLPEndpoint" {
+		if parsed, err := url.Parse(text); err == nil && parsed.User != nil {
+			parsed.User = url.User("***")
+			return parsed.String()
+		}
+	}
+	if text == "" {
+		return "(unset)"
+	}
+	return text
+}

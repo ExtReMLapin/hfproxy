@@ -1,3 +1,4 @@
+# Development only: the defaults below are public. Use docker-compose.example.yml for production.
 name: hfproxy-dev
 
 services:

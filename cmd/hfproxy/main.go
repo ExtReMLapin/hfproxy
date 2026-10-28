@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/aws/smithy-go"
@@ -53,14 +54,7 @@ func run(args []string) error {
 		fmt.Printf("hfproxy %s (commit %s)\n", version, commit)
 		return nil
 	case "config":
-		if len(args) < 2 || args[1] != "validate" {
-			return fmt.Errorf("usage: hfproxy config validate")
-		}
-		if _, err := config.Load(); err != nil {
-			return err
-		}
-		fmt.Println("Configuration is valid.")
-		return nil
+		return configCommand(args[1:])
 	case "healthcheck":
 		return healthcheck(args[1:])
 	case "serve":
@@ -95,6 +89,7 @@ Usage:
   hfproxy cache pin|unpin --repo ID [--type models] [--commit SHA | --ref BRANCH]
   hfproxy cache pins
   hfproxy config validate
+  hfproxy config show --source
   hfproxy healthcheck
   hfproxy version
 
@@ -113,6 +108,47 @@ func logger(cfg config.Config) *slog.Logger {
 		level = slog.LevelError
 	}
 	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
+}
+
+func configCommand(args []string) error {
+	if len(args) == 1 && args[0] == "validate" {
+		if _, err := config.Load(); err != nil {
+			return err
+		}
+		fmt.Println("Configuration is valid.")
+		return nil
+	}
+	if len(args) == 2 && args[0] == "show" && args[1] == "--source" {
+		return showConfig(os.Stdout)
+	}
+	return fmt.Errorf("usage: hfproxy config validate | hfproxy config show --source")
+}
+
+// showConfig prints every setting with where its effective value comes from,
+// reading the settings saved in the console from the database. Secrets are
+// never printed.
+func showConfig(out io.Writer) error {
+	environment, err := config.Load()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store, err := db.Open(ctx, environment.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer store.SQL.Close()
+	effective, err := config.LoadPersisted(ctx, store.SQL, environment)
+	if err != nil {
+		return err
+	}
+	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "SETTING\tSOURCE\tVALUE")
+	for _, entry := range config.DescribeSources(environment, effective) {
+		fmt.Fprintf(w, "%s\t%s\t%s\n", entry.Name, entry.Source, entry.Value)
+	}
+	return w.Flush()
 }
 
 func serve(args []string) error {
