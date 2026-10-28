@@ -85,6 +85,24 @@ The repository contains protocol-level tests for the request sequence used by
 Python client versions and representative public, private, and gated models is
 still recommended before declaring complete client-version compatibility.
 
+## Concurrency and failure guarantees
+
+- Concurrent cache misses are coalesced per repository, commit, and path; the
+  integration test verifies one upstream GET and one durable artifact/blob.
+- PostgreSQL advisory locks serialize resumable state for the same artifact.
+- Only completed resumable blocks are persisted; interrupted blocks are
+  discarded and retried.
+- Cache publication uses a context independent from a client disconnect once
+  the upstream body has been fully received.
+- Blob GC rechecks database references while holding a row lock before deleting
+  an object from S3.
+- Integration scenarios cover concurrent GC/redownload, interrupted upstream
+  transfers, missing object refill, and concurrent server instances.
+
+The failure tests require the PostgreSQL/S3 integration environment described
+above. CI without that environment still runs the deterministic unit and
+protocol tests, but does not exercise real storage outage behavior.
+
 Remaining audit limitations:
 
 - no automated matrix against multiple real `huggingface_hub` client versions;
