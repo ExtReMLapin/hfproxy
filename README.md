@@ -153,19 +153,19 @@ For production:
 
 The release workflow builds and publishes a multi-platform image (`linux/amd64` and `linux/arm64`) to GitHub Container Registry whenever a semantic version tag is pushed. The image includes the administration UI, runs as a non-root user, and embeds its version and source commit.
 
-The current release is `v0.0.1`:
+The current release is `v0.0.3`:
 
-    docker pull ghcr.io/hfproxy/hfproxy:v0.0.1
-    docker run --rm ghcr.io/hfproxy/hfproxy:v0.0.1 version
+    docker pull ghcr.io/hfproxy/hfproxy:v0.0.3
+    docker run --rm ghcr.io/hfproxy/hfproxy:v0.0.3 version
 
-Use a pinned version in production. The `latest` tag follows the newest stable version. To use the image in a Compose deployment, set the service image to `ghcr.io/hfproxy/hfproxy:v0.0.1` instead of building it locally.
+Use a pinned version in production. The `latest` tag follows the newest stable version. To use the image in a Compose deployment, set the service image to `ghcr.io/hfproxy/hfproxy:v0.0.3` instead of building it locally.
 
 The first GHCR package is private by default. Sign in with `docker login ghcr.io` to pull a private image, or change the package visibility to Public in the package settings to allow anonymous pulls.
 
-To publish a later release, push another version tag, for example `v0.0.2`:
+To publish a later release, push another version tag, for example `v0.0.3`:
 
-    git tag v0.0.2
-    git push origin v0.0.2
+    git tag v0.0.3
+    git push origin v0.0.3
 
 Known-size Hub downloads are checkpointed in 64 MiB blocks in the S3-compatible bucket. Retrying a failed preload resumes from the last complete block when the upstream honors HTTP Range requests; otherwise hfproxy safely falls back to a full transfer. Abandoned checkpoints are removed after seven days. The current block is downloaded again if a transfer fails before that block is stored.
 

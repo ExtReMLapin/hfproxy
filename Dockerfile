@@ -9,7 +9,7 @@ COPY ui/ ./
 RUN npm run build
 
 FROM golang:${GO_VERSION}-alpine AS build
-ARG BUILD_VERSION=0.0.2
+ARG BUILD_VERSION=0.0.3
 ARG BUILD_COMMIT=unknown
 
 RUN apk add --no-cache ca-certificates git

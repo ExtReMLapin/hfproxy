@@ -80,7 +80,7 @@ type Principal struct {
 }
 
 // Version is embedded in upstream User-Agent headers and set by release builds.
-var Version = "0.0.2"
+var Version = "0.0.3"
 
 func New(ctx context.Context, cfg config.Config, store *db.Store, objectStore *storage.S3, logger *slog.Logger) (*Server, error) {
 	state, err := makeRuntimeState(ctx, cfg, objectStore, nil)
