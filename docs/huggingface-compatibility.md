@@ -23,6 +23,7 @@ PostgreSQL and S3 are marked as integration tests and enabled with
 | Private or gated repository access | Same metadata and resolve routes | models | GET, HEAD | Supported | Local repository policy plus configured upstream read token |
 | List the repository tree | `/api/{type}/{repo_id}/tree/{revision}[/{path}]` | models, datasets, spaces | GET, HEAD | Supported | Allowlisted pagination, recursion, expansion, and metadata parameters |
 | List commits | `/api/{type}/{repo_id}/commits/{revision}` | models, datasets, spaces | GET, HEAD | Supported | Non-allowlisted parameters are removed |
+| Spaces repository file | `/spaces/{repo_id}/resolve/{revision}/{path}` | spaces | GET, HEAD | Supported | Files and metadata are proxied; the Space runtime is never executed |
 | Client identity | `/api/whoami-v2` | n/a | GET, HEAD | Supported | Local hfproxy identity; authentication required |
 | Hub health | `/api/health` | n/a | GET, HEAD | Supported | Local `{"status":"ok"}` response |
 
@@ -37,6 +38,11 @@ PostgreSQL and S3 are marked as integration tests and enabled with
 
 The untyped URL form is accepted only for model downloads, matching the form
 used by `huggingface_hub` for models: `/{repo_id}/resolve/...`.
+
+For Spaces, `huggingface_hub` uses `repo_type="space"`, which maps to the
+plural Hub URL namespace `/spaces/{repo_id}/...`. hfproxy supports the read
+path and metadata endpoints only; it does not start, proxy, or execute a Space
+runtime.
 
 ## Security and consistency guarantees
 
