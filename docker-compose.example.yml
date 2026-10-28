@@ -1,5 +1,7 @@
 # Exemple d’exploitation derrière un reverse proxy TLS.
 # Les valeurs marquées comme obligatoires sont injectées depuis l’orchestrateur ou un secret manager.
+# Le secret database_url doit utiliser sslmode=require (ou verify-full) :
+#   postgres://hfproxy:MOT_DE_PASSE@db.example.internal:5432/hfproxy?sslmode=verify-full
 services:
   hfproxy:
     image: ghcr.io/your-org/hfproxy:v0.0.3
@@ -48,6 +50,31 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  # TLS termination. Copy Caddyfile.example to Caddyfile and set the host name.
+  # HFPROXY_TRUSTED_PROXIES must list this container's network (for example
+  # the Compose network CIDR) so that client addresses are read from
+  # X-Forwarded-For.
+  caddy:
+    image: caddy:2.10-alpine
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - hfproxy
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
 
 secrets:
   database_url:
