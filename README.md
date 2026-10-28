@@ -125,6 +125,10 @@ OIDC and LDAP provide sign-in to the same local role model (`admin`, `operator`,
 
 ## Hub API and compatibility
 
+The complete compatibility audit, including the route/type/operation matrix,
+security guarantees, test evidence, and remaining limits is maintained in
+[`docs/huggingface-compatibility.md`](docs/huggingface-compatibility.md).
+
 Supported Hub read routes:
 
 - GET and HEAD `/{models|datasets|spaces}/{repo_id}/resolve/{revision}/{filepath}`

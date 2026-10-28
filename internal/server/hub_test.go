@@ -60,6 +60,57 @@ func TestParseResolvePath(t *testing.T) {
 	}
 }
 
+func TestResolveRouteMatrixSupportsAllRepositoryTypes(t *testing.T) {
+	for _, repoType := range []string{"models", "datasets", "spaces"} {
+		t.Run(repoType, func(t *testing.T) {
+			path := "/" + repoType + "/org/repo/resolve/main/path/to/file.bin"
+			got, err := parseResolvePath(path)
+			if err != nil {
+				t.Fatalf("parseResolvePath(%q) error = %v", path, err)
+			}
+			want := resolvePath{RepoType: repoType, RepoID: "org/repo", Revision: "main", FilePath: "path/to/file.bin"}
+			if got != want {
+				t.Fatalf("parseResolvePath(%q) = %#v, want %#v", path, got, want)
+			}
+			wantUpstream := "/org/repo/resolve/main/path/to/file.bin"
+			if repoType != "models" {
+				wantUpstream = "/" + repoType + wantUpstream
+			}
+			if upstream := upstreamResolvePath(got); upstream != wantUpstream {
+				t.Fatalf("upstreamResolvePath(%#v) = %q", got, upstream)
+			}
+		})
+	}
+
+	untagged, err := parseResolvePath("/org/repo/resolve/main/config.json")
+	if err != nil {
+		t.Fatalf("untyped model route error = %v", err)
+	}
+	if untagged.RepoType != "models" {
+		t.Fatalf("untyped model route type = %q, want models", untagged.RepoType)
+	}
+}
+
+func TestHubMetadataRouteMatrixSupportsAllOperations(t *testing.T) {
+	for _, operation := range []string{"", "revision/main", "tree/main", "tree/main/config", "commits/main"} {
+		for _, repoType := range []string{"models", "datasets", "spaces"} {
+			t.Run(repoType+"/"+operation, func(t *testing.T) {
+				path := "/api/" + repoType + "/org/repo"
+				if operation != "" {
+					path += "/" + operation
+				}
+				got, upstream, _, err := parseHubAPIPath(path, nil)
+				if err != nil {
+					t.Fatalf("parseHubAPIPath(%q) error = %v", path, err)
+				}
+				if got.RepoType != repoType || got.RepoID != "org/repo" || upstream != path {
+					t.Fatalf("parseHubAPIPath(%q) = %#v, %q", path, got, upstream)
+				}
+			})
+		}
+	}
+}
+
 func TestIssue104CacheHitHeadersPreserveLFSIdentity(t *testing.T) {
 	digest := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	const size = int64(1234)
