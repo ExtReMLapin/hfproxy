@@ -139,9 +139,10 @@ func parseByteRange(value string, size int64) (int64, int64, bool, bool) {
 		return 0, 0, false, true
 	}
 	if strings.Contains(value, ",") {
-		// Multipart ranges are intentionally rejected because the proxy does
-		// not implement multipart/byteranges responses.
-		return 0, 0, false, false
+		// The proxy does not build multipart/byteranges responses. HTTP lets a
+		// server ignore a Range header it does not want to honour, so a request
+		// for several ranges gets the whole file with a 200.
+		return 0, 0, false, true
 	}
 	parts := strings.SplitN(strings.TrimPrefix(value, "bytes="), "-", 2)
 	if len(parts) != 2 || size <= 0 {

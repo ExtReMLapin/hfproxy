@@ -1,0 +1,129 @@
+# Reference chart for hfproxy. Create the Secret named in `secrets.existingSecret`
+# first (see README.md in this directory); the chart never stores credentials.
+
+image:
+  repository: ghcr.io/hfproxy/hfproxy
+  # Defaults to the chart's appVersion. Prefer pinning a digest in production.
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# More than one replica is supported (see docs/operations.md, "Running several
+# replicas"); fills are exclusive across replicas through PostgreSQL.
+replicaCount: 1
+
+# HFPROXY_* settings that are not secret, without the prefix.
+config:
+  PUBLIC_URL: ""            # required: the public https:// address
+  HF_BASE_URL: https://huggingface.co
+  S3_ENDPOINT: ""           # required
+  S3_REGION: ""             # required
+  S3_BUCKET: ""             # required
+  S3_PREFIX: hfproxy
+  S3_FORCE_PATH_STYLE: "false"
+  S3_SERVER_SIDE_ENCRYPTION: "true"
+  AUTH_MODE: local
+  ANONYMOUS_PUBLIC_READ: "false"
+  # Pods behind the ingress controller: list its network (CIDR) so client
+  # addresses are read from X-Forwarded-For.
+  TRUSTED_PROXIES: ""
+  CACHE_MAX_TOTAL_SIZE: "0"
+  CACHE_FILL_CONCURRENCY: "4"
+  STAGING_MIN_FREE_BYTES: "1073741824"
+  # Console settings pinned to these values (see README, "Settings precedence").
+  LOCKED_SETTINGS: ""
+# Any other HFPROXY_* variable (name without the prefix).
+extraConfig: {}
+
+secrets:
+  # Secret holding one key per file below. Required.
+  existingSecret: ""
+  # environment variable (HFPROXY_<NAME>_FILE) -> key inside the Secret.
+  files:
+    DATABASE_URL: database_url
+    SESSION_SECRET: session_secret
+    S3_ACCESS_KEY: s3_access_key
+    S3_SECRET_KEY: s3_secret_key
+  # Add optional files, for example:
+  #   HF_TOKEN: hf_token
+  #   OIDC_CLIENT_SECRET: oidc_client_secret
+  #   SESSION_SECRET_PREVIOUS: session_secret_previous
+
+staging:
+  # emptyDir is lost when the pod restarts, which only costs the resumable
+  # download state in progress; use a PVC to keep it.
+  type: emptyDir
+  sizeLimit: 20Gi
+  # type: pvc
+  storageClassName: ""
+  size: 20Gi
+
+migrations:
+  # Runs `hfproxy migrate up` before each install and upgrade (Helm hook).
+  job:
+    enabled: true
+  # Alternatively let the first pod migrate (AUTO_MIGRATE=true); leave false
+  # when the Job is enabled.
+  auto: false
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  tlsSecretName: ""
+  annotations: {}
+  # Large model files stream through the proxy: for ingress-nginx, for example:
+  #   nginx.ingress.kubernetes.io/proxy-body-size: "0"
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  #   nginx.ingress.kubernetes.io/proxy-buffering: "off"
+
+metrics:
+  enabled: true
+  port: 9090
+  # Needs the Prometheus Operator CRDs.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+  prometheusRule:
+    enabled: false
+    labels: {}
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1   # applied only when replicaCount > 1
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+terminationGracePeriodSeconds: 60
+
+serviceAccount:
+  create: true
+  annotations: {}

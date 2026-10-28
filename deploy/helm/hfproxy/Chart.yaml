@@ -1,0 +1,6 @@
+apiVersion: v2
+name: hfproxy
+description: Caching proxy for the Hugging Face Hub, backed by PostgreSQL and S3-compatible storage
+type: application
+version: 0.1.0
+appVersion: "0.0.4"

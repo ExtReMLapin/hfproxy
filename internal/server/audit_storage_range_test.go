@@ -61,11 +61,16 @@ func TestRangeCacheHitReturns206416ContentRangeAndETag(t *testing.T) {
 		t.Fatalf("unsatisfiable ETag = %q, want %q", got, wantETag)
 	}
 
+	// Several ranges are ignored (the proxy builds no multipart/byteranges
+	// responses), which HTTP allows: the client gets the whole file.
 	multipart := request("bytes=0-1,4-5")
-	if multipart.Code != http.StatusRequestedRangeNotSatisfiable {
-		t.Fatalf("multipart status = %d, want 416", multipart.Code)
+	if multipart.Code != http.StatusOK {
+		t.Fatalf("multipart status = %d, want 200", multipart.Code)
 	}
-	if got := multipart.Header().Get("Content-Range"); got != "bytes */10" {
-		t.Fatalf("multipart Content-Range = %q", got)
+	if got := multipart.Header().Get("Content-Range"); got != "" {
+		t.Fatalf("multipart Content-Range = %q, want none", got)
+	}
+	if multipart.Body.Len() != 10 {
+		t.Fatalf("multipart body = %d bytes, want the whole 10-byte file", multipart.Body.Len())
 	}
 }

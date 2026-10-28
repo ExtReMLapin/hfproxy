@@ -86,14 +86,36 @@ func TestLDAPGroupSyncNeedsABaseAndAFilterWithDN(t *testing.T) {
 	}
 }
 
-// validateLDAPOnly runs Validate on a configuration that is otherwise valid.
-func validateLDAPOnly(ldap Config) error {
-	base := Config{
+// validBaseConfig is a configuration that passes Validate.
+func validBaseConfig() Config {
+	return Config{
 		LogLevel: "info", HFBaseURL: "https://huggingface.co", HFTimeout: time.Second, CacheMaxFileSize: 1, CacheRefTTL: time.Second,
 		AuthMode: "local", SessionSecret: "0123456789abcdef0123456789abcdef", SessionIdleTTL: time.Hour, SessionAbsoluteTTL: time.Hour, MetricsPath: "/metrics",
 		TracingServiceName: "hfproxy", TracingSamplingRatio: 0.1, DatabaseURL: "postgres://u:p@db/app", S3Bucket: "b", S3Region: "r", ListenAddr: "127.0.0.1:8080",
 	}
+}
+
+// validateLDAPOnly runs Validate on a configuration that is otherwise valid.
+func validateLDAPOnly(ldap Config) error {
+	base := validBaseConfig()
 	base.LDAPURL, base.LDAPStartTLS, base.LDAPBaseDN, base.LDAPUserFilter = ldap.LDAPURL, ldap.LDAPStartTLS, ldap.LDAPBaseDN, ldap.LDAPUserFilter
 	base.LDAPGroupSync, base.LDAPGroupBaseDN, base.LDAPGroupFilter = ldap.LDAPGroupSync, ldap.LDAPGroupBaseDN, ldap.LDAPGroupFilter
 	return base.Validate()
+}
+
+func TestPoolSizeStaysAboveTheFillConcurrency(t *testing.T) {
+	if got := (Config{CacheFillConcurrency: 4}).PoolSize(); got != 24 {
+		t.Fatalf("default pool for 4 fills = %d, want 24", got)
+	}
+	if got := (Config{CacheFillConcurrency: 64}).PoolSize(); got < 64+8 {
+		t.Fatalf("pool for 64 fills = %d: every fill holds a connection", got)
+	}
+	if got := (Config{DatabaseMaxConns: 50}).PoolSize(); got != 50 {
+		t.Fatalf("explicit pool = %d, want 50", got)
+	}
+	base := validBaseConfig()
+	base.DatabaseMaxConns, base.CacheFillConcurrency = 10, 8
+	if err := base.Validate(); err == nil {
+		t.Fatal("a pool smaller than the fill concurrency plus headroom must be rejected")
+	}
 }

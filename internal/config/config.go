@@ -109,6 +109,11 @@ type Config struct {
 	// written in batches (HFPROXY_DOWNLOAD_LOG_QUEUE, 0 writes each one in the
 	// request).
 	DownloadLogQueue int
+	// DatabaseMaxConns caps the PostgreSQL pool (HFPROXY_DATABASE_MAX_CONNS, 0 =
+	// computed from the fill concurrency). Every running cache fill holds one
+	// connection for its whole download (the per-file lock), so the pool must
+	// stay larger than the fill concurrency or fills would starve each other.
+	DatabaseMaxConns int
 }
 
 func Load() (Config, error) {
@@ -194,6 +199,7 @@ func Load() (Config, error) {
 	c.APICacheMaxStale = duration("API_CACHE_MAX_STALE", 24*time.Hour)
 	c.AuthCacheTTL = duration("AUTH_CACHE_TTL", 5*time.Second)
 	c.DownloadLogQueue = number("DOWNLOAD_LOG_QUEUE", 1024)
+	c.DatabaseMaxConns = number("DATABASE_MAX_CONNS", 0)
 	if err := c.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -284,6 +290,9 @@ func (c Config) Validate() error {
 	}
 	if c.AuthCacheTTL < 0 || c.AuthCacheTTL > time.Minute || c.DownloadLogQueue < 0 {
 		return fmt.Errorf("HFPROXY_AUTH_CACHE_TTL must be between 0 and 1m and HFPROXY_DOWNLOAD_LOG_QUEUE must not be negative")
+	}
+	if c.DatabaseMaxConns < 0 || (c.DatabaseMaxConns > 0 && c.DatabaseMaxConns < c.CacheFillConcurrency+8) {
+		return fmt.Errorf("HFPROXY_DATABASE_MAX_CONNS must be at least HFPROXY_CACHE_FILL_CONCURRENCY plus 8: each running fill holds a connection")
 	}
 	if c.UpstreamBreakerThreshold < 0 || c.UpstreamBreakerCooldown < 0 || c.APICacheMaxBytes < 0 || c.APICacheMaxStale < 0 {
 		return fmt.Errorf("the upstream breaker and API cache settings must not be negative")
@@ -571,4 +580,20 @@ func IsLoopbackHost(host string) bool {
 		return ip.IsLoopback()
 	}
 	return false
+}
+
+// PoolSize is the number of PostgreSQL connections to allow: the configured
+// value, or enough for every fill slot plus the requests around them.
+func (c Config) PoolSize() int {
+	if c.DatabaseMaxConns > 0 {
+		return c.DatabaseMaxConns
+	}
+	fills := c.CacheFillConcurrency
+	if fills <= 0 {
+		fills = 4
+	}
+	if size := 2*fills + 16; size > 20 {
+		return size
+	}
+	return 20
 }
