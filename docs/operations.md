@@ -25,7 +25,7 @@ One rollback limit: from 0.0.4 on, access tokens move to a derived key the first
 4. An access token moves to the new secret the first time it is used. Sessions end on their own. Revoke tokens nobody uses any more with `hfproxy admin token revoke`, or wait until `rotate-secret` reports 0.
 5. When both counts are 0, remove `HFPROXY_SESSION_SECRET_PREVIOUS` and roll out again. From then on the old secret is useless.
 
-If you forget step 2 and only replace `HFPROXY_SESSION_SECRET`, hfproxy refuses to start because the saved settings cannot be decrypted; put the old value in `HFPROXY_SESSION_SECRET_PREVIOUS` to recover. Tokens and sessions hashed with the old secret are refused until you do.
+If you forget step 2 and only replace `HFPROXY_SESSION_SECRET`, every token and session created under the old secret is refused (clients get 401). If settings were saved from the console, hfproxy also refuses to start, because they cannot be decrypted. Either way, put the old value in `HFPROXY_SESSION_SECRET_PREVIOUS` to recover; nothing is lost.
 
 Tokens created before this key separation existed (hashed straight from the secret) are still recognised, and move to the derived key on first use as well.
 
