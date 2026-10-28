@@ -701,9 +701,13 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 		if !ring.IsCurrent(token, storedHash) {
 			// Hashed under an older scheme or secret: move it to the current key
 			// now that the plaintext is in hand.
-			_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET token_hash=$3, key_id=$4 WHERE id=$1 AND token_hash=$2`, p.TokenID, storedHash, ring.Hash(token), ring.KeyID())
+			if _, err := s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET token_hash=$3, key_id=$4 WHERE id=$1 AND token_hash=$2`, p.TokenID, storedHash, ring.Hash(token), ring.KeyID()); err != nil {
+				s.logger.Warn("token hash could not be moved to the current key", "request_id", requestID(r.Context()))
+			}
 		}
-		_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET last_used_at=now() WHERE id=$1 AND (last_used_at IS NULL OR last_used_at < now()-interval '1 minute')`, p.TokenID)
+		if _, err := s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET last_used_at=now() WHERE id=$1 AND (last_used_at IS NULL OR last_used_at < now()-interval '1 minute')`, p.TokenID); err != nil {
+			s.logger.Warn("token last use could not be recorded", "request_id", requestID(r.Context()))
+		}
 		return &p, nil
 	}
 	cookie, err := r.Cookie("hfproxy_session")
@@ -724,8 +728,10 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 		return nil, errUnauthenticated
 	}
 	p.Authenticated = true
-	_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE sessions SET last_seen_at=now(), expires_at=LEAST(created_at + $2::interval, now() + $1::interval) WHERE token_hash=$3 AND last_seen_at < now()-interval '1 minute'`,
-		s.currentConfig().SessionIdleTTL.String(), s.currentConfig().SessionAbsoluteTTL.String(), digest)
+	if _, err := s.db.SQL.ExecContext(r.Context(), `UPDATE sessions SET last_seen_at=now(), expires_at=LEAST(created_at + $2::interval, now() + $1::interval) WHERE token_hash=$3 AND last_seen_at < now()-interval '1 minute'`,
+		s.currentConfig().SessionIdleTTL.String(), s.currentConfig().SessionAbsoluteTTL.String(), digest); err != nil {
+		s.logger.Warn("session activity could not be recorded", "request_id", requestID(r.Context()))
+	}
 	return &p, nil
 }
 

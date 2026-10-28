@@ -188,8 +188,17 @@ func (s *Server) apiUserPatch(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 	if input.Status == "disabled" {
-		_, _ = tx.ExecContext(r.Context(), `DELETE FROM sessions WHERE user_id=$1`, id)
-		_, _ = tx.ExecContext(r.Context(), `UPDATE access_tokens SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, id)
+		// Disabling must cut off existing access; if that cannot be done the whole
+		// change is rolled back rather than leaving a "disabled" user with live
+		// sessions and tokens.
+		if _, err := tx.ExecContext(r.Context(), `DELETE FROM sessions WHERE user_id=$1`, id); err != nil {
+			writeProblem(w, r, 500, "Database error", "Unable to end the user's sessions.")
+			return
+		}
+		if _, err := tx.ExecContext(r.Context(), `UPDATE access_tokens SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, id); err != nil {
+			writeProblem(w, r, 500, "Database error", "Unable to revoke the user's tokens.")
+			return
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		writeProblem(w, r, 500, "Database error", "Unable to update user.")
