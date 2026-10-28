@@ -124,6 +124,11 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
     return this.latestPreloadFor(repo)?.status === 'incomplete';
   }
 
+  protected preloadFailed(repo: Repository): PreloadJob | undefined {
+    const job = this.latestPreloadFor(repo);
+    return job?.status === 'failed' ? job : undefined;
+  }
+
   private latestPreloadFor(repo: Repository): PreloadJob | undefined {
     return this.preloadJobs().find(
       (job) => job.repo_type === repo.repo_type && job.repo_id === repo.repo_id,
