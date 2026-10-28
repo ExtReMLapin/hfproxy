@@ -3,12 +3,17 @@ package server
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/nicolas/hfproxy/internal/config"
 )
 
 func TestIssue105CachePublishContextOutlivesClientContext(t *testing.T) {
@@ -110,6 +115,66 @@ func TestHubMetadataRouteMatrixSupportsAllOperations(t *testing.T) {
 		}
 	}
 }
+
+func TestFetchHubPrivateTokenIsNotSentToCDN(t *testing.T) {
+	var requests []string
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests = append(requests, r.URL.Host+" Authorization="+r.Header.Get("Authorization"))
+		switch r.URL.Host {
+		case "huggingface.co":
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header: http.Header{
+					"Location":      []string{"https://cdn-lfs.hf.co/model/config.json"},
+					"X-Linked-Etag": []string{`"private-lfs-digest"`},
+					"X-Linked-Size": []string{"42"},
+				},
+				Body: io.NopCloser(strings.NewReader("")),
+			}, nil
+		case "cdn-lfs.hf.co":
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("ok")),
+			}, nil
+		default:
+			return nil, fmt.Errorf("unexpected upstream host %q", r.URL.Host)
+		}
+	})}
+	s := &Server{}
+	s.runtime.Store(&runtimeState{
+		config: config.Config{
+			HFBaseURL:      "https://huggingface.co",
+			HFToken:        "private-read-token",
+			HFAllowedHosts: []string{"cdn-lfs.hf.co"},
+			HFTimeout:      time.Second,
+		},
+		httpClient: client,
+	})
+
+	response, first, err := s.fetchHub(context.Background(), http.MethodHead, "/models/org/private/resolve/main/config.json", nil, nil)
+	if err != nil {
+		t.Fatalf("fetchHub() error = %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("final status = %d, want 200", response.StatusCode)
+	}
+	if first.Get("X-Linked-Etag") != `"private-lfs-digest"` {
+		t.Fatalf("first response headers lost LFS identity: %v", first)
+	}
+	want := []string{
+		"huggingface.co Authorization=Bearer private-read-token",
+		"cdn-lfs.hf.co Authorization=",
+	}
+	if strings.Join(requests, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("upstream requests = %v, want %v", requests, want)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestIssue104CacheHitHeadersPreserveLFSIdentity(t *testing.T) {
 	digest := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

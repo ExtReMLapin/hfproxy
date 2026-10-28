@@ -12,10 +12,13 @@ PostgreSQL and S3 are marked as integration tests and enabled with
 | --- | --- | --- | --- | --- | --- |
 | Download a file | `/{repo_id}/resolve/{revision}/{path}` | models | GET, HEAD | Supported | PostgreSQL cache + S3 blob; branch/tag/SHA revisions |
 | Download a typed repository file | `/{type}/{repo_id}/resolve/{revision}/{path}` | models, datasets, spaces | GET, HEAD | Supported | Nested paths; `type` is limited to these three values |
+| `snapshot_download` protocol | Repository metadata/tree followed by resolve routes | models | GET, HEAD | Supported | Supports branch, tag, and commit revisions; filtering is performed client-side |
+| Transformers `from_pretrained` protocol | Repository metadata followed by resolve routes | models | GET, HEAD | Supported | Config, tokenizer, processor, and weight files use the same read path |
 | Resume a download | Same route with `Range` | All types above | GET | Supported with conditions | Single ranges; multipart ranges rejected; persisted resume for known sizes |
 | Conditional requests | Same route with `If-None-Match`, `If-Range` | All types above | GET, HEAD | Supported | LFS ETag preserved; `304` and `206` as applicable |
 | Repository metadata | `/api/{type}/{repo_id}` | models, datasets, spaces | GET, HEAD | Supported | Hub response relayed; limited to 2 MiB |
 | Resolve a revision | `/api/{type}/{repo_id}/revision/{revision}` | models, datasets, spaces | GET, HEAD | Supported | Converts mutable references into immutable commits |
+| Private or gated repository access | Same metadata and resolve routes | models | GET, HEAD | Supported | Local repository policy plus configured upstream read token |
 | List the repository tree | `/api/{type}/{repo_id}/tree/{revision}[/{path}]` | models, datasets, spaces | GET, HEAD | Supported | Allowlisted pagination, recursion, expansion, and metadata parameters |
 | List commits | `/api/{type}/{repo_id}/commits/{revision}` | models, datasets, spaces | GET, HEAD | Supported | Non-allowlisted parameters are removed |
 | Client identity | `/api/whoami-v2` | n/a | GET, HEAD | Supported | Local hfproxy identity; authentication required |
@@ -59,6 +62,11 @@ test and code evidence before support is announced.
 Existing coverage verifies route parsing, nested paths, encoded revisions,
 authentication, ETags, ranges, LFS validation, resumable downloads,
 singleflight, blob GC, and several concurrency races.
+
+The repository contains protocol-level tests for the request sequence used by
+`snapshot_download` and `from_pretrained`. A live matrix against installed
+Python client versions and representative public, private, and gated models is
+still recommended before declaring complete client-version compatibility.
 
 Remaining audit limitations:
 
