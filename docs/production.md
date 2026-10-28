@@ -28,6 +28,12 @@ When `HFPROXY_PUBLIC_URL` is `https://…`, session cookies are `Secure` and res
 
 Back up PostgreSQL and the S3 bucket together and restore them from the same point in time: the catalog references objects by hash. Also back up `SESSION_SECRET`.
 
+## Hub failures
+
+- **`HFPROXY_CACHE_REF_TTL` (default 1 minute).** This is how long a branch or tag is trusted before hfproxy asks the Hub again. It is deliberately short so a moving branch such as `main` is picked up quickly. A longer value means fewer Hub requests and slower updates; it no longer decides whether files keep working during an outage, because a ref that cannot be confirmed falls back to the last known commit. Raise it only if you are close to the Hub's rate limits.
+- **Circuit breaker.** After five consecutive failures of a Hub host, requests to it fail immediately for 30 seconds (and cached files are served), then one probe decides whether to resume. Watch `hfproxy_upstream_breaker_opened_total`.
+- **Metadata cache.** Repository, revision and tree responses are cached in memory and served stale for up to 24 hours when the Hub is failing. Each process has its own cache.
+
 ## More
 
 - [operations.md](operations.md): upgrades, rollbacks, incidents and service levels.

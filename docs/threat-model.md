@@ -29,7 +29,7 @@ hfproxy sits between internal clients and Hugging Face. It authenticates clients
 | Stolen read token | Tokens are stored as keyed hashes, expire, can be revoked; a `read` token cannot use the administration API | Anyone holding it can read what its owner can |
 | Credential guessing | Argon2id, constant-time comparisons, login limits shared by all instances through PostgreSQL: per address, per address and account, and per account on failures only | Someone with many addresses can still make 50 failed guesses a minute against one account, which also briefly blocks that account |
 | Disk or storage exhaustion | Per-file size cap, concurrent fill limit, free-space check, optional total quota with LRU eviction | Size the staging volume for the configured concurrency |
-| Upstream outage or rate limiting | Retries with backoff, and cached files are served when a known ref cannot be confirmed (`X-Cache: STALE`) | Uncached files fail until the Hub recovers |
+| Upstream outage or rate limiting | Retries with backoff, a per-host circuit breaker, cached files served when a known ref cannot be confirmed, and cached repository metadata served stale for up to a day (`X-Cache: STALE`) | Uncached files and metadata fail until the Hub recovers; a repository's metadata can lag the Hub by up to the stale limit during an outage |
 | Compromise or loss of the session secret | Separate derived keys for tokens, sessions and settings; rotation with `HFPROXY_SESSION_SECRET_PREVIOUS` and `hfproxy admin rotate-secret` | Rotate promptly after a leak and revoke old tokens; losing every copy of the secret makes saved settings unreadable |
 
 ## Out of scope
