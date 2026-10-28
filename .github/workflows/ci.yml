@@ -10,6 +10,21 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      HFPROXY_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -26,7 +41,12 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test
-        run: go test ./...
+        run: |
+          go test -race -count=1 -v ./... | tee test.log
+          if grep -q 'HFPROXY_TEST_DATABASE_URL.*not set' test.log; then
+            echo "PostgreSQL integration tests were skipped; HFPROXY_TEST_DATABASE_URL must be set."
+            exit 1
+          fi
       - name: Build
         run: go build -trimpath ./cmd/hfproxy
   ui:

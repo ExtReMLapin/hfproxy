@@ -96,7 +96,7 @@ func (s *S3) UploadFile(ctx context.Context, file *os.File, key, contentType str
 		return err
 	}
 	if size <= 64<<20 {
-		input := &s3.PutObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key), Body: &countingStorageReader{Reader: file, counter: &transferred}, ContentLength: aws.Int64(size), ContentType: aws.String(contentType)}
+		input := &s3.PutObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key), Body: newCountingStorageReader(io.NewSectionReader(file, 0, size), &transferred), ContentLength: aws.Int64(size), ContentType: aws.String(contentType)}
 		if s.serverSideEncryption {
 			input.ServerSideEncryption = "AES256"
 		}
@@ -129,7 +129,7 @@ func (s *S3) UploadFile(ctx context.Context, file *os.File, key, contentType str
 			length = remaining
 		}
 		partBody := io.NewSectionReader(file, offset, length)
-		part, partErr := s.client.UploadPart(ctx, &s3.UploadPartInput{Bucket: aws.String(s.bucket), Key: aws.String(key), UploadId: upload.UploadId, PartNumber: aws.Int32(partNumber), Body: &countingStorageReader{Reader: partBody, counter: &transferred}, ContentLength: aws.Int64(length)})
+		part, partErr := s.client.UploadPart(ctx, &s3.UploadPartInput{Bucket: aws.String(s.bucket), Key: aws.String(key), UploadId: upload.UploadId, PartNumber: aws.Int32(partNumber), Body: newCountingStorageReader(partBody, &transferred), ContentLength: aws.Int64(length)})
 		if partErr != nil {
 			s.observe("write", started, partErr, transferred.Load())
 			abort()
@@ -146,15 +146,32 @@ func (s *S3) UploadFile(ctx context.Context, file *os.File, key, contentType str
 	return nil
 }
 
+// countingStorageReader counts bytes read while staying seekable: the AWS SDK
+// refuses unseekable bodies on plain-HTTP endpoints (no trailing checksum),
+// and it seeks back after computing checksums or retrying. The counter follows
+// the read position so rewinds are not counted twice.
 type countingStorageReader struct {
-	io.Reader
+	io.ReadSeeker
 	counter *atomic.Int64
+	base    int64
+}
+
+func newCountingStorageReader(reader io.ReadSeeker, counter *atomic.Int64) *countingStorageReader {
+	return &countingStorageReader{ReadSeeker: reader, counter: counter, base: counter.Load()}
 }
 
 func (r *countingStorageReader) Read(p []byte) (int, error) {
-	n, err := r.Reader.Read(p)
+	n, err := r.ReadSeeker.Read(p)
 	r.counter.Add(int64(n))
 	return n, err
+}
+
+func (r *countingStorageReader) Seek(offset int64, whence int) (int64, error) {
+	position, err := r.ReadSeeker.Seek(offset, whence)
+	if err == nil {
+		r.counter.Store(r.base + position)
+	}
+	return position, err
 }
 
 func (s *S3) Get(ctx context.Context, key, byteRange string) (out *s3.GetObjectOutput, retErr error) {

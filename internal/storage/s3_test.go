@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -81,5 +82,38 @@ func TestUploadFileHonorsCanceledContext(t *testing.T) {
 	case <-reached:
 		t.Fatal("canceled upload reached S3")
 	default:
+	}
+}
+
+func TestUploadFileSucceedsOverPlainHTTP(t *testing.T) {
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("ETag", `"etag"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	objects, err := New(context.Background(), server.URL, "us-east-1", "bucket", "", "access", "secret", true, false)
+	if err != nil {
+		t.Fatalf("storage.New: %v", err)
+	}
+	observer := &testStorageObserver{}
+	objects.SetObserver(observer)
+	file, err := os.CreateTemp(t.TempDir(), "upload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("payload"); err != nil {
+		t.Fatal(err)
+	}
+	if err := objects.UploadFile(context.Background(), file, "object", "text/plain", int64(len("payload"))); err != nil {
+		t.Fatalf("UploadFile over plain HTTP: %v", err)
+	}
+	if !strings.Contains(string(gotBody), "payload") {
+		t.Fatalf("server received %q, want the payload", gotBody)
+	}
+	if observer.result != "success" || observer.bytes != int64(len("payload")) {
+		t.Fatalf("storage instrumentation = %#v, want success with %d bytes", observer, len("payload"))
 	}
 }
