@@ -91,6 +91,7 @@ Local username/password authentication is enabled by default. OIDC/SSO and LDAP 
     hfproxy admin identity link
     hfproxy admin rotate-secret
     hfproxy cache inspect|purge|verify
+    hfproxy cache pin|unpin|pins
     hfproxy config validate
     hfproxy version
 
@@ -109,7 +110,7 @@ Environment variables use the `HFPROXY_` prefix. Common settings for local Compo
 | OIDC | OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_REDIRECT_URL, OIDC_AUTO_PROVISION |
 | LDAP | LDAP_URL, LDAP_STARTTLS, LDAP_BIND_DN, LDAP_BIND_PASSWORD, LDAP_BASE_DN, LDAP_USER_FILTER, LDAP_AUTO_PROVISION |
 | Cache limits | CACHE_MAX_FILE_SIZE, CACHE_REF_TTL, CACHE_NEGATIVE_TTL, CACHE_GC_GRACE |
-| Capacity and retention | CACHE_MAX_TOTAL_SIZE, CACHE_FILL_CONCURRENCY, STAGING_DIR, RETENTION_DOWNLOADS, RETENTION_AUDIT |
+| Capacity and retention | CACHE_MAX_TOTAL_SIZE, CACHE_FILL_CONCURRENCY, STAGING_DIR, STAGING_MIN_FREE_BYTES, RETENTION_DOWNLOADS, RETENTION_AUDIT |
 | Metrics | METRICS_ENABLED, METRICS_PATH, METRICS_ADDR |
 | Hub resilience | UPSTREAM_BREAKER_THRESHOLD, UPSTREAM_BREAKER_COOLDOWN, API_CACHE_MAX_BYTES, API_CACHE_MAX_STALE |
 
@@ -121,9 +122,19 @@ Capacity and retention settings are read from the environment only:
 
 - `CACHE_MAX_TOTAL_SIZE` (bytes, `0` = unlimited): when live blobs exceed it, the least recently used artifacts are dropped until usage is under 90% of the quota. Their objects are deleted by the garbage collector after `CACHE_GC_GRACE`.
 - `CACHE_FILL_CONCURRENCY` (default `4`): how many files may be fetched from the Hub at once. Further requests wait up to 15 seconds, then receive `503` with `Retry-After`.
-- `STAGING_DIR` (default: the system temporary directory): where files are staged before upload. Size it for `CACHE_FILL_CONCURRENCY` times your largest file; a fill that does not fit in the free space is refused with `507`.
+- `STAGING_DIR` (default: the system temporary directory): where files are staged before upload. Size it for `CACHE_FILL_CONCURRENCY` times your largest file; a fill that does not fit in the free space is refused with `507`. `hfproxy_staging_free_bytes` and `hfproxy_staging_reserved_bytes` show the room left.
+- `STAGING_MIN_FREE_BYTES` (default `0`, off): when set, `/readyz` answers `503` with `"reason":"staging_space"` while the staging directory has less free space than this. Use it when several instances share traffic, so a full disk takes that instance out of rotation; with a single instance it would also stop cache hits, so leave it off and alert on the gauge instead.
 - `RETENTION_DOWNLOADS` (default `2160h`) and `RETENTION_AUDIT` (default `8760h`): Go durations after which download events and audit events are deleted; `0` keeps them. Expired sessions are always purged.
 - `METRICS_ADDR` (for example `127.0.0.1:9090`): serve metrics on a dedicated listener instead of the public port.
+
+When `CACHE_MAX_TOTAL_SIZE` is set, files you cannot afford to lose can be **pinned**. A pin covers either every revision of a repository or one commit, and eviction never touches what a pin covers:
+
+    hfproxy cache pin --repo org/model                    # every revision
+    hfproxy cache pin --repo org/model --commit <full SHA>
+    hfproxy cache unpin --repo org/model [--commit <full SHA>]
+    hfproxy cache pins                                    # what is pinned and how much it holds
+
+The same is available to administrators at `GET|POST|DELETE /api/v1/repos/{id}/pins` (the commit goes in the body for `POST` and in `?commit=` for `DELETE`; empty means the whole repository). Pinned files still count towards the quota, so pinning more than the quota allows leaves the cache above its limit; a warning is logged and `hfproxy_cache_pinned_bytes` shows how much is pinned. `cache purge` is an explicit action and does not honor pins.
 
 If the Hub is unreachable or answers 429/5xx and a branch or tag was resolved before, hfproxy serves the cached file for the last known commit with `X-Cache: STALE`. Transient Hub errors are retried twice with backoff.
 

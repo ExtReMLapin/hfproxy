@@ -63,12 +63,39 @@ func (s *Server) createStagingFile(pattern string) (*os.File, error) {
 // even though part of it is already on disk, which errs on the safe side.
 func (s *Server) reserveStaging(size int64) (func(), error) {
 	reserved := s.stagingReserved.Add(size)
-	release := func() { s.stagingReserved.Add(-size) }
+	release := func() {
+		s.observeStaging(s.stagingReserved.Add(-size))
+	}
 	if free, ok := diskFree(s.stagingDirectory()); ok && uint64(reserved) > free {
 		release()
 		return nil, errStagingFull
 	}
+	s.observeStaging(reserved)
 	return release, nil
+}
+
+// observeStaging publishes how much staging space is free and how much running
+// fills have reserved.
+func (s *Server) observeStaging(reserved int64) {
+	if s.metrics == nil {
+		return
+	}
+	s.metrics.setGauge("hfproxy_staging_reserved_bytes", float64(reserved))
+	if free, ok := diskFree(s.stagingDirectory()); ok {
+		s.metrics.setGauge("hfproxy_staging_free_bytes", float64(free))
+	}
+}
+
+// stagingLow reports whether the staging directory has less free space than
+// HFPROXY_STAGING_MIN_FREE_BYTES. It is false when the check is off or the free
+// space cannot be read.
+func (s *Server) stagingLow() bool {
+	minimum := s.currentConfig().StagingMinFreeBytes
+	if minimum <= 0 {
+		return false
+	}
+	free, ok := diskFree(s.stagingDirectory())
+	return ok && free < uint64(minimum)
 }
 
 func (s *Server) startMaintenance(ctx context.Context) {
@@ -81,6 +108,7 @@ func (s *Server) startMaintenance(ctx context.Context) {
 				return
 			case <-timer.C:
 			}
+			s.observeStaging(s.stagingReserved.Load())
 			if evicted, err := s.evictOverQuota(ctx); err != nil {
 				if ctx.Err() == nil {
 					s.logger.Warn("cache eviction failed", "class", fmt.Sprintf("%T", err))
@@ -175,7 +203,9 @@ func (s *Server) evictOverQuota(ctx context.Context) (int, error) {
 	target := int64(float64(limit) * evictionTargetPercent / 100)
 	evicted := 0
 	for total > target {
-		rows, err := s.db.SQL.QueryContext(ctx, `SELECT id,blob_id FROM artifacts ORDER BY last_accessed_at ASC, id LIMIT $1`, evictionBatch)
+		rows, err := s.db.SQL.QueryContext(ctx, `SELECT a.id,a.blob_id FROM artifacts a
+			WHERE NOT EXISTS (`+pinnedArtifact+`)
+			ORDER BY a.last_accessed_at ASC, a.id LIMIT $1`, evictionBatch)
 		if err != nil {
 			return evicted, err
 		}
@@ -212,7 +242,22 @@ func (s *Server) evictOverQuota(ctx context.Context) (int, error) {
 			}
 		}
 	}
+	if total > limit {
+		s.logger.Warn("the cache is over its size limit but what remains is pinned or still referenced", "limit_bytes", limit, "used_bytes", total)
+	}
 	return evicted, nil
+}
+
+// pinnedArtifact is a correlated subquery, true for an artifact a that belongs
+// to a pinned repository or to a pinned commit.
+const pinnedArtifact = `SELECT 1 FROM cache_pins p WHERE p.repository_id=a.repository_id AND (p.commit_sha='' OR p.commit_sha=a.commit_sha)`
+
+// pinnedBytes is the size of the live blobs that eviction must not touch.
+func (s *Server) pinnedBytes(ctx context.Context) (int64, error) {
+	var bytes int64
+	err := s.db.SQL.QueryRowContext(ctx, `SELECT COALESCE(SUM(b.size_bytes),0) FROM blobs b
+		WHERE b.orphaned_at IS NULL AND EXISTS (SELECT 1 FROM artifacts a WHERE a.blob_id=b.id AND EXISTS (`+pinnedArtifact+`))`).Scan(&bytes)
+	return bytes, err
 }
 
 func (s *Server) evictArtifact(ctx context.Context, artifactID, blobID string) (int64, error) {

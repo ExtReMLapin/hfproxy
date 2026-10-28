@@ -56,7 +56,7 @@ func newMetrics() *metrics {
 		m.histograms[name] = v
 		m.histogramLabelNames[name] = labels
 	}
-	for _, name := range []string{"hfproxy_http_requests_in_flight", "hfproxy_downloads_in_flight", "hfproxy_cache_objects", "hfproxy_cache_size_bytes", "hfproxy_gc_last_run_timestamp_seconds"} {
+	for _, name := range []string{"hfproxy_http_requests_in_flight", "hfproxy_downloads_in_flight", "hfproxy_cache_objects", "hfproxy_cache_size_bytes", "hfproxy_gc_last_run_timestamp_seconds", "hfproxy_cache_pinned_bytes", "hfproxy_staging_free_bytes", "hfproxy_staging_reserved_bytes"} {
 		g := prometheus.NewGauge(prometheus.GaugeOpts{Name: name, Help: name + " measured by hfproxy."})
 		m.registry.MustRegister(g)
 		m.gauges[name] = g

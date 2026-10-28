@@ -145,6 +145,9 @@ func (s *Server) startCacheInventoryMetrics(ctx context.Context) {
 		}
 		s.metrics.setGauge("hfproxy_cache_objects", float64(count))
 		s.metrics.setGauge("hfproxy_cache_size_bytes", float64(size))
+		if pinned, err := s.pinnedBytes(ctx); err == nil {
+			s.metrics.setGauge("hfproxy_cache_pinned_bytes", float64(pinned))
+		}
 	}
 	go func() {
 		refreshInventory()
@@ -358,6 +361,10 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	version, migrationErr := db.MigrationStatus(ctx, s.db.SQL)
 	if s.db.SQL.PingContext(ctx) != nil || migrationErr != nil || version < db.LatestMigration || s.currentStorage().Ready(ctx) != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+		return
+	}
+	if s.stagingLow() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "reason": "staging_space"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})

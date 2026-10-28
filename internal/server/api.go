@@ -85,6 +85,8 @@ func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {
 			allow = "GET, POST, DELETE"
 		} else if len(parts) == 2 && parts[1] == "preload" {
 			allow = "POST"
+		} else if len(parts) == 2 && parts[1] == "pins" {
+			allow = "GET, POST, DELETE"
 		} else if len(parts) != 1 {
 			writeProblem(w, r, http.StatusNotFound, "Not found", "This hfproxy API route is not implemented.")
 			return
@@ -711,6 +713,10 @@ func (s *Server) apiRepo(w http.ResponseWriter, r *http.Request, path string) {
 	}
 	if len(parts) == 2 && parts[1] == "preload" && r.Method == http.MethodPost {
 		s.startRepoPreload(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "pins" {
+		s.apiRepoPins(w, r, parts[0])
 		return
 	}
 	if len(parts) != 1 {

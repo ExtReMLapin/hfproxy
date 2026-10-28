@@ -57,6 +57,20 @@ groups:
         labels: {severity: warning}
         annotations:
           summary: The cache is close to its configured size limit
+      - alert: HfproxyStagingSpaceLow
+        # Replace the number with a little more than your largest file.
+        expr: hfproxy_staging_free_bytes < 20e9
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: The staging volume is nearly full; large downloads will be refused with 507
+      - alert: HfproxyPinnedContentNearQuota
+        # Replace the number with 80% of HFPROXY_CACHE_MAX_TOTAL_SIZE, in bytes.
+        expr: hfproxy_cache_pinned_bytes > 800e9
+        for: 1h
+        labels: {severity: warning}
+        annotations:
+          summary: Pinned files take most of the cache quota, so little room is left for eviction to work with
       - alert: HfproxyHeavyEviction
         expr: sum(rate(hfproxy_cache_evictions_total[1h])) > 1
         for: 2h

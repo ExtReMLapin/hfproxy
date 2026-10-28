@@ -92,6 +92,8 @@ Usage:
   hfproxy cache inspect [--repo ID] [--path QUERY]
   hfproxy cache purge [--repo ID] [--path QUERY] [--execute --yes]
   hfproxy cache verify
+  hfproxy cache pin|unpin --repo ID [--type models] [--commit SHA]
+  hfproxy cache pins
   hfproxy config validate
   hfproxy healthcheck
   hfproxy version
@@ -497,7 +499,7 @@ func validateTokenScope(role, scope string) error {
 
 func cache(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: hfproxy cache inspect|purge|verify")
+		return fmt.Errorf("usage: hfproxy cache inspect|purge|verify|pin|unpin|pins")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -527,6 +529,17 @@ func cache(args []string) error {
 		return err
 	}
 	switch args[0] {
+	case "pin", "unpin":
+		flags := flag.NewFlagSet("cache "+args[0], flag.ContinueOnError)
+		repoType := flags.String("type", "models", "models, datasets or spaces")
+		repoID := flags.String("repo", "", "repository id, for example org/name")
+		commit := flags.String("commit", "", "full commit SHA; omit to cover every revision of the repository")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		return changePin(ctx, os.Stdout, store.SQL, args[0] == "pin", *repoType, *repoID, *commit)
+	case "pins":
+		return listPins(ctx, os.Stdout, store.SQL)
 	case "inspect":
 		flags := flag.NewFlagSet("cache inspect", flag.ContinueOnError)
 		repo := flags.String("repo", "", "repository filter")
@@ -818,4 +831,92 @@ func rotateSecret(ctx context.Context, out io.Writer, cfg config.Config, sqlDB *
 	}
 	fmt.Fprintln(out, "Keep HFPROXY_SESSION_SECRET_PREVIOUS until these are gone: a token moves to the new secret the first time it is used, sessions end on their own, and `hfproxy admin token revoke` retires tokens that are no longer needed.")
 	return nil
+}
+
+// changePin adds or removes a cache pin. A pin keeps the cache from evicting
+// the files of a whole repository, or of one commit, when it enforces its size
+// limit.
+func changePin(ctx context.Context, out io.Writer, sqlDB *sql.DB, pin bool, repoType, repoID, commit string) error {
+	if repoID == "" {
+		return fmt.Errorf("--repo is required")
+	}
+	if repoType != "models" && repoType != "datasets" && repoType != "spaces" {
+		return fmt.Errorf("--type must be models, datasets or spaces")
+	}
+	if commit != "" && !fullCommit(commit) {
+		return fmt.Errorf("--commit must be a full 40 or 64 character commit SHA")
+	}
+	var repositoryID string
+	if err := sqlDB.QueryRowContext(ctx, `SELECT id FROM repositories WHERE repo_type=$1 AND repo_id=$2 AND deleted_at IS NULL`, repoType, repoID).Scan(&repositoryID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("repository %s/%s is not registered", repoType, repoID)
+		}
+		return err
+	}
+	scope := "every revision of " + repoType + "/" + repoID
+	if commit != "" {
+		scope = "commit " + commit + " of " + repoType + "/" + repoID
+	}
+	if pin {
+		if _, err := sqlDB.ExecContext(ctx, `INSERT INTO cache_pins(repository_id,commit_sha) VALUES($1,$2) ON CONFLICT DO NOTHING`, repositoryID, commit); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Pinned %s: its cached files are kept when the cache enforces its size limit.\n", scope)
+		return nil
+	}
+	result, err := sqlDB.ExecContext(ctx, `DELETE FROM cache_pins WHERE repository_id=$1 AND commit_sha=$2`, repositoryID, commit)
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return fmt.Errorf("no such pin: %s", scope)
+	}
+	fmt.Fprintf(out, "Unpinned %s.\n", scope)
+	return nil
+}
+
+func listPins(ctx context.Context, out io.Writer, sqlDB *sql.DB) error {
+	rows, err := sqlDB.QueryContext(ctx, `SELECT r.repo_type,r.repo_id,p.commit_sha,p.created_at,
+			COALESCE((SELECT SUM(b.size_bytes) FROM artifacts a JOIN blobs b ON b.id=a.blob_id
+				WHERE a.repository_id=p.repository_id AND (p.commit_sha='' OR a.commit_sha=p.commit_sha)),0)
+		FROM cache_pins p JOIN repositories r ON r.id=p.repository_id WHERE r.deleted_at IS NULL
+		ORDER BY r.repo_type,r.repo_id,p.commit_sha`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var repoType, repoID, commit string
+		var created time.Time
+		var size int64
+		if err := rows.Scan(&repoType, &repoID, &commit, &created, &size); err != nil {
+			return err
+		}
+		target := "every revision"
+		if commit != "" {
+			target = "commit " + commit
+		}
+		fmt.Fprintf(out, "%s/%s  %s  %s cached  pinned %s\n", repoType, repoID, target, humanBytes(size), created.Format(time.RFC3339))
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if count == 0 {
+		fmt.Fprintln(out, "No pins.")
+	}
+	return nil
+}
+
+func fullCommit(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+			return false
+		}
+	}
+	return true
 }

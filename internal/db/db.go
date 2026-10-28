@@ -24,7 +24,7 @@ type migration struct {
 // rename only in a later release) so an image rollback after a migration keeps
 // working.
 var migrations = []migration{
-	{1, schemaV1}, {2, schemaV2}, {3, schemaV3}, {4, schemaV4}, {5, schemaV5}, {6, schemaV6}, {7, schemaV7}, {8, schemaV8}, {9, schemaV9},
+	{1, schemaV1}, {2, schemaV2}, {3, schemaV3}, {4, schemaV4}, {5, schemaV5}, {6, schemaV6}, {7, schemaV7}, {8, schemaV8}, {9, schemaV9}, {10, schemaV10},
 }
 
 // LatestMigration is the schema version this build expects. /readyz reports
@@ -400,4 +400,14 @@ CREATE INDEX IF NOT EXISTS login_attempts_window_idx ON login_attempts(window_st
 const schemaV9 = `
 ALTER TABLE access_tokens ADD COLUMN IF NOT EXISTS key_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS key_id TEXT NOT NULL DEFAULT '';
+`
+
+const schemaV10 = `
+CREATE TABLE IF NOT EXISTS cache_pins (
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    commit_sha TEXT NOT NULL DEFAULT '',
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(repository_id, commit_sha)
+);
 `
