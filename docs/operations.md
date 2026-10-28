@@ -63,6 +63,22 @@ Suggested starting points, to adjust to your traffic:
 
 [prometheus-alerts.yml](prometheus-alerts.yml) contains matching alert rules, and [grafana-observability.json](grafana-observability.json) the dashboard.
 
+## Running several replicas
+
+Several instances can share one PostgreSQL database and one bucket. What is shared and what is per instance:
+
+| State | Scope | Consequence |
+| --- | --- | --- |
+| Catalog, pins, settings, sessions, tokens | PostgreSQL, shared | Consistent everywhere |
+| Login rate limits | PostgreSQL, shared | Limits hold across replicas |
+| Cache fill of one file | A PostgreSQL advisory lock per file, shared | A file with a verifiable digest (LFS) is fetched from the Hub once; the other replica waits, then serves the cached copy |
+| Concurrent requests for a file without a digest (small non-LFS files) | Per instance | Followers stream straight from the Hub instead of waiting, so a burst can fetch such a file several times |
+| Negative cache (404/410 from the Hub), metadata cache, circuit breaker | Per instance | Each replica learns on its own; a replica may ask the Hub once more |
+| Fill slots (`HFPROXY_CACHE_FILL_CONCURRENCY`), staging space | Per instance | The limits apply to each replica, so the fleet total is the limit times the number of replicas |
+| Settings saved from the console | PostgreSQL, but loaded at start | Other replicas pick them up when they restart |
+
+Pin one replica as the only one with `HFPROXY_AUTO_MIGRATE=true` (or run `hfproxy migrate up` as a job), and give every replica the same `HFPROXY_SESSION_SECRET`. A single replica remains a valid choice: failover is then a restart, and the cache survives because it lives in the bucket.
+
 ## Capacity
 
 - Staging volume: `HFPROXY_CACHE_FILL_CONCURRENCY` times your largest file, plus headroom.
