@@ -1185,6 +1185,10 @@ func (s *Server) setArtifactHeaders(w http.ResponseWriter, a artifact, upstream 
 	if a.LastMod.Valid {
 		w.Header().Set("Last-Modified", a.LastMod.Time.UTC().Format(http.TimeFormat))
 	}
+	// Repository files are untrusted and share an origin with the admin
+	// console: sandbox them so a cached HTML/SVG file cannot run script there.
+	w.Header().Set("Content-Security-Policy", "sandbox")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate")
 	w.Header().Set("X-Repo-Commit", a.Commit)

@@ -14,6 +14,10 @@ import (
 
 type Store struct{ SQL *sql.DB }
 
+// LatestMigration is the schema version this build expects. /readyz reports
+// not ready while the database is behind it.
+const LatestMigration int64 = 6
+
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
 	sqlDB, err := sql.Open("pgx", databaseURL)
 	if err != nil {
@@ -82,6 +86,12 @@ func Migrate(ctx context.Context, sqlDB *sql.DB) error {
 			return err
 		}
 		version = 5
+	}
+	if version < 6 {
+		if err := applyMigrationTx(ctx, tx, 6, schemaV6); err != nil {
+			return err
+		}
+		version = 6
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migrations: %w", err)
@@ -289,4 +299,12 @@ CREATE INDEX IF NOT EXISTS blobs_orphaned_idx ON blobs(orphaned_at) WHERE orphan
 
 const schemaV5 = `
 DELETE FROM repo_grants g USING repositories r WHERE g.repository_id=r.id AND r.deleted_at IS NOT NULL;
+`
+
+const schemaV6 = `
+CREATE INDEX IF NOT EXISTS artifacts_blob_idx ON artifacts(blob_id);
+CREATE INDEX IF NOT EXISTS downloads_started_idx ON downloads(started_at);
+CREATE INDEX IF NOT EXISTS access_tokens_user_idx ON access_tokens(user_id);
+CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS group_members_user_idx ON group_members(user_id);
 `

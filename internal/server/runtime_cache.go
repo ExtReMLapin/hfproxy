@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -82,7 +83,9 @@ func (s *Server) startOrphanedBlobGC(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				_ = s.collectOrphanedBlobs(ctx)
+				if err := s.collectOrphanedBlobs(ctx); err != nil && ctx.Err() == nil {
+					s.logger.Warn("orphaned blob collection failed", "class", fmt.Sprintf("%T", err))
+				}
 			case <-ctx.Done():
 				return
 			}

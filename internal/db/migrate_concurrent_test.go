@@ -70,8 +70,8 @@ func TestMigrateSerializesConcurrentFirstRun(t *testing.T) {
 	if err := databases[0].QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatal(fmt.Errorf("read final migration version: %w", err))
 	}
-	if version != 5 {
-		t.Fatalf("final migration version = %d, want 5", version)
+	if version != LatestMigration {
+		t.Fatalf("final migration version = %d, want %d", version, LatestMigration)
 	}
 }
 
@@ -114,7 +114,7 @@ func TestIssue73MigrationDeletesGrantsForPreviouslyDeletedRepositories(t *testin
 	if _, err := store.Exec(`INSERT INTO repo_grants(repository_id,subject_type,subject_id) VALUES($1,'group','stale-group')`, repositoryID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Exec(`DELETE FROM schema_migrations WHERE version=5`); err != nil {
+	if _, err := store.Exec(`DELETE FROM schema_migrations WHERE version>=5`); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(context.Background(), store); err != nil {

@@ -189,7 +189,9 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	defer http.SetCookie(w, &http.Cookie{Name: "hfproxy_oidc", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: strings.HasPrefix(s.currentConfig().OIDCRedirectURL, "https://"), SameSite: http.SameSiteLaxMode})
+	// Clear the state cookie before any redirect: headers set after
+	// http.Redirect has written the response are silently dropped.
+	http.SetCookie(w, &http.Cookie{Name: "hfproxy_oidc", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: strings.HasPrefix(s.currentConfig().OIDCRedirectURL, "https://"), SameSite: http.SameSiteLaxMode})
 	cookie, err := r.Cookie("hfproxy_oidc")
 	if err != nil {
 		http.Redirect(w, r, "/login?error=invalid_state", http.StatusSeeOther)
