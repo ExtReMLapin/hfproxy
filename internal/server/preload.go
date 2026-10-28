@@ -190,6 +190,9 @@ func (s *Server) listHubFiles(ctx context.Context, repoType, repoID, revision st
 		}
 		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 			response.Body.Close()
+			if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusNotFound {
+				return nil, "", fmt.Errorf("repository was not found or is not accessible on Hugging Face")
+			}
 			return nil, "", fmt.Errorf("Hugging Face returned HTTP %d while listing repository files", response.StatusCode)
 		}
 		if resolvedCommit == "" {
