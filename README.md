@@ -74,7 +74,7 @@ The console is served by the Go service at `/` and is available after creating t
 
 The Angular source is in `ui/`. For frontend development, start the Go service on port 8080, then run `nvm use && npm ci && npm start` from `ui/`; `.nvmrc` pins Node 24.22.1. Angular serves the UI on port 4200 and proxies API requests to Go. The Docker build compiles and embeds the production UI.
 
-The database URL, listen address, and `SESSION_SECRET` remain bootstrap settings in the environment. Keep `SESSION_SECRET` unchanged: it encrypts saved runtime settings as well as signing sessions. Changing it without migrating the saved settings will make those credentials unreadable. Changing the S3 bucket or prefix does not move existing objects.
+The database URL, listen address, and `SESSION_SECRET` remain bootstrap settings in the environment. `SESSION_SECRET` protects access tokens, sessions and the saved settings, each with its own key derived from it. Do not simply replace it: follow [Rotating the session secret](docs/operations.md#rotating-the-session-secret), which keeps existing tokens and settings working. Changing the S3 bucket or prefix does not move existing objects.
 
 For a fresh installation that should configure S3 only through the console, leave `HFPROXY_S3_BUCKET` unset in the environment. hfproxy will serve the sign-in and setup pages, while `/readyz` stays unavailable until a valid bucket is saved. PostgreSQL and `SESSION_SECRET` are still needed at startup. The provided Compose setup preconfigures a single-node Garage instance and its default bucket for local use.
 
@@ -89,6 +89,7 @@ Local username/password authentication is enabled by default. OIDC/SSO and LDAP 
     hfproxy admin token create|list|revoke
     hfproxy admin repo add
     hfproxy admin identity link
+    hfproxy admin rotate-secret
     hfproxy cache inspect|purge|verify
     hfproxy config validate
     hfproxy version
@@ -104,14 +105,28 @@ Environment variables use the `HFPROXY_` prefix. Common settings for local Compo
 | HTTP and database | LISTEN_ADDR, PUBLIC_URL, DATABASE_URL, AUTO_MIGRATE, LOG_LEVEL |
 | Hugging Face | HF_BASE_URL, HF_PROXY_URL, HF_TOKEN, HF_ALLOWED_REDIRECT_HOSTS, HF_TIMEOUT |
 | S3 | S3_ENDPOINT, S3_REGION, S3_BUCKET, S3_PREFIX, S3_FORCE_PATH_STYLE, S3_SERVER_SIDE_ENCRYPTION, S3_ACCESS_KEY, S3_SECRET_KEY |
-| Authentication | AUTH_MODE=local or oidc, SESSION_SECRET, SESSION_IDLE_TTL, SESSION_ABSOLUTE_TTL, ANONYMOUS_PUBLIC_READ |
+| Authentication | AUTH_MODE=local or oidc, SESSION_SECRET, SESSION_SECRET_PREVIOUS, SESSION_IDLE_TTL, SESSION_ABSOLUTE_TTL, ANONYMOUS_PUBLIC_READ |
 | OIDC | OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_REDIRECT_URL, OIDC_AUTO_PROVISION |
 | LDAP | LDAP_URL, LDAP_STARTTLS, LDAP_BIND_DN, LDAP_BIND_PASSWORD, LDAP_BASE_DN, LDAP_USER_FILTER, LDAP_AUTO_PROVISION |
 | Cache limits | CACHE_MAX_FILE_SIZE, CACHE_REF_TTL, CACHE_NEGATIVE_TTL, CACHE_GC_GRACE |
+| Capacity and retention | CACHE_MAX_TOTAL_SIZE, CACHE_FILL_CONCURRENCY, STAGING_DIR, RETENTION_DOWNLOADS, RETENTION_AUDIT |
+| Metrics | METRICS_ENABLED, METRICS_PATH, METRICS_ADDR |
 
 PostgreSQL is required. The S3 bucket must exist, remain private, and allow the service identity to read, write, and delete objects. Standard AWS credentials (IAM role, AWS environment variables, or a mounted profile) work when the S3 access key variables are unset. Use `S3_FORCE_PATH_STYLE=true` with the local Garage endpoint. Garage does not implement S3-managed AES256 encryption, so the Compose setup disables the `S3_SERVER_SIDE_ENCRYPTION` request header; use encrypted disks for at-rest encryption. Other S3 services can keep that option enabled if they support it.
 
 The upstream HF token is optional for public repositories and required for private or gated repositories. It is sent only to the configured HF host, never to the client. Redirects are followed over HTTPS to allowed HF hosts. Add the delivery hosts observed in your environment to `HF_ALLOWED_REDIRECT_HOSTS`.
+
+Capacity and retention settings are read from the environment only:
+
+- `CACHE_MAX_TOTAL_SIZE` (bytes, `0` = unlimited): when live blobs exceed it, the least recently used artifacts are dropped until usage is under 90% of the quota. Their objects are deleted by the garbage collector after `CACHE_GC_GRACE`.
+- `CACHE_FILL_CONCURRENCY` (default `4`): how many files may be fetched from the Hub at once. Further requests wait up to 15 seconds, then receive `503` with `Retry-After`.
+- `STAGING_DIR` (default: the system temporary directory): where files are staged before upload. Size it for `CACHE_FILL_CONCURRENCY` times your largest file; a fill that does not fit in the free space is refused with `507`.
+- `RETENTION_DOWNLOADS` (default `2160h`) and `RETENTION_AUDIT` (default `8760h`): Go durations after which download events and audit events are deleted; `0` keeps them. Expired sessions are always purged.
+- `METRICS_ADDR` (for example `127.0.0.1:9090`): serve metrics on a dedicated listener instead of the public port.
+
+If the Hub is unreachable or answers 429/5xx and a branch or tag was resolved before, hfproxy serves the cached file for the last known commit with `X-Cache: STALE`. Transient Hub errors are retried twice with backoff.
+
+See [docs/production.md](docs/production.md) before exposing hfproxy to other users.
 
 ### OIDC and LDAP
 
@@ -124,6 +139,10 @@ LDAP supports LDAPS or LDAP with StartTLS. The user filter must contain `{userna
 OIDC and LDAP provide sign-in to the same local role model (`admin`, `operator`, `reader`). Groups can be managed locally and granted access through allowlist policies.
 
 ## Hub API and compatibility
+
+The complete compatibility audit, including the route/type/operation matrix,
+security guarantees, test evidence, and remaining limits is maintained in
+[`docs/huggingface-compatibility.md`](docs/huggingface-compatibility.md).
 
 Supported Hub read routes:
 
@@ -179,12 +198,14 @@ Health endpoints: `/healthz` provides liveness without dependency checks; `/read
 
 ## Current limitations
 
+See [Observability](docs/observability.md) for the Prometheus endpoint and current metric coverage.
+
 - Native Xet/CAS, uploads, repository write operations, inference, and Spaces execution are not supported.
 - The reference TTL applies to cache reads; a cache miss may still query the Hub API for metadata and to confirm the SHA before downloading.
 - OIDC verifies identities and sessions, but IdP group claims are not automatically mapped to local groups.
 - LDAP supports LDAPS/StartTLS and user binds; Active Directory group synchronization is not included.
 - The administration console manages runtime settings, repositories and grants, users, groups, cache entries, and audit events. Database connection, listen address, and session encryption secret remain environment-managed bootstrap settings.
-- Multi-part Range requests, Prometheus metrics, distributed rate limits, and paginated cache purge still need work before large-scale operation.
+- Multi-part Range requests, distributed rate limits, and paginated cache purge still need work before large-scale operation.
 - Negative-result caching is in-memory per process; `CACHE_NEGATIVE_TTL` controls its lifetime. Orphaned blobs are collected periodically after `CACHE_GC_GRACE`.
 - Public policies control local access; they do not replace Hugging Face license terms or gated-access conditions.
 

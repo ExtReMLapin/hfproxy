@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"embed"
 	"encoding/json"
@@ -9,7 +10,9 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -20,6 +23,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/nicolas/hfproxy/internal/config"
 	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/nicolas/hfproxy/internal/keyring"
 	"github.com/nicolas/hfproxy/internal/storage"
 	"golang.org/x/oauth2"
 )
@@ -37,22 +41,27 @@ type runtimeState struct {
 	oidcProvider *oidc.Provider
 	oidcConfig   *oauth2.Config
 	oidcVerifier *oidc.IDTokenVerifier
+	ring         *keyring.Ring
 }
 
 type Server struct {
-	runtime        atomic.Pointer[runtimeState]
-	db             *db.Store
-	logger         *slog.Logger
-	preloadsMu     sync.RWMutex
-	preloads       map[string]*preloadJob
-	preloadSlots   chan struct{}
-	loginMu        sync.Mutex
-	loginBuckets   map[string]loginBucket
-	loginHashSlots chan struct{}
-	negativeMu     sync.Mutex
-	negative       map[string]negativeCacheEntry
-	missMu         sync.Mutex
-	misses         map[string]*cacheMiss
+	runtime              atomic.Pointer[runtimeState]
+	db                   *db.Store
+	logger               *slog.Logger
+	preloadsMu           sync.RWMutex
+	preloads             map[string]*preloadJob
+	preloadSlots         chan struct{}
+	loginMu              sync.Mutex
+	loginBuckets         map[string]loginBucket
+	loginHashSlots       chan struct{}
+	negativeMu           sync.Mutex
+	negative             map[string]negativeCacheEntry
+	missMu               sync.Mutex
+	misses               map[string]*cacheMiss
+	metrics              *metrics
+	inventoryRefreshWake chan struct{}
+	fillSlots            chan struct{}
+	stagingReserved      atomic.Int64
 }
 
 type loginBucket struct {
@@ -82,25 +91,89 @@ type Principal struct {
 }
 
 // Version is embedded in upstream User-Agent headers and set by release builds.
-var Version = "0.0.3"
+var Version = "dev"
 
 func New(ctx context.Context, cfg config.Config, store *db.Store, objectStore *storage.S3, logger *slog.Logger) (*Server, error) {
 	state, err := makeRuntimeState(ctx, cfg, objectStore, nil)
 	if err != nil {
 		return nil, err
 	}
+	if err := configureTracing(ctx, cfg); err != nil {
+		return nil, fmt.Errorf("configure trace exporter")
+	}
 	s := &Server{
-		db: store, logger: logger, preloads: make(map[string]*preloadJob),
+		db: store, logger: logger, metrics: newMetrics(), inventoryRefreshWake: make(chan struct{}, 1), preloads: make(map[string]*preloadJob),
 		preloadSlots: make(chan struct{}, 2), loginBuckets: make(map[string]loginBucket), loginHashSlots: make(chan struct{}, 4), negative: make(map[string]negativeCacheEntry), misses: make(map[string]*cacheMiss),
 	}
 	s.runtime.Store(state)
+	if objectStore != nil {
+		objectStore.SetObserver(s.metrics)
+	}
+	slots := cfg.CacheFillConcurrency
+	if slots <= 0 {
+		slots = defaultFillConcurrency
+	}
+	s.fillSlots = make(chan struct{}, slots)
+	if cfg.StagingDir != "" {
+		if err := os.MkdirAll(cfg.StagingDir, 0o700); err != nil {
+			return nil, fmt.Errorf("prepare staging directory: %w", err)
+		}
+	}
+	s.startMaintenance(ctx)
 	s.startDownloadResumeCleanup(ctx)
 	s.startOrphanedBlobGC(ctx)
+	s.startCacheInventoryMetrics(ctx)
 	return s, nil
 }
 
+func (s *Server) startCacheInventoryMetrics(ctx context.Context) {
+	refresh := s.currentConfig().CacheInventoryRefresh
+	if refresh <= 0 {
+		refresh = 5 * time.Minute
+	}
+	refreshInventory := func() {
+		var count, size int64
+		if err := s.db.SQL.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(size_bytes),0) FROM blobs`).Scan(&count, &size); err != nil {
+			s.logger.Warn("cache inventory metrics refresh failed")
+			return
+		}
+		s.metrics.setGauge("hfproxy_cache_objects", float64(count))
+		s.metrics.setGauge("hfproxy_cache_size_bytes", float64(size))
+	}
+	go func() {
+		refreshInventory()
+		timer := time.NewTimer(refresh)
+		defer timer.Stop()
+		for {
+			select {
+			case <-timer.C:
+				refreshInventory()
+				wait := s.currentConfig().CacheInventoryRefresh
+				if wait <= 0 {
+					wait = 5 * time.Minute
+				}
+				timer.Reset(wait)
+			case <-s.inventoryRefreshWake:
+				wait := s.currentConfig().CacheInventoryRefresh
+				if wait <= 0 {
+					wait = 5 * time.Minute
+				}
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(wait)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
 func makeRuntimeState(ctx context.Context, cfg config.Config, objectStore *storage.S3, previous *runtimeState) (*runtimeState, error) {
-	state := &runtimeState{config: cfg, storage: objectStore, httpClient: newHFHTTPClient(cfg)}
+	state := &runtimeState{config: cfg, storage: objectStore, httpClient: newHFHTTPClient(cfg), ring: keyring.NewRing(cfg.SessionSecret, cfg.PreviousSessionSecrets...)}
 	if cfg.OIDCIssuer != "" {
 		var provider *oidc.Provider
 		if previous != nil && previous.config.OIDCIssuer == cfg.OIDCIssuer {
@@ -124,6 +197,16 @@ func makeRuntimeState(ctx context.Context, cfg config.Config, objectStore *stora
 	return state, nil
 }
 
+// keyRing returns the keys derived from the session secret and any previous
+// secrets still accepted.
+func (s *Server) keyRing() *keyring.Ring {
+	state := s.runtime.Load()
+	if state.ring != nil {
+		return state.ring
+	}
+	return keyring.NewRing(state.config.SessionSecret, state.config.PreviousSessionSecrets...)
+}
+
 func (s *Server) currentConfig() config.Config               { return s.runtime.Load().config }
 func (s *Server) currentStorage() *storage.S3                { return s.runtime.Load().storage }
 func (s *Server) currentHTTPClient() *http.Client            { return s.runtime.Load().httpClient }
@@ -138,18 +221,37 @@ func (s *Server) applyConfig(ctx context.Context, cfg config.Config, actorID str
 	if err != nil {
 		return fmt.Errorf("prepare S3 settings")
 	}
-	state, err := makeRuntimeState(ctx, cfg, objects, s.runtime.Load())
+	previous := s.runtime.Load()
+	state, err := makeRuntimeState(ctx, cfg, objects, previous)
 	if err != nil {
 		return err
 	}
+	traceProcessor, err := prepareTraceProcessor(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("configure trace exporter")
+	}
+	if objects != nil {
+		objects.SetObserver(s.metrics)
+	}
 	if err := config.SavePersisted(ctx, s.db.SQL, cfg, actorID); err != nil {
+		if traceProcessor != nil {
+			_ = traceProcessor.Shutdown(ctx)
+		}
 		return err
 	}
 	s.runtime.Store(state)
+	activatePreparedTracing(ctx, traceProcessor, cfg)
+	select {
+	case s.inventoryRefreshWake <- struct{}{}:
+	default:
+	}
 	return nil
 }
 
 func (s *Server) Handler() http.Handler {
+	if s.metrics == nil {
+		s.metrics = newMetrics()
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/readyz", s.ready)
@@ -164,20 +266,52 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/", s.apiV1)
 	mux.HandleFunc("/api/", s.hubAPI)
 	mux.HandleFunc("/", s.dashboardOrResolve)
-	return s.securityHeaders(s.requestLog(mux))
+	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg := s.currentConfig()
+		metricsPath := cfg.MetricsPath
+		if metricsPath == "" {
+			metricsPath = "/metrics"
+		}
+		if cfg.MetricsEnabled && metricsOnMainListener(cfg.MetricsAddr) && r.URL.Path == metricsPath {
+			s.metrics.handler().ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+	return s.requestDeadlines(s.securityHeaders(s.traceMiddleware(s.requestLog(s.metrics.middlewareDynamic(func() string {
+		cfg := s.currentConfig()
+		if !cfg.MetricsEnabled {
+			return ""
+		}
+		if cfg.MetricsPath == "" {
+			return "/metrics"
+		}
+		return cfg.MetricsPath
+	}, dispatch)))))
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	defer shutdownTracing()
 	server := &http.Server{
 		Addr: s.currentConfig().ListenAddr, Handler: s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() { errCh <- server.ListenAndServe() }()
 	s.logger.Info("http server started", "address", s.currentConfig().ListenAddr)
+	var metricsServer *http.Server
+	if addr := s.currentConfig().MetricsAddr; addr != "" {
+		metricsServer = &http.Server{Addr: addr, Handler: s.metricsHandler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second}
+		go func() { errCh <- metricsServer.ListenAndServe() }()
+		s.logger.Info("metrics server started", "address", addr)
+	}
 	select {
 	case err := <-errCh:
+		if metricsServer != nil {
+			_ = metricsServer.Close()
+		}
+		_ = server.Close()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
@@ -185,6 +319,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		if metricsServer != nil {
+			_ = metricsServer.Shutdown(shutdownCtx)
+		}
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			_ = server.Close()
 			return err
@@ -213,7 +350,7 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 	version, migrationErr := db.MigrationStatus(ctx, s.db.SQL)
-	if s.db.SQL.PingContext(ctx) != nil || migrationErr != nil || version < 5 || s.currentStorage().Ready(ctx) != nil {
+	if s.db.SQL.PingContext(ctx) != nil || migrationErr != nil || version < db.LatestMigration || s.currentStorage().Ready(ctx) != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
 		return
 	}
@@ -221,6 +358,15 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) dashboardOrResolve(w http.ResponseWriter, r *http.Request) {
+	cfg := s.currentConfig()
+	metricsPath := cfg.MetricsPath
+	if metricsPath == "" {
+		metricsPath = "/metrics"
+	}
+	if cfg.MetricsEnabled && metricsOnMainListener(cfg.MetricsAddr) && r.URL.Path == metricsPath {
+		s.metrics.handler().ServeHTTP(w, r)
+		return
+	}
 	if r.URL.Path == "/" {
 		s.frontend(w, r)
 		return
@@ -325,37 +471,109 @@ func (w *responseRecorder) Write(b []byte) (int, error) {
 	return n, err
 }
 func (w *responseRecorder) Flush() {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
 }
+func (w *responseRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return h.Hijack()
+}
+func (w *responseRecorder) Push(target string, opts *http.PushOptions) error {
+	p, ok := w.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return p.Push(target, opts)
+}
+func (w *responseRecorder) ReadFrom(r io.Reader) (int64, error) {
+	if rf, ok := w.ResponseWriter.(io.ReaderFrom); ok {
+		if w.status == 0 {
+			w.WriteHeader(http.StatusOK)
+		}
+		n, err := rf.ReadFrom(r)
+		w.bytes += n
+		return n, err
+	}
+	return io.Copy(recorderWriterOnly{w}, r)
+}
+
+type recorderWriterOnly struct{ io.Writer }
 
 func (s *Server) requestLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rid := r.Header.Get("X-Request-ID")
-		if len(rid) > 100 || strings.ContainsAny(rid, "\r\n") {
-			rid = ""
-		}
-		if rid == "" {
+		if !validRequestID(rid) {
 			rid = randomID()
 		}
 		w.Header().Set("X-Request-ID", rid)
 		recorder := &responseRecorder{ResponseWriter: w}
-		next.ServeHTTP(recorder, r.WithContext(context.WithValue(r.Context(), requestIDKey{}, rid)))
+		info := &requestInfo{ClientIP: s.loginClientIP(r)}
+		ctx := context.WithValue(context.WithValue(r.Context(), requestIDKey{}, rid), requestInfoKey{}, info)
+		next.ServeHTTP(recorder, r.WithContext(ctx))
 		status := recorder.status
 		if status == 0 {
 			status = http.StatusOK
 		}
-		s.logger.Info("http request", "request_id", rid, "method", r.Method, "route", safeRoute(r.URL.Path), "status", status, "duration_ms", time.Since(start).Milliseconds(), "bytes", recorder.bytes)
+		s.logger.Info("http request", "request_id", rid, "method", r.Method, "route", safeRoute(r.URL.Path), "status", status, "duration_ms", time.Since(start).Milliseconds(), "bytes", recorder.bytes,
+			"client_ip", info.ClientIP, "user_id", info.UserID, "user_agent", safeLogValue(r.UserAgent(), 200))
 	})
 }
 
 type requestIDKey struct{}
 
+// requestInfo carries who made a request, filled in as the request is handled,
+// so audit rows and the access log can name the caller.
+type requestInfo struct {
+	ClientIP string
+	UserID   string
+	TokenID  string
+}
+
+type requestInfoKey struct{}
+
+func requestInfoFrom(ctx context.Context) *requestInfo {
+	info, _ := ctx.Value(requestInfoKey{}).(*requestInfo)
+	return info
+}
+
 func requestID(ctx context.Context) string {
 	value, _ := ctx.Value(requestIDKey{}).(string)
 	return value
+}
+
+// validRequestID accepts the identifier a caller or proxy supplied only if it is
+// short and made of characters that are safe in logs and headers.
+func validRequestID(id string) bool {
+	if id == "" || len(id) > 100 {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' || r == ':') {
+			return false
+		}
+	}
+	return true
+}
+
+// safeLogValue bounds a caller-supplied value and drops control characters.
+func safeLogValue(value string, max int) string {
+	if len(value) > max {
+		value = value[:max]
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, value)
 }
 
 func safeRoute(path string) string {
@@ -370,6 +588,9 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
+		if state := s.runtime.Load(); state != nil && strings.HasPrefix(state.config.PublicURL, "https://") {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'")
 		next.ServeHTTP(w, r)
 	})
@@ -419,6 +640,16 @@ func (s *Server) audit(ctx context.Context, actorID, action, targetType, targetI
 }
 
 func (s *Server) authenticate(r *http.Request) (*Principal, error) {
+	p, err := s.authenticateCredentials(r)
+	if err == nil && p != nil {
+		if info := requestInfoFrom(r.Context()); info != nil {
+			info.UserID, info.TokenID = p.ID, p.TokenID
+		}
+	}
+	return p, err
+}
+
+func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 	if p, ok := r.Context().Value(localPrincipalContextKey{}).(*Principal); ok && p != nil {
 		principal := *p
 		return &principal, nil
@@ -432,20 +663,26 @@ func (s *Server) authenticate(r *http.Request) (*Principal, error) {
 		if len(token) < 24 || strings.ContainsAny(token, " \t\r\n") {
 			return nil, errUnauthenticated
 		}
-		digest := HashToken(token, s.currentConfig().SessionSecret)
+		ring := s.keyRing()
 		var p Principal
 		var status string
 		var scopes []string
-		err := s.db.SQL.QueryRowContext(r.Context(), `SELECT u.id,u.username,u.email,u.display_name,u.role,u.status,t.id,t.scopes
+		var storedHash []byte
+		err := s.db.SQL.QueryRowContext(r.Context(), `SELECT u.id,u.username,u.email,u.display_name,u.role,u.status,t.id,t.scopes,t.token_hash
 			FROM access_tokens t JOIN users u ON u.id=t.user_id
-			WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at>now())`, digest).
-			Scan(&p.ID, &p.Username, &p.Email, &p.DisplayName, &p.Role, &status, &p.TokenID, &scopes)
+			WHERE t.token_hash = ANY($1) AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at>now())`, ring.HashCandidates(token)).
+			Scan(&p.ID, &p.Username, &p.Email, &p.DisplayName, &p.Role, &status, &p.TokenID, &scopes, &storedHash)
 		if err != nil || status != "active" {
 			return nil, errUnauthenticated
 		}
 		p.Authenticated = true
 		p.Scopes = scopes
-		_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET last_used_at=now() WHERE id=$1`, p.TokenID)
+		if !ring.IsCurrent(token, storedHash) {
+			// Hashed under an older scheme or secret: move it to the current key
+			// now that the plaintext is in hand.
+			_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET token_hash=$3, key_id=$4 WHERE id=$1 AND token_hash=$2`, p.TokenID, storedHash, ring.Hash(token), ring.KeyID())
+		}
+		_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET last_used_at=now() WHERE id=$1 AND (last_used_at IS NULL OR last_used_at < now()-interval '1 minute')`, p.TokenID)
 		return &p, nil
 	}
 	cookie, err := r.Cookie("hfproxy_session")
@@ -455,18 +692,18 @@ func (s *Server) authenticate(r *http.Request) (*Principal, error) {
 	if cookie.Value == "" {
 		return nil, errUnauthenticated
 	}
-	digest := HashToken(cookie.Value, s.currentConfig().SessionSecret)
 	var p Principal
 	var status string
-	err = s.db.SQL.QueryRowContext(r.Context(), `SELECT u.id,u.username,u.email,u.display_name,u.role,u.status
+	var digest []byte
+	err = s.db.SQL.QueryRowContext(r.Context(), `SELECT u.id,u.username,u.email,u.display_name,u.role,u.status,ss.token_hash
 		FROM sessions ss JOIN users u ON u.id=ss.user_id
-		WHERE ss.token_hash=$1 AND ss.expires_at>now()`, digest).
-		Scan(&p.ID, &p.Username, &p.Email, &p.DisplayName, &p.Role, &status)
+		WHERE ss.token_hash = ANY($1) AND ss.expires_at>now()`, s.keyRing().HashCandidates(cookie.Value)).
+		Scan(&p.ID, &p.Username, &p.Email, &p.DisplayName, &p.Role, &status, &digest)
 	if err != nil || status != "active" {
 		return nil, errUnauthenticated
 	}
 	p.Authenticated = true
-	_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE sessions SET last_seen_at=now(), expires_at=LEAST(created_at + $2::interval, now() + $1::interval) WHERE token_hash=$3`,
+	_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE sessions SET last_seen_at=now(), expires_at=LEAST(created_at + $2::interval, now() + $1::interval) WHERE token_hash=$3 AND last_seen_at < now()-interval '1 minute'`,
 		s.currentConfig().SessionIdleTTL.String(), s.currentConfig().SessionAbsoluteTTL.String(), digest)
 	return &p, nil
 }
@@ -482,12 +719,18 @@ func (s *Server) currentPrincipal(r *http.Request) *Principal {
 }
 
 func (s *Server) createSession(ctx context.Context, userID string, w http.ResponseWriter, r *http.Request) (string, error) {
+	// A login always starts a fresh session: drop the one the browser still
+	// holds so a pre-login session identifier can never survive authentication.
+	if r != nil {
+		if old, err := r.Cookie("hfproxy_session"); err == nil && old.Value != "" {
+			_, _ = s.db.SQL.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ANY($1)`, s.keyRing().HashCandidates(old.Value))
+		}
+	}
 	token := randomSecret(32)
 	csrf := randomSecret(32)
-	tokenHash := HashToken(token, s.currentConfig().SessionSecret)
-	csrfHash := HashToken(csrf, s.currentConfig().SessionSecret)
-	_, err := s.db.SQL.ExecContext(ctx, `INSERT INTO sessions(token_hash,user_id,csrf_hash,expires_at) VALUES ($1,$2,$3,$4)`,
-		tokenHash, userID, csrfHash, time.Now().Add(s.currentConfig().SessionIdleTTL))
+	ring := s.keyRing()
+	_, err := s.db.SQL.ExecContext(ctx, `INSERT INTO sessions(token_hash,user_id,csrf_hash,expires_at,key_id) VALUES ($1,$2,$3,$4,$5)`,
+		ring.Hash(token), userID, ring.Hash(csrf), time.Now().Add(s.currentConfig().SessionIdleTTL), ring.KeyID())
 	if err != nil {
 		return "", err
 	}
@@ -522,12 +765,12 @@ func (s *Server) checkCSRF(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	digest := HashToken(cookie.Value, s.currentConfig().SessionSecret)
+	ring := s.keyRing()
 	var stored []byte
-	if err := s.db.SQL.QueryRowContext(r.Context(), `SELECT csrf_hash FROM sessions WHERE token_hash=$1 AND expires_at>now()`, digest).Scan(&stored); err != nil {
+	if err := s.db.SQL.QueryRowContext(r.Context(), `SELECT csrf_hash FROM sessions WHERE token_hash = ANY($1) AND expires_at>now()`, ring.HashCandidates(cookie.Value)).Scan(&stored); err != nil {
 		return false
 	}
-	return constantEqualBytes(stored, HashToken(provided, s.currentConfig().SessionSecret))
+	return ring.MatchesAny(provided, stored)
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (*Principal, bool) {
@@ -539,6 +782,10 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (*Principa
 	}
 	if p.Role != "admin" {
 		writeProblem(w, r, http.StatusForbidden, "Forbidden", "Administrator role required.")
+		return nil, false
+	}
+	if !tokenAllowsAdministration(p) {
+		writeProblem(w, r, http.StatusForbidden, "Forbidden", "This token is read-only and cannot use the administration API.")
 		return nil, false
 	}
 	return p, true
@@ -555,7 +802,18 @@ func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request) (*Princ
 		writeProblem(w, r, http.StatusForbidden, "Forbidden", "Operator or administrator role required.")
 		return nil, false
 	}
+	if !tokenAllowsAdministration(p) {
+		writeProblem(w, r, http.StatusForbidden, "Forbidden", "This token is read-only and cannot use the administration API.")
+		return nil, false
+	}
 	return p, true
+}
+
+// tokenAllowsAdministration keeps read-scoped tokens out of the administration
+// API even when their owner is an administrator. Browser sessions carry no
+// token and are governed by role alone.
+func tokenAllowsAdministration(p *Principal) bool {
+	return p.TokenID == "" || hasScope(p, "write") || hasScope(p, "admin")
 }
 
 var errUnauthenticated = errors.New("unauthenticated")

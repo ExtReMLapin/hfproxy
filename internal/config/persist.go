@@ -2,16 +2,14 @@ package config
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"reflect"
 	"time"
+
+	"github.com/nicolas/hfproxy/internal/keyring"
 )
 
 type managedSettings struct {
@@ -49,6 +47,13 @@ type managedSettings struct {
 	LDAPBaseDN             string        `json:"ldap_base_dn"`
 	LDAPUserFilter         string        `json:"ldap_user_filter"`
 	LDAPAutoProvision      bool          `json:"ldap_auto_provision"`
+	MetricsEnabled         bool          `json:"metrics_enabled"`
+	MetricsPath            string        `json:"metrics_path"`
+	TracingEnabled         bool          `json:"tracing_enabled"`
+	TracingServiceName     string        `json:"tracing_service_name"`
+	TracingSamplingRatio   float64       `json:"tracing_sampling_ratio"`
+	OTLPEndpoint           string        `json:"otlp_endpoint"`
+	CacheInventoryRefresh  time.Duration `json:"cache_inventory_refresh"`
 }
 
 func LoadPersisted(ctx context.Context, sqlDB *sql.DB, base Config) (Config, error) {
@@ -60,9 +65,9 @@ func LoadPersisted(ctx context.Context, sqlDB *sql.DB, base Config) (Config, err
 	if err != nil {
 		return Config{}, fmt.Errorf("load saved settings: %w", err)
 	}
-	plaintext, err := decryptSettings(base.SessionSecret, ciphertext)
+	plaintext, _, err := secretRing(base).Open(ciphertext)
 	if err != nil {
-		return Config{}, fmt.Errorf("saved settings cannot be decrypted; check the session secret")
+		return Config{}, fmt.Errorf("saved settings cannot be decrypted; check HFPROXY_SESSION_SECRET and HFPROXY_SESSION_SECRET_PREVIOUS")
 	}
 	var saved managedSettings
 	if err := json.Unmarshal(plaintext, &saved); err != nil {
@@ -76,16 +81,55 @@ func SavePersisted(ctx context.Context, sqlDB *sql.DB, cfg Config, actorID strin
 	if err != nil {
 		return fmt.Errorf("encode settings")
 	}
-	ciphertext, err := encryptSettings(cfg.SessionSecret, plaintext)
+	ciphertext, err := secretRing(cfg).Seal(plaintext)
 	if err != nil {
 		return fmt.Errorf("encrypt settings")
 	}
 	_, err = sqlDB.ExecContext(ctx, `INSERT INTO app_settings(setting_key,ciphertext,updated_by,updated_at)
-		VALUES('runtime',$1,$2,now()) ON CONFLICT(setting_key) DO UPDATE SET ciphertext=EXCLUDED.ciphertext,updated_by=EXCLUDED.updated_by,updated_at=now()`, ciphertext, actorID)
+		VALUES('runtime',$1,NULLIF($2,''),now()) ON CONFLICT(setting_key) DO UPDATE SET ciphertext=EXCLUDED.ciphertext,updated_by=EXCLUDED.updated_by,updated_at=now()`, ciphertext, actorID)
 	if err != nil {
 		return fmt.Errorf("save settings: %w", err)
 	}
 	return nil
+}
+
+func secretRing(cfg Config) *keyring.Ring {
+	return keyring.NewRing(cfg.SessionSecret, cfg.PreviousSessionSecrets...)
+}
+
+// ReencryptPersisted seals the saved settings again under the current session
+// secret. It reports whether anything had to change; settings already sealed
+// under the current secret are left alone, and none saved is not an error.
+func ReencryptPersisted(ctx context.Context, sqlDB *sql.DB, cfg Config) (bool, error) {
+	tx, err := sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("start settings re-encryption: %w", err)
+	}
+	defer tx.Rollback()
+	var ciphertext []byte
+	err = tx.QueryRowContext(ctx, `SELECT ciphertext FROM app_settings WHERE setting_key='runtime' FOR UPDATE`).Scan(&ciphertext)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("load saved settings: %w", err)
+	}
+	ring := secretRing(cfg)
+	plaintext, current, err := ring.Open(ciphertext)
+	if err != nil {
+		return false, fmt.Errorf("saved settings cannot be decrypted; check HFPROXY_SESSION_SECRET and HFPROXY_SESSION_SECRET_PREVIOUS")
+	}
+	if current {
+		return false, nil
+	}
+	sealed, err := ring.Seal(plaintext)
+	if err != nil {
+		return false, fmt.Errorf("encrypt settings")
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE app_settings SET ciphertext=$1,updated_at=now() WHERE setting_key='runtime'`, sealed); err != nil {
+		return false, fmt.Errorf("save settings: %w", err)
+	}
+	return true, tx.Commit()
 }
 
 func DeletePersisted(ctx context.Context, sqlDB *sql.DB) error {
@@ -106,6 +150,7 @@ func managedFromConfig(c Config) managedSettings {
 		OIDCIssuer: c.OIDCIssuer, OIDCClientID: c.OIDCClientID, OIDCClientSecret: c.OIDCClientSecret, OIDCRedirectURL: c.OIDCRedirectURL,
 		OIDCAutoProvision: c.OIDCAutoProvision, LDAPURL: c.LDAPURL, LDAPStartTLS: c.LDAPStartTLS, LDAPBindDN: c.LDAPBindDN,
 		LDAPBindPassword: c.LDAPBindPassword, LDAPBaseDN: c.LDAPBaseDN, LDAPUserFilter: c.LDAPUserFilter, LDAPAutoProvision: c.LDAPAutoProvision,
+		MetricsEnabled: c.MetricsEnabled, MetricsPath: c.MetricsPath, TracingEnabled: c.TracingEnabled, TracingServiceName: c.TracingServiceName, TracingSamplingRatio: c.TracingSamplingRatio, OTLPEndpoint: c.OTLPEndpoint, CacheInventoryRefresh: c.CacheInventoryRefresh,
 	}
 }
 
@@ -124,41 +169,27 @@ func (s managedSettings) apply(c Config) Config {
 	c.OIDCIssuer, c.OIDCClientID, c.OIDCClientSecret, c.OIDCRedirectURL = s.OIDCIssuer, s.OIDCClientID, s.OIDCClientSecret, s.OIDCRedirectURL
 	c.OIDCAutoProvision, c.LDAPURL, c.LDAPStartTLS = s.OIDCAutoProvision, s.LDAPURL, s.LDAPStartTLS
 	c.LDAPBindDN, c.LDAPBindPassword, c.LDAPBaseDN, c.LDAPUserFilter, c.LDAPAutoProvision = s.LDAPBindDN, s.LDAPBindPassword, s.LDAPBaseDN, s.LDAPUserFilter, s.LDAPAutoProvision
+	c.MetricsEnabled, c.MetricsPath = s.MetricsEnabled, s.MetricsPath
+	c.TracingEnabled, c.TracingServiceName, c.TracingSamplingRatio, c.OTLPEndpoint = s.TracingEnabled, s.TracingServiceName, s.TracingSamplingRatio, s.OTLPEndpoint
+	if s.CacheInventoryRefresh > 0 {
+		c.CacheInventoryRefresh = s.CacheInventoryRefresh
+	}
 	return c
+}
+
+// OverriddenFields lists the settings whose effective value differs from the
+// one read from the environment because saved settings took precedence. Names
+// only: values may be secrets.
+func OverriddenFields(fromEnvironment, effective Config) []string {
+	before, after := reflect.ValueOf(fromEnvironment), reflect.ValueOf(effective)
+	var names []string
+	for i := 0; i < before.NumField(); i++ {
+		if !reflect.DeepEqual(before.Field(i).Interface(), after.Field(i).Interface()) {
+			names = append(names, before.Type().Field(i).Name)
+		}
+	}
+	return names
 }
 
 func boolPointer(value bool) *bool       { return &value }
 func stringPointer(value string) *string { return &value }
-
-func encryptSettings(secret string, plaintext []byte) ([]byte, error) {
-	gcm, err := settingsCipher(secret)
-	if err != nil {
-		return nil, err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, err
-	}
-	return gcm.Seal(nonce, nonce, plaintext, []byte("hfproxy-runtime-settings-v1")), nil
-}
-
-func decryptSettings(secret string, ciphertext []byte) ([]byte, error) {
-	gcm, err := settingsCipher(secret)
-	if err != nil {
-		return nil, err
-	}
-	if len(ciphertext) < gcm.NonceSize() {
-		return nil, fmt.Errorf("invalid ciphertext")
-	}
-	nonce, encrypted := ciphertext[:gcm.NonceSize()], ciphertext[gcm.NonceSize():]
-	return gcm.Open(nil, nonce, encrypted, []byte("hfproxy-runtime-settings-v1"))
-}
-
-func settingsCipher(secret string) (cipher.AEAD, error) {
-	key := sha256.Sum256([]byte("hfproxy settings encryption v1:" + secret))
-	block, err := aes.NewCipher(key[:])
-	if err != nil {
-		return nil, err
-	}
-	return cipher.NewGCM(block)
-}

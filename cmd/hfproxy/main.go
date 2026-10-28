@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -21,12 +23,13 @@ import (
 	"github.com/aws/smithy-go"
 	"github.com/nicolas/hfproxy/internal/config"
 	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/nicolas/hfproxy/internal/keyring"
 	"github.com/nicolas/hfproxy/internal/server"
 	"github.com/nicolas/hfproxy/internal/storage"
 )
 
 var (
-	version = "0.0.3"
+	version = "dev"
 	commit  = "unknown"
 )
 
@@ -58,6 +61,8 @@ func run(args []string) error {
 		}
 		fmt.Println("Configuration is valid.")
 		return nil
+	case "healthcheck":
+		return healthcheck(args[1:])
 	case "serve":
 		return serve(args[1:])
 	case "migrate":
@@ -83,10 +88,12 @@ Usage:
   hfproxy admin token list|revoke --id ID
   hfproxy admin repo add --type models --id org/repo --policy public
   hfproxy admin identity link --provider oidc|ldap --username NAME --subject VALUE [--issuer URL]
+  hfproxy admin rotate-secret
   hfproxy cache inspect [--repo ID] [--path QUERY]
   hfproxy cache purge [--repo ID] [--path QUERY] [--execute --yes]
   hfproxy cache verify
   hfproxy config validate
+  hfproxy healthcheck
   hfproxy version
 
 Secrets are read from HFPROXY_*_FILE or protected mounted files; never pass them as flags.
@@ -130,14 +137,21 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
-	if version < 5 {
+	if version < db.LatestMigration {
 		return fmt.Errorf("database is not migrated; run hfproxy migrate up")
 	}
+	environment := cfg
 	cfg, err = config.LoadPersisted(ctx, store.SQL, cfg)
 	if err != nil {
 		return err
 	}
+	if overridden := config.OverriddenFields(environment, cfg); len(overridden) > 0 {
+		logger(cfg).Warn("settings saved in the console override these environment values; change them in the console or reset the saved settings", "settings", overridden)
+	}
 	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if err := cfg.CheckDeployment(); err != nil {
 		return err
 	}
 	objects, err := storage.New(ctx, cfg.S3Endpoint, cfg.S3Region, cfg.S3Bucket, cfg.S3Prefix, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3ForcePathStyle, cfg.S3ServerSideEncryption)
@@ -183,7 +197,7 @@ func migrate(args []string) error {
 
 func admin(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: hfproxy admin create-user|reset-password|token|repo")
+		return fmt.Errorf("usage: hfproxy admin create-user|reset-password|token|repo|identity|rotate-secret")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -196,6 +210,12 @@ func admin(args []string) error {
 		return err
 	}
 	defer store.SQL.Close()
+	if args[0] == "rotate-secret" {
+		if len(args) != 1 {
+			return fmt.Errorf("usage: hfproxy admin rotate-secret")
+		}
+		return rotateSecret(ctx, os.Stdout, cfg, store.SQL)
+	}
 	if args[0] == "create-user" {
 		flags := flag.NewFlagSet("admin create-user", flag.ContinueOnError)
 		username := flags.String("username", "", "local login name")
@@ -393,14 +413,14 @@ func tokenCommand(ctx context.Context, store *db.Store, cfg config.Config, args 
 		if err != nil {
 			return err
 		}
-		digest := server.HashToken(secret, cfg.SessionSecret)
+		ring := keyring.NewRing(cfg.SessionSecret, cfg.PreviousSessionSecrets...)
 		prefix := secret[:16]
 		id := db.NewID()
 		var expiry any
 		if *expires > 0 {
 			expiry = time.Now().Add(*expires)
 		}
-		_, err = store.SQL.ExecContext(ctx, `INSERT INTO access_tokens(id,user_id,token_hash,prefix,name,expires_at,scopes) VALUES($1,$2,$3,$4,$5,$6,$7)`, id, userID, digest, prefix, *name, expiry, []string{*scope})
+		_, err = store.SQL.ExecContext(ctx, `INSERT INTO access_tokens(id,user_id,token_hash,prefix,name,expires_at,scopes,key_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, id, userID, ring.Hash(secret), prefix, *name, expiry, []string{*scope}, ring.KeyID())
 		if err != nil {
 			return err
 		}
@@ -726,4 +746,76 @@ func humanBytes(n int64) string {
 		}
 	}
 	return "0 B"
+}
+
+// healthcheck probes the local /healthz endpoint and exits non-zero on failure.
+// It is meant for container health checks and reads only HFPROXY_LISTEN_ADDR.
+func healthcheck(args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("usage: hfproxy healthcheck")
+	}
+	return probeHealth(healthcheckURL(os.Getenv("HFPROXY_LISTEN_ADDR")))
+}
+
+func healthcheckURL(listenAddr string) string {
+	if listenAddr == "" {
+		listenAddr = "127.0.0.1:8080"
+	}
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		host, port = "127.0.0.1", "8080"
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/healthz"
+}
+
+func probeHealth(target string) error {
+	client := &http.Client{Timeout: 3 * time.Second}
+	response, err := client.Get(target)
+	if err != nil {
+		return fmt.Errorf("health check failed: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("health check failed: status %d", response.StatusCode)
+	}
+	return nil
+}
+
+// rotateSecret finishes a session secret rotation. The operator sets the new
+// secret in HFPROXY_SESSION_SECRET and the old one in
+// HFPROXY_SESSION_SECRET_PREVIOUS; this command re-encrypts the saved settings
+// under the new secret and reports what still depends on the old one.
+func rotateSecret(ctx context.Context, out io.Writer, cfg config.Config, sqlDB *sql.DB) error {
+	changed, err := config.ReencryptPersisted(ctx, sqlDB, cfg)
+	if err != nil {
+		return err
+	}
+	if changed {
+		fmt.Fprintln(out, "Saved settings: re-encrypted under the current session secret.")
+	} else {
+		fmt.Fprintln(out, "Saved settings: already protected by the current session secret (or none are saved).")
+	}
+	keyID := keyring.NewRing(cfg.SessionSecret).KeyID()
+	var tokens, sessions int
+	if err := sqlDB.QueryRowContext(ctx, `SELECT count(*) FROM access_tokens WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now()) AND key_id <> $1`, keyID).Scan(&tokens); err != nil {
+		return err
+	}
+	if err := sqlDB.QueryRowContext(ctx, `SELECT count(*) FROM sessions WHERE expires_at>now() AND key_id <> $1`, keyID).Scan(&sessions); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Active access tokens stored under an older secret or scheme: %d\n", tokens)
+	fmt.Fprintf(out, "Active sessions stored under an older secret or scheme: %d\n", sessions)
+	if tokens == 0 && sessions == 0 {
+		fmt.Fprintln(out, "Nothing depends on the previous secrets any more: remove HFPROXY_SESSION_SECRET_PREVIOUS.")
+		return nil
+	}
+	if len(cfg.PreviousSessionSecrets) == 0 {
+		fmt.Fprintln(out, "HFPROXY_SESSION_SECRET_PREVIOUS is not set, so those tokens and sessions can no longer be verified and will be refused.")
+		return nil
+	}
+	fmt.Fprintln(out, "Keep HFPROXY_SESSION_SECRET_PREVIOUS until these are gone: a token moves to the new secret the first time it is used, sessions end on their own, and `hfproxy admin token revoke` retires tokens that are no longer needed.")
+	return nil
 }

@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"math"
+	"net"
 	"net/netip"
 	"net/url"
 	"os"
@@ -33,6 +35,10 @@ type Config struct {
 	AuthMode               string
 	AnonymousPublicRead    bool
 	SessionSecret          string
+	// PreviousSessionSecrets are older secrets still accepted while rotating
+	// (HFPROXY_SESSION_SECRET_PREVIOUS). New data is always protected with
+	// SessionSecret.
+	PreviousSessionSecrets []string
 	SessionIdleTTL         time.Duration
 	SessionAbsoluteTTL     time.Duration
 	CacheMaxFileSize       int64
@@ -51,6 +57,22 @@ type Config struct {
 	LDAPBaseDN             string
 	LDAPUserFilter         string
 	LDAPAutoProvision      bool
+	MetricsEnabled         bool
+	MetricsPath            string
+	TracingEnabled         bool
+	TracingServiceName     string
+	TracingSamplingRatio   float64
+	OTLPEndpoint           string
+	CacheInventoryRefresh  time.Duration
+
+	// Environment-only settings: they are not editable from the console and
+	// are never overridden by saved settings.
+	StagingDir           string
+	CacheFillConcurrency int
+	CacheMaxTotalSize    int64
+	RetentionDownloads   time.Duration
+	RetentionAudit       time.Duration
+	MetricsAddr          string
 }
 
 func Load() (Config, error) {
@@ -87,6 +109,7 @@ func Load() (Config, error) {
 	c.AuthMode = strings.ToLower(value("AUTH_MODE", "local"))
 	c.AnonymousPublicRead = boolean("ANONYMOUS_PUBLIC_READ", false)
 	c.SessionSecret = secret("SESSION_SECRET", "")
+	c.PreviousSessionSecrets = splitSecrets(secret("SESSION_SECRET_PREVIOUS", ""))
 	c.SessionIdleTTL = duration("SESSION_IDLE_TTL", 8*time.Hour)
 	c.SessionAbsoluteTTL = duration("SESSION_ABSOLUTE_TTL", 24*time.Hour)
 	c.CacheMaxFileSize = int64(number("CACHE_MAX_FILE_SIZE", 100<<30))
@@ -105,13 +128,99 @@ func Load() (Config, error) {
 	c.LDAPBaseDN = value("LDAP_BASE_DN", "")
 	c.LDAPUserFilter = value("LDAP_USER_FILTER", "(uid={username})")
 	c.LDAPAutoProvision = boolean("LDAP_AUTO_PROVISION", false)
+	c.MetricsEnabled = boolean("METRICS_ENABLED", false)
+	c.MetricsPath = value("METRICS_PATH", "/metrics")
+	c.TracingEnabled = boolean("TRACING_ENABLED", false)
+	c.TracingServiceName = value("TRACING_SERVICE_NAME", "hfproxy")
+	c.TracingSamplingRatio, err = strconv.ParseFloat(value("TRACING_SAMPLING_RATIO", "0.1"), 64)
+	if err != nil {
+		return Config{}, fmt.Errorf("HFPROXY_TRACING_SAMPLING_RATIO must be a number between 0 and 1")
+	}
+	c.OTLPEndpoint = value("OTLP_ENDPOINT", "")
+	c.CacheInventoryRefresh = duration("CACHE_INVENTORY_REFRESH", 5*time.Minute)
+	c.StagingDir = value("STAGING_DIR", "")
+	c.CacheFillConcurrency = number("CACHE_FILL_CONCURRENCY", 4)
+	c.CacheMaxTotalSize = int64(number("CACHE_MAX_TOTAL_SIZE", 0))
+	c.RetentionDownloads = duration("RETENTION_DOWNLOADS", 90*24*time.Hour)
+	c.RetentionAudit = duration("RETENTION_AUDIT", 365*24*time.Hour)
+	c.MetricsAddr = value("METRICS_ADDR", "")
 	if err := c.Validate(); err != nil {
 		return Config{}, err
 	}
 	return c, nil
 }
 
+// knownDevSecrets are the placeholder session secrets shipped in examples.
+var knownDevSecrets = []string{
+	"dev-only-session-secret-change-before-deployment-32-bytes",
+}
+
+// CheckDeployment rejects settings that are acceptable on a developer machine
+// but unsafe on a shared deployment. It is applied when the server starts, not
+// by Validate, so tools such as `config validate` and tests stay usable.
+func (c Config) CheckDeployment() error {
+	loopbackPublic := false
+	if c.PublicURL != "" {
+		if public, err := url.Parse(c.PublicURL); err == nil {
+			loopbackPublic = IsLoopbackHost(public.Hostname())
+		}
+	}
+	for _, dev := range knownDevSecrets {
+		if c.SessionSecret == dev && !loopbackPublic {
+			return fmt.Errorf("HFPROXY_SESSION_SECRET is the published development value; generate a unique secret")
+		}
+	}
+	if c.PublicURL == "" && !listensOnLoopback(c.ListenAddr) {
+		return fmt.Errorf("HFPROXY_PUBLIC_URL is required when listening on a non-loopback address (it enables Secure cookies and HSTS)")
+	}
+	return nil
+}
+
+const maxPreviousSecrets = 4
+
+// splitSecrets splits a list of secrets separated by commas or whitespace.
+func splitSecrets(value string) []string {
+	return strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\r' || r == '\t' })
+}
+
+func listensOnLoopback(addr string) bool {
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	return host != "" && IsLoopbackHost(host)
+}
+
 func (c Config) Validate() error {
+	if c.MetricsPath != "" && (c.MetricsPath[0] != '/' || c.MetricsPath == "/" || strings.Count(c.MetricsPath, "/") != 1 || strings.ContainsAny(c.MetricsPath, "?#")) {
+		return fmt.Errorf("HFPROXY_METRICS_PATH must be a non-root top-level URL path")
+	}
+	if c.MetricsPath == "/healthz" || c.MetricsPath == "/readyz" || c.MetricsPath == "/login" || c.MetricsPath == "/logout" {
+		return fmt.Errorf("HFPROXY_METRICS_PATH must not replace a health or authentication endpoint")
+	}
+	if (c.TracingEnabled && c.TracingServiceName == "") || math.IsNaN(c.TracingSamplingRatio) || math.IsInf(c.TracingSamplingRatio, 0) || c.TracingSamplingRatio < 0 || c.TracingSamplingRatio > 1 {
+		return fmt.Errorf("HFPROXY_TRACING_SERVICE_NAME must be non-empty and HFPROXY_TRACING_SAMPLING_RATIO must be between 0 and 1")
+	}
+	if c.OTLPEndpoint != "" {
+		endpoint, err := url.Parse(c.OTLPEndpoint)
+		if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+			return fmt.Errorf("HFPROXY_OTLP_ENDPOINT must be an HTTP(S) OTLP endpoint URL without credentials or query parameters")
+		}
+	}
+	if c.TracingEnabled && c.OTLPEndpoint == "" {
+		return fmt.Errorf("HFPROXY_OTLP_ENDPOINT is required when tracing is enabled")
+	}
+	if c.CacheFillConcurrency < 0 || c.CacheMaxTotalSize < 0 || c.RetentionDownloads < 0 || c.RetentionAudit < 0 {
+		return fmt.Errorf("HFPROXY_CACHE_FILL_CONCURRENCY, HFPROXY_CACHE_MAX_TOTAL_SIZE and the retention periods must not be negative")
+	}
+	if c.MetricsAddr != "" {
+		if _, _, err := net.SplitHostPort(c.MetricsAddr); err != nil {
+			return fmt.Errorf("HFPROXY_METRICS_ADDR must be host:port")
+		}
+	}
+	if c.CacheInventoryRefresh < 0 {
+		return fmt.Errorf("HFPROXY_CACHE_INVENTORY_REFRESH must not be negative")
+	}
 	if c.LogLevel != "debug" && c.LogLevel != "info" && c.LogLevel != "warn" && c.LogLevel != "error" {
 		return fmt.Errorf("HFPROXY_LOG_LEVEL must be debug, info, warn, or error")
 	}
@@ -120,7 +229,7 @@ func (c Config) Validate() error {
 		if publicErr != nil || public.Host == "" || public.User != nil || public.RawQuery != "" || public.Fragment != "" || (public.Scheme != "https" && public.Scheme != "http") {
 			return fmt.Errorf("HFPROXY_PUBLIC_URL must be an HTTP(S) URL without credentials, query, or fragment")
 		}
-		if public.Scheme != "https" && !isLoopbackHost(public.Hostname()) {
+		if public.Scheme != "https" && !IsLoopbackHost(public.Hostname()) {
 			return fmt.Errorf("HFPROXY_PUBLIC_URL must use HTTPS outside loopback development")
 		}
 	}
@@ -128,7 +237,7 @@ func (c Config) Validate() error {
 	if err != nil || base.Host == "" || (base.Scheme != "https" && base.Scheme != "http") || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
 		return fmt.Errorf("HFPROXY_HF_BASE_URL must be an HTTP(S) URL without user information")
 	}
-	if base.Scheme != "https" && !isLoopbackHost(base.Hostname()) {
+	if base.Scheme != "https" && !IsLoopbackHost(base.Hostname()) {
 		return fmt.Errorf("HFPROXY_HF_BASE_URL must use HTTPS outside loopback development")
 	}
 	if c.HFProxyURL != "" {
@@ -173,11 +282,11 @@ func (c Config) Validate() error {
 			return fmt.Errorf("OIDC requires HFPROXY_OIDC_ISSUER, HFPROXY_OIDC_CLIENT_ID, HFPROXY_OIDC_CLIENT_SECRET, and HFPROXY_OIDC_REDIRECT_URL")
 		}
 		issuer, issuerErr := url.Parse(c.OIDCIssuer)
-		if issuerErr != nil || issuer.Host == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" || (issuer.Scheme != "https" && !(issuer.Scheme == "http" && isLoopbackHost(issuer.Hostname()))) {
+		if issuerErr != nil || issuer.Host == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" || (issuer.Scheme != "https" && !(issuer.Scheme == "http" && IsLoopbackHost(issuer.Hostname()))) {
 			return fmt.Errorf("HFPROXY_OIDC_ISSUER must use HTTPS outside loopback development")
 		}
 		redirect, parseErr := url.Parse(c.OIDCRedirectURL)
-		if parseErr != nil || redirect.Host == "" || (redirect.Scheme != "https" && !isLoopbackHost(redirect.Hostname())) {
+		if parseErr != nil || redirect.Host == "" || (redirect.Scheme != "https" && !IsLoopbackHost(redirect.Hostname())) {
 			return fmt.Errorf("HFPROXY_OIDC_REDIRECT_URL must use HTTPS outside loopback development")
 		}
 	}
@@ -198,6 +307,14 @@ func (c Config) Validate() error {
 	}
 	if c.SessionSecret != "" && len(c.SessionSecret) < 32 {
 		return fmt.Errorf("HFPROXY_SESSION_SECRET must contain at least 32 bytes")
+	}
+	if len(c.PreviousSessionSecrets) > maxPreviousSecrets {
+		return fmt.Errorf("HFPROXY_SESSION_SECRET_PREVIOUS lists %d secrets; keep at most %d", len(c.PreviousSessionSecrets), maxPreviousSecrets)
+	}
+	for _, previous := range c.PreviousSessionSecrets {
+		if len(previous) < 32 {
+			return fmt.Errorf("every secret in HFPROXY_SESSION_SECRET_PREVIOUS must contain at least 32 bytes")
+		}
 	}
 	if c.DatabaseURL == "" {
 		return fmt.Errorf("HFPROXY_DATABASE_URL is required")
@@ -242,8 +359,8 @@ func secret(key, fallback string) string {
 
 func validateEnvironmentOverrides() error {
 	for _, key := range []string{
-		"DATABASE_URL", "HF_PROXY_URL", "HF_TOKEN", "S3_ACCESS_KEY", "S3_SECRET_KEY", "SESSION_SECRET",
-		"OIDC_CLIENT_SECRET", "LDAP_BIND_PASSWORD", "OIDC_CLIENT_SECRET",
+		"DATABASE_URL", "HF_PROXY_URL", "HF_TOKEN", "S3_ACCESS_KEY", "S3_SECRET_KEY", "SESSION_SECRET", "SESSION_SECRET_PREVIOUS",
+		"OIDC_CLIENT_SECRET", "LDAP_BIND_PASSWORD",
 	} {
 		if file := os.Getenv("HFPROXY_" + key + "_FILE"); file != "" {
 			data, err := os.ReadFile(file)
@@ -263,7 +380,7 @@ func validateEnvironmentOverrides() error {
 			}
 		}
 	}
-	for _, key := range []string{"HF_TIMEOUT", "SESSION_IDLE_TTL", "SESSION_ABSOLUTE_TTL", "CACHE_REF_TTL", "CACHE_NEGATIVE_TTL", "CACHE_GC_GRACE"} {
+	for _, key := range []string{"HF_TIMEOUT", "SESSION_IDLE_TTL", "SESSION_ABSOLUTE_TTL", "CACHE_REF_TTL", "CACHE_NEGATIVE_TTL", "CACHE_GC_GRACE", "RETENTION_DOWNLOADS", "RETENTION_AUDIT"} {
 		name := "HFPROXY_" + key
 		if value, ok := os.LookupEnv(name); ok && value != "" {
 			if _, err := time.ParseDuration(value); err != nil {
@@ -271,9 +388,12 @@ func validateEnvironmentOverrides() error {
 			}
 		}
 	}
-	if value, ok := os.LookupEnv("HFPROXY_CACHE_MAX_FILE_SIZE"); ok && value != "" {
-		if _, err := strconv.Atoi(value); err != nil {
-			return fmt.Errorf("HFPROXY_CACHE_MAX_FILE_SIZE must be an integer")
+	for _, key := range []string{"CACHE_MAX_FILE_SIZE", "CACHE_MAX_TOTAL_SIZE", "CACHE_FILL_CONCURRENCY"} {
+		name := "HFPROXY_" + key
+		if value, ok := os.LookupEnv(name); ok && value != "" {
+			if _, err := strconv.Atoi(value); err != nil {
+				return fmt.Errorf("%s must be an integer", name)
+			}
 		}
 	}
 	return nil
@@ -360,7 +480,8 @@ func NormalizeAllowedHosts(values []string) ([]string, error) {
 	return result, nil
 }
 
-func isLoopbackHost(host string) bool {
+// IsLoopbackHost reports whether host is localhost or a loopback IP address.
+func IsLoopbackHost(host string) bool {
 	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	if host == "localhost" {
 		return true

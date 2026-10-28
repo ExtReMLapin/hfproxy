@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/nicolas/hfproxy/internal/keyring"
 )
 
 func TestPersonalTokensRequireSession(t *testing.T) {
@@ -77,8 +79,13 @@ func TestPersonalTokenLifecycleAndIsolation(t *testing.T) {
 	if err := store.SQL.QueryRow(`SELECT token_hash FROM access_tokens WHERE id=$1`, created.ID).Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(stored, HashToken(created.Token, auditAPISessionSecret)) {
-		t.Fatal("token is not stored as the expected keyed hash")
+	ring := keyring.NewRing(auditAPISessionSecret)
+	if !bytes.Equal(stored, ring.Hash(created.Token)) || bytes.Equal(stored, HashToken(created.Token, auditAPISessionSecret)) {
+		t.Fatal("token is not stored under the key derived for tokens")
+	}
+	var keyID string
+	if err := store.SQL.QueryRow(`SELECT key_id FROM access_tokens WHERE id=$1`, created.ID).Scan(&keyID); err != nil || keyID != ring.KeyID() {
+		t.Fatalf("token key_id = %q (%v), want %q", keyID, err, ring.KeyID())
 	}
 	list := do("GET", "/api/v1/me/tokens", "")
 	if list.Code != http.StatusOK || strings.Contains(list.Body.String(), created.Token) || strings.Contains(list.Body.String(), "token_hash") || !strings.Contains(list.Body.String(), created.ID) {

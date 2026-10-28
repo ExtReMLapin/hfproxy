@@ -35,7 +35,7 @@ func auditAPIConfig() config.Config {
 
 func auditAPINewServer(t *testing.T, store *db.Store, cfg config.Config) *Server {
 	t.Helper()
-	s := &Server{db: store, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), preloads: make(map[string]*preloadJob), preloadSlots: make(chan struct{}, 2)}
+	s := &Server{db: store, metrics: newMetrics(), logger: slog.New(slog.NewTextHandler(io.Discard, nil)), preloads: make(map[string]*preloadJob), preloadSlots: make(chan struct{}, 2)}
 	s.runtime.Store(&runtimeState{config: cfg, httpClient: newHFHTTPClient(cfg)})
 	return s
 }

@@ -3,8 +3,11 @@ package server
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/nicolas/hfproxy/internal/storage"
 )
 
 const negativeCacheMaxEntries = 10_000
@@ -82,7 +85,7 @@ func (s *Server) startOrphanedBlobGC(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				_ = s.collectOrphanedBlobs(ctx)
+				s.runBlobGC(ctx)
 			case <-ctx.Done():
 				return
 			}
@@ -90,72 +93,108 @@ func (s *Server) startOrphanedBlobGC(ctx context.Context) {
 	}()
 }
 
+// runBlobGC runs one collection and reports its outcome in logs and metrics.
+func (s *Server) runBlobGC(ctx context.Context) {
+	started := time.Now()
+	deleted, err := s.collectOrphanedBlobsCounted(ctx)
+	result := "success"
+	if err != nil {
+		result = "error"
+		if ctx.Err() == nil {
+			s.logger.Warn("orphaned blob collection failed", "class", fmt.Sprintf("%T", err), "deleted", deleted)
+		}
+	} else if deleted > 0 {
+		s.logger.Info("orphaned blob collection completed", "deleted", deleted, "duration_ms", time.Since(started).Milliseconds())
+	}
+	if s.metrics != nil {
+		s.metrics.add("hfproxy_gc_runs_total", []string{"result=" + result}, 1)
+		s.metrics.add("hfproxy_gc_blobs_deleted_total", nil, float64(deleted))
+		s.metrics.setGauge("hfproxy_gc_last_run_timestamp_seconds", float64(time.Now().Unix()))
+	}
+}
+
 func (s *Server) collectOrphanedBlobs(ctx context.Context) error {
+	_, err := s.collectOrphanedBlobsCounted(ctx)
+	return err
+}
+
+// collectOrphanedBlobsCounted deletes every orphaned blob past the grace
+// period. A blob that fails does not stop the others; the first error is
+// returned after the pass.
+func (s *Server) collectOrphanedBlobsCounted(ctx context.Context) (int, error) {
 	objects := s.currentStorage()
 	if objects == nil || s.currentConfig().CacheGCGrace < 0 {
-		return nil
+		return 0, nil
 	}
 	rows, err := s.db.SQL.QueryContext(ctx, `SELECT id FROM blobs b
 		WHERE b.orphaned_at IS NOT NULL AND b.orphaned_at < now()-$1::interval
 		AND NOT EXISTS (SELECT 1 FROM artifacts a WHERE a.blob_id=b.id)`, s.currentConfig().CacheGCGrace.String())
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			return err
+			return 0, err
 		}
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return err
+		return 0, err
 	}
 	rows.Close()
+	deleted := 0
+	var firstErr error
 	for _, id := range ids {
-		tx, err := s.db.SQL.BeginTx(ctx, nil)
-		if err != nil {
-			return err
+		if ctx.Err() != nil {
+			return deleted, ctx.Err()
 		}
-		var key string
-		if err = tx.QueryRowContext(ctx, `SELECT storage_key FROM blobs WHERE id=$1 AND orphaned_at IS NOT NULL AND orphaned_at < now()-$2::interval FOR UPDATE`, id, s.currentConfig().CacheGCGrace.String()).Scan(&key); err == sql.ErrNoRows {
-			_ = tx.Rollback()
-			continue
-		} else if err != nil {
-			_ = tx.Rollback()
-			return err
+		removed, err := s.collectOrphanedBlob(ctx, objects, id)
+		if removed {
+			deleted++
 		}
-		var refs int
-		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM artifacts WHERE blob_id=$1`, id).Scan(&refs); err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-		if refs > 0 {
-			_, err = tx.ExecContext(ctx, `UPDATE blobs SET orphaned_at=NULL WHERE id=$1`, id)
-			if err == nil {
-				err = tx.Commit()
-			} else {
-				_ = tx.Rollback()
-			}
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		if err = objects.Delete(ctx, key); err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-		if _, err = tx.ExecContext(ctx, `DELETE FROM blobs WHERE id=$1`, id); err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-		if err = tx.Commit(); err != nil {
-			return err
+		if err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
-	return nil
+	return deleted, firstErr
+}
+
+// collectOrphanedBlob removes one blob and its object if it is still orphaned
+// and unreferenced once locked. It reports whether the blob was deleted.
+func (s *Server) collectOrphanedBlob(ctx context.Context, objects *storage.S3, id string) (bool, error) {
+	tx, err := s.db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var key string
+	if err = tx.QueryRowContext(ctx, `SELECT storage_key FROM blobs WHERE id=$1 AND orphaned_at IS NOT NULL AND orphaned_at < now()-$2::interval FOR UPDATE`, id, s.currentConfig().CacheGCGrace.String()).Scan(&key); err == sql.ErrNoRows {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	var refs int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM artifacts WHERE blob_id=$1`, id).Scan(&refs); err != nil {
+		return false, err
+	}
+	if refs > 0 {
+		if _, err = tx.ExecContext(ctx, `UPDATE blobs SET orphaned_at=NULL WHERE id=$1`, id); err != nil {
+			return false, err
+		}
+		return false, tx.Commit()
+	}
+	if err = objects.Delete(ctx, key); err != nil {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM blobs WHERE id=$1`, id); err != nil {
+		return false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }

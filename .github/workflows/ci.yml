@@ -10,6 +10,21 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      HFPROXY_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -25,10 +40,49 @@ jobs:
         run: test -z "$(gofmt -l cmd internal)"
       - name: Vet
         run: go vet ./...
+      - name: Start S3 test server
+        run: |
+          python3 -m venv "$RUNNER_TEMP/moto"
+          "$RUNNER_TEMP/moto/bin/pip" install --quiet "moto[server]==5.2.5"
+          "$RUNNER_TEMP/moto/bin/moto_server" -H 127.0.0.1 -p 5055 > "$RUNNER_TEMP/moto.log" 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:5055/moto-api/; then break; fi
+            sleep 1
+          done
+          curl -sS -f -X PUT http://127.0.0.1:5055/hfproxy
       - name: Test
-        run: go test ./...
+        env:
+          HFPROXY_TEST_S3_ENDPOINT: http://127.0.0.1:5055
+          HFPROXY_TEST_S3_ACCESS_KEY: test
+          HFPROXY_TEST_S3_SECRET_KEY: test
+          HFPROXY_TEST_S3_REGION: us-east-1
+          HFPROXY_TEST_S3_BUCKET: hfproxy
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+        run: |
+          go test -race -count=1 -v ./... | tee test.log
+          if grep -q -- '--- SKIP' test.log; then
+            echo "Integration tests were skipped; PostgreSQL and S3 must both be available."
+            grep -- '--- SKIP' test.log
+            exit 1
+          fi
       - name: Build
         run: go build -trimpath ./cmd/hfproxy
+  vulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+      - name: Scan dependencies and standard library for known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
   ui:
     runs-on: ubuntu-latest
     defaults:

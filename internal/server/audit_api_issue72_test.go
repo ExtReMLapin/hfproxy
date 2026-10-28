@@ -18,8 +18,8 @@ func TestIssue72ConcurrentAdminDemotionsKeepAnActiveAdmin(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	principalA := &Principal{ID: adminA, Username: "issue72-a", Role: "admin", Authenticated: true}
-	principalB := &Principal{ID: adminB, Username: "issue72-b", Role: "admin", Authenticated: true}
+	principalA := &Principal{ID: adminA, Username: "issue72-a", Role: "admin", Authenticated: true, TokenID: "issue72-token-a", Scopes: []string{"admin"}}
+	principalB := &Principal{ID: adminB, Username: "issue72-b", Role: "admin", Authenticated: true, TokenID: "issue72-token-b", Scopes: []string{"admin"}}
 
 	for round := 0; round < 10; round++ {
 		if _, err := store.SQL.Exec(`UPDATE users SET role='admin',status='active' WHERE id IN ($1,$2)`, adminA, adminB); err != nil {

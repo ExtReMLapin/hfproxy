@@ -2,9 +2,7 @@ package server
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"database/sql"
@@ -23,6 +21,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/nicolas/hfproxy/internal/keyring"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/oauth2"
 )
@@ -56,6 +55,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.renderLogin(w, data, http.StatusOK)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if err := r.ParseForm(); err != nil {
 		s.renderLogin(w, data, http.StatusBadRequest)
 		return
@@ -104,6 +104,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		err = authErr
 	}
 	if err != nil || userID == "" {
+		s.recordLoginFailure(r.Context(), username)
 		s.audit(r.Context(), "", "auth.login_failed", "user", username, map[string]any{"provider": provider})
 		data.Error = "Identifiant ou mot de passe incorrect."
 		s.renderLogin(w, data, http.StatusUnauthorized)
@@ -147,9 +148,9 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("hfproxy_session")
 	var actorID string
 	if err == nil && cookie.Value != "" {
-		digest := HashToken(cookie.Value, s.currentConfig().SessionSecret)
-		_ = s.db.SQL.QueryRowContext(r.Context(), `SELECT user_id FROM sessions WHERE token_hash=$1`, digest).Scan(&actorID)
-		_, _ = s.db.SQL.ExecContext(r.Context(), `DELETE FROM sessions WHERE token_hash=$1`, digest)
+		candidates := s.keyRing().HashCandidates(cookie.Value)
+		_ = s.db.SQL.QueryRowContext(r.Context(), `SELECT user_id FROM sessions WHERE token_hash = ANY($1)`, candidates).Scan(&actorID)
+		_, _ = s.db.SQL.ExecContext(r.Context(), `DELETE FROM sessions WHERE token_hash = ANY($1)`, candidates)
 	}
 	s.audit(r.Context(), actorID, "auth.logout", "user", actorID, nil)
 	clearCookie(w, "hfproxy_session")
@@ -189,7 +190,9 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	defer http.SetCookie(w, &http.Cookie{Name: "hfproxy_oidc", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: strings.HasPrefix(s.currentConfig().OIDCRedirectURL, "https://"), SameSite: http.SameSiteLaxMode})
+	// Clear the state cookie before any redirect: headers set after
+	// http.Redirect has written the response are silently dropped.
+	http.SetCookie(w, &http.Cookie{Name: "hfproxy_oidc", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: strings.HasPrefix(s.currentConfig().OIDCRedirectURL, "https://"), SameSite: http.SameSiteLaxMode})
 	cookie, err := r.Cookie("hfproxy_oidc")
 	if err != nil {
 		http.Redirect(w, r, "/login?error=invalid_state", http.StatusSeeOther)
@@ -291,7 +294,9 @@ func (s *Server) authenticateLDAP(ctx context.Context, username, password string
 	if s.currentConfig().LDAPURL == "" || username == "" || password == "" {
 		return "", fmt.Errorf("LDAP authentication is not available")
 	}
-	conn, err := ldap.DialURL(s.currentConfig().LDAPURL)
+	conn, err := ldap.DialURL(s.currentConfig().LDAPURL,
+		ldap.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}),
+		ldap.DialWithTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12}))
 	if err != nil {
 		return "", fmt.Errorf("LDAP connection failed")
 	}
@@ -390,11 +395,10 @@ func clearCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 }
 
-func HashToken(token, pepper string) []byte {
-	h := hmac.New(sha256.New, []byte(pepper))
-	_, _ = h.Write([]byte(token))
-	return h.Sum(nil)
-}
+// HashToken is the original token hash, HMAC-SHA256 keyed with the raw session
+// secret. New tokens use keys derived from the secret (see internal/keyring);
+// this form is still accepted so existing tokens keep working.
+func HashToken(token, pepper string) []byte { return keyring.LegacyHash(token, pepper) }
 
 func HashPassword(password string) (string, error) {
 	if len(password) < 12 || len(password) > 1024 {
@@ -420,7 +424,23 @@ var dummyPasswordHash = func() string {
 	return hash
 }()
 
+// allowLoginAttempt applies the shared (PostgreSQL) login limits. Without a
+// database, or if the shared counters cannot be read, it falls back to
+// per-process counters rather than leaving the endpoint unprotected.
 func (s *Server) allowLoginAttempt(r *http.Request, username string) (int, bool) {
+	if s.db != nil && s.db.SQL != nil {
+		retryAfter, allowed, err := s.allowLoginAttemptShared(r.Context(), s.loginClientIP(r), username)
+		if err == nil {
+			return retryAfter, allowed
+		}
+		if s.logger != nil {
+			s.logger.Warn("shared login limits unavailable; using local counters", "class", fmt.Sprintf("%T", err))
+		}
+	}
+	return s.allowLoginAttemptLocal(r, username)
+}
+
+func (s *Server) allowLoginAttemptLocal(r *http.Request, username string) (int, bool) {
 	host := s.loginClientIP(r)
 	keys := []string{"ip:" + host, "user:" + strings.ToLower(strings.TrimSpace(username))}
 	now := time.Now()
@@ -535,25 +555,7 @@ func constantEqual(a, b string) bool {
 	return len(a) == len(b) && subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-func constantEqualBytes(a, b []byte) bool {
-	return len(a) == len(b) && subtle.ConstantTimeCompare(a, b) == 1
-}
-
 func usernameFromEmail(email string) string {
 	local, _, _ := strings.Cut(email, "@")
-	local = strings.ToLower(local)
-	var b strings.Builder
-	for _, r := range local {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
-			b.WriteRune(r)
-		}
-	}
-	value := strings.Trim(b.String(), "._-")
-	if len(value) > 40 {
-		value = value[:40]
-	}
-	if value == "" {
-		value = "user"
-	}
-	return value + "-" + randomSecret(4)
+	return usernameFromLogin(local)
 }

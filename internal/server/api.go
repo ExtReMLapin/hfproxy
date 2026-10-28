@@ -204,6 +204,13 @@ type settingsResponse struct {
 	LDAPBaseDN             string   `json:"ldap_base_dn"`
 	LDAPUserFilter         string   `json:"ldap_user_filter"`
 	LDAPAutoProvision      bool     `json:"ldap_auto_provision"`
+	MetricsEnabled         bool     `json:"metrics_enabled"`
+	MetricsPath            string   `json:"metrics_path"`
+	TracingEnabled         bool     `json:"tracing_enabled"`
+	TracingServiceName     string   `json:"tracing_service_name"`
+	TracingSamplingRatio   float64  `json:"tracing_sampling_ratio"`
+	OTLPEndpoint           string   `json:"otlp_endpoint"`
+	CacheInventoryRefresh  string   `json:"cache_inventory_refresh"`
 }
 
 type settingsInput struct {
@@ -246,6 +253,13 @@ type settingsInput struct {
 	LDAPBaseDN             string   `json:"ldap_base_dn"`
 	LDAPUserFilter         string   `json:"ldap_user_filter"`
 	LDAPAutoProvision      bool     `json:"ldap_auto_provision"`
+	MetricsEnabled         bool     `json:"metrics_enabled"`
+	MetricsPath            string   `json:"metrics_path"`
+	TracingEnabled         bool     `json:"tracing_enabled"`
+	TracingServiceName     string   `json:"tracing_service_name"`
+	TracingSamplingRatio   float64  `json:"tracing_sampling_ratio"`
+	OTLPEndpoint           string   `json:"otlp_endpoint"`
+	CacheInventoryRefresh  string   `json:"cache_inventory_refresh"`
 }
 
 func settingsView(cfg config.Config) settingsResponse {
@@ -258,6 +272,7 @@ func settingsView(cfg config.Config) settingsResponse {
 		OIDCIssuer: cfg.OIDCIssuer, OIDCClientID: cfg.OIDCClientID, OIDCClientSecretSet: cfg.OIDCClientSecret != "", OIDCRedirectURL: cfg.OIDCRedirectURL,
 		OIDCAutoProvision: cfg.OIDCAutoProvision, LDAPURL: cfg.LDAPURL, LDAPStartTLS: cfg.LDAPStartTLS, LDAPBindDN: cfg.LDAPBindDN,
 		LDAPBindPasswordSet: cfg.LDAPBindPassword != "", LDAPBaseDN: cfg.LDAPBaseDN, LDAPUserFilter: cfg.LDAPUserFilter, LDAPAutoProvision: cfg.LDAPAutoProvision,
+		MetricsEnabled: cfg.MetricsEnabled, MetricsPath: cfg.MetricsPath, TracingEnabled: cfg.TracingEnabled, TracingServiceName: cfg.TracingServiceName, TracingSamplingRatio: cfg.TracingSamplingRatio, OTLPEndpoint: cfg.OTLPEndpoint, CacheInventoryRefresh: cfg.CacheInventoryRefresh.String(),
 	}
 }
 
@@ -284,7 +299,7 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, r, http.StatusBadRequest, "Settings could not be applied", "Check provider availability and configuration, then retry.")
 			return
 		}
-		fields := []string{"public_url", "huggingface", "s3", "authentication", "cache"}
+		fields := []string{"public_url", "huggingface", "s3", "authentication", "cache", "observability"}
 		s.audit(r.Context(), p.ID, "settings.update", "settings", "runtime", map[string]any{"updated_sections": fields})
 		writeJSON(w, http.StatusOK, settingsView(cfg))
 	case http.MethodDelete:
@@ -295,6 +310,25 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (in settingsInput) apply(cfg config.Config) (config.Config, error) {
+	var err error
+	cfg.MetricsEnabled = in.MetricsEnabled
+	cfg.MetricsPath = strings.TrimSpace(in.MetricsPath)
+	if cfg.MetricsPath == "" {
+		cfg.MetricsPath = "/metrics"
+	}
+	cfg.TracingEnabled = in.TracingEnabled
+	cfg.TracingServiceName = strings.TrimSpace(in.TracingServiceName)
+	if cfg.TracingServiceName == "" {
+		cfg.TracingServiceName = "hfproxy"
+	}
+	cfg.TracingSamplingRatio = in.TracingSamplingRatio
+	cfg.OTLPEndpoint = strings.TrimSpace(in.OTLPEndpoint)
+	cfg.CacheInventoryRefresh, err = time.ParseDuration(in.CacheInventoryRefresh)
+	if in.CacheInventoryRefresh == "" {
+		cfg.CacheInventoryRefresh = 5 * time.Minute
+	} else if err != nil {
+		return config.Config{}, fmt.Errorf("cache inventory refresh must be a valid Go duration")
+	}
 	parseDuration := func(name, value string, current time.Duration) (time.Duration, error) {
 		if value == "" {
 			return current, nil
@@ -305,7 +339,6 @@ func (in settingsInput) apply(cfg config.Config) (config.Config, error) {
 		}
 		return parsed, nil
 	}
-	var err error
 	cfg.PublicURL, cfg.HFBaseURL = strings.TrimSpace(in.PublicURL), strings.TrimSpace(in.HFBaseURL)
 	var hostErr error
 	cfg.HFAllowedHosts, hostErr = config.NormalizeAllowedHosts(in.HFAllowedHosts)
@@ -565,7 +598,7 @@ func (s *Server) apiActiveDownloads(w http.ResponseWriter, r *http.Request) {
 		AND ($1='admin' OR r.access_policy='public'
 			OR (r.access_policy='allowlist' AND (
 			EXISTS(SELECT 1 FROM repo_grants g WHERE g.repository_id=r.id AND g.subject_type='user' AND g.subject_id=$2)
-			OR EXISTS(SELECT 1 FROM repo_grants g JOIN group_members m ON m.group_id=g.subject_id WHERE g.repository_id=r.id AND g.subject_type='group' AND m.user_id=$2)))
+			OR EXISTS(SELECT 1 FROM repo_grants g JOIN group_members m ON m.group_id=g.subject_id WHERE g.repository_id=r.id AND g.subject_type='group' AND m.user_id=$2))))
 		ORDER BY d.started_at DESC LIMIT 50`, p.Role, p.ID)
 	if err != nil {
 		writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to read active downloads.")

@@ -3,12 +3,17 @@ package server
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/nicolas/hfproxy/internal/config"
 )
 
 func TestIssue105CachePublishContextOutlivesClientContext(t *testing.T) {
@@ -60,6 +65,213 @@ func TestParseResolvePath(t *testing.T) {
 	}
 }
 
+func TestResolveRouteMatrixSupportsAllRepositoryTypes(t *testing.T) {
+	for _, repoType := range []string{"models", "datasets", "spaces"} {
+		t.Run(repoType, func(t *testing.T) {
+			path := "/" + repoType + "/org/repo/resolve/main/path/to/file.bin"
+			got, err := parseResolvePath(path)
+			if err != nil {
+				t.Fatalf("parseResolvePath(%q) error = %v", path, err)
+			}
+			want := resolvePath{RepoType: repoType, RepoID: "org/repo", Revision: "main", FilePath: "path/to/file.bin"}
+			if got != want {
+				t.Fatalf("parseResolvePath(%q) = %#v, want %#v", path, got, want)
+			}
+			wantUpstream := "/org/repo/resolve/main/path/to/file.bin"
+			if repoType != "models" {
+				wantUpstream = "/" + repoType + wantUpstream
+			}
+			if upstream := upstreamResolvePath(got); upstream != wantUpstream {
+				t.Fatalf("upstreamResolvePath(%#v) = %q", got, upstream)
+			}
+		})
+	}
+
+	untagged, err := parseResolvePath("/org/repo/resolve/main/config.json")
+	if err != nil {
+		t.Fatalf("untyped model route error = %v", err)
+	}
+	if untagged.RepoType != "models" {
+		t.Fatalf("untyped model route type = %q, want models", untagged.RepoType)
+	}
+}
+
+func TestHubMetadataRouteMatrixSupportsAllOperations(t *testing.T) {
+	for _, operation := range []string{"", "revision/main", "tree/main", "tree/main/config", "commits/main"} {
+		for _, repoType := range []string{"models", "datasets", "spaces"} {
+			t.Run(repoType+"/"+operation, func(t *testing.T) {
+				path := "/api/" + repoType + "/org/repo"
+				if operation != "" {
+					path += "/" + operation
+				}
+				got, upstream, _, err := parseHubAPIPath(path, nil)
+				if err != nil {
+					t.Fatalf("parseHubAPIPath(%q) error = %v", path, err)
+				}
+				if got.RepoType != repoType || got.RepoID != "org/repo" || upstream != path {
+					t.Fatalf("parseHubAPIPath(%q) = %#v, %q", path, got, upstream)
+				}
+			})
+		}
+	}
+}
+
+func TestFetchHubPrivateTokenIsNotSentToCDN(t *testing.T) {
+	var requests []string
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests = append(requests, r.URL.Host+" Authorization="+r.Header.Get("Authorization"))
+		switch r.URL.Host {
+		case "huggingface.co":
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header: http.Header{
+					"Location":      []string{"https://cdn-lfs.hf.co/model/config.json"},
+					"X-Linked-Etag": []string{`"private-lfs-digest"`},
+					"X-Linked-Size": []string{"42"},
+				},
+				Body: io.NopCloser(strings.NewReader("")),
+			}, nil
+		case "cdn-lfs.hf.co":
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("ok")),
+			}, nil
+		default:
+			return nil, fmt.Errorf("unexpected upstream host %q", r.URL.Host)
+		}
+	})}
+	s := &Server{}
+	s.runtime.Store(&runtimeState{
+		config: config.Config{
+			HFBaseURL:      "https://huggingface.co",
+			HFToken:        "private-read-token",
+			HFAllowedHosts: []string{"cdn-lfs.hf.co"},
+			HFTimeout:      time.Second,
+		},
+		httpClient: client,
+	})
+
+	response, first, err := s.fetchHub(context.Background(), http.MethodHead, "/models/org/private/resolve/main/config.json", nil, nil)
+	if err != nil {
+		t.Fatalf("fetchHub() error = %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("final status = %d, want 200", response.StatusCode)
+	}
+	if first.Get("X-Linked-Etag") != `"private-lfs-digest"` {
+		t.Fatalf("first response headers lost LFS identity: %v", first)
+	}
+	want := []string{
+		"huggingface.co Authorization=Bearer private-read-token",
+		"cdn-lfs.hf.co Authorization=",
+	}
+	if strings.Join(requests, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("upstream requests = %v, want %v", requests, want)
+	}
+}
+
+func TestAllowedRedirectHostRejectsUntrustedDestinations(t *testing.T) {
+	s := &Server{}
+	s.runtime.Store(&runtimeState{config: config.Config{
+		HFBaseURL:      "https://huggingface.co",
+		HFAllowedHosts: []string{"huggingface.co", "*.hf.co"},
+	}})
+	for _, tt := range []struct {
+		host string
+		want bool
+	}{
+		{host: "huggingface.co", want: true},
+		{host: "cdn-lfs.hf.co", want: true},
+		{host: "cdn-lfs.hf.co.", want: true},
+		{host: "hf.co.evil.example", want: false},
+		{host: "127.0.0.1", want: false},
+		{host: "169.254.169.254", want: false},
+	} {
+		t.Run(tt.host, func(t *testing.T) {
+			if got := s.allowedRedirectHost(tt.host); got != tt.want {
+				t.Fatalf("allowedRedirectHost(%q) = %v, want %v", tt.host, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFetchHubRedirectPolicyPreservesSignedURLAndRejectsUnsafeTargets(t *testing.T) {
+	unsafeLocations := []string{
+		"http://attacker.example/model",
+		"https://attacker.example/model",
+		"https://attacker.example:8443/model",
+		"https://user:pass@cdn-lfs.hf.co/model",
+		"https://127.0.0.1/model",
+	}
+	for _, location := range unsafeLocations {
+		t.Run(location, func(t *testing.T) {
+			client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": []string{location}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+			})}
+			s := &Server{}
+			s.runtime.Store(&runtimeState{config: config.Config{
+				HFBaseURL:      "https://huggingface.co",
+				HFAllowedHosts: []string{"huggingface.co", "*.hf.co"},
+				HFTimeout:      time.Second,
+			}, httpClient: client})
+			if _, _, err := s.fetchHub(context.Background(), http.MethodHead, "/org/repo/resolve/main/file.bin", nil, nil); err == nil {
+				t.Fatalf("fetchHub accepted unsafe redirect %q", location)
+			}
+		})
+	}
+
+	var seenQuery string
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host == "huggingface.co" {
+			return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": []string{"https://cdn-lfs.hf.co/object?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=60&X-Amz-Signature=abc"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+		}
+		seenQuery = r.URL.RawQuery
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("ok"))}, nil
+	})}
+	s := &Server{}
+	s.runtime.Store(&runtimeState{config: config.Config{
+		HFBaseURL:      "https://huggingface.co",
+		HFToken:        "hub-token",
+		HFAllowedHosts: []string{"huggingface.co", "*.hf.co"},
+		HFTimeout:      time.Second,
+	}, httpClient: client})
+	response, _, err := s.fetchHub(context.Background(), http.MethodGet, "/org/repo/resolve/main/file.bin", nil, nil)
+	if err != nil {
+		t.Fatalf("fetchHub signed redirect: %v", err)
+	}
+	response.Body.Close()
+	if seenQuery != "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=60&X-Amz-Signature=abc" {
+		t.Fatalf("signed redirect query = %q", seenQuery)
+	}
+}
+
+func TestFetchHubRedirectLimitIsEnforced(t *testing.T) {
+	requests := 0
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		location := fmt.Sprintf("https://cdn-%d.hf.co/object", requests)
+		return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": []string{location}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})}
+	s := &Server{}
+	s.runtime.Store(&runtimeState{config: config.Config{
+		HFBaseURL:      "https://huggingface.co",
+		HFAllowedHosts: []string{"huggingface.co", "*.hf.co"},
+		HFTimeout:      time.Second,
+	}, httpClient: client})
+	if _, _, err := s.fetchHub(context.Background(), http.MethodGet, "/org/repo/resolve/main/file.bin", nil, nil); err == nil {
+		t.Fatal("fetchHub accepted more than the configured redirect limit")
+	}
+	if requests != 6 {
+		t.Fatalf("redirect requests = %d, want 6 (five followed redirects plus the rejected sixth)", requests)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
 func TestIssue104CacheHitHeadersPreserveLFSIdentity(t *testing.T) {
 	digest := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	const size = int64(1234)
@@ -88,7 +300,7 @@ func TestParseByteRange(t *testing.T) {
 		{name: "open end", value: "bytes=5-", start: 5, end: 9, partial: true, valid: true},
 		{name: "suffix", value: "bytes=-3", start: 7, end: 9, partial: true, valid: true},
 		{name: "clamp end", value: "bytes=8-99", start: 8, end: 9, partial: true, valid: true},
-		{name: "multiple ranges ignored", value: "bytes=0-1,4-5", valid: true},
+		{name: "multiple ranges rejected", value: "bytes=0-1,4-5", valid: false},
 		{name: "start beyond object", value: "bytes=10-", valid: false},
 		{name: "reversed range", value: "bytes=8-3", valid: false},
 		{name: "zero suffix", value: "bytes=-0", valid: false},

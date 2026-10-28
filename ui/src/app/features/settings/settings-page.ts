@@ -7,7 +7,7 @@ import { ManagedSettings, SettingsDraft } from '../../core/admin.types';
 import { IconComponent } from '../../shared/icon/icon';
 import { PageHeadingComponent } from '../../shared/page-heading/page-heading';
 
-type SettingsSection = 'connections' | 'storage' | 'access' | 'oidc' | 'ldap' | 'cache';
+type SettingsSection = 'connections' | 'storage' | 'access' | 'oidc' | 'ldap' | 'cache' | 'observability';
 
 @Component({
   selector: 'app-settings-page',
@@ -33,6 +33,7 @@ export class SettingsPageComponent implements OnInit {
     { id: 'oidc', label: 'OIDC / SSO', icon: 'key' },
     { id: 'ldap', label: 'LDAP', icon: 'users' },
     { id: 'cache', label: 'Cache rules', icon: 'layers' },
+    { id: 'observability', label: 'Observability', icon: 'layers' },
   ];
 
   ngOnInit(): void {

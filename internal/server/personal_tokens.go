@@ -118,7 +118,8 @@ func (s *Server) apiPersonalTokens(w http.ResponseWriter, r *http.Request, suffi
 		secret := "hfpx_" + randomSecret(32)
 		expires := time.Now().UTC().Add(time.Duration(input.ExpiresInDays) * 24 * time.Hour)
 		item := personalToken{ID: db.NewID(), Name: input.Name, Prefix: secret[:16], Scopes: []string{"read"}, ExpiresAt: &expires}
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO access_tokens(id,user_id,token_hash,prefix,name,scopes,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING created_at`, item.ID, p.ID, HashToken(secret, s.currentConfig().SessionSecret), item.Prefix, item.Name, item.Scopes, expires).Scan(&item.CreatedAt)
+		ring := s.keyRing()
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO access_tokens(id,user_id,token_hash,prefix,name,scopes,expires_at,key_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING created_at`, item.ID, p.ID, ring.Hash(secret), item.Prefix, item.Name, item.Scopes, expires, ring.KeyID()).Scan(&item.CreatedAt)
 		if err != nil {
 			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to create a token.")
 			return

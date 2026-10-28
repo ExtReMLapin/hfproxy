@@ -125,6 +125,11 @@
                     <p class="mt-1 text-[11px] font-medium text-amber-700">Preload interrupted</p>
                   } @else if (cacheIsIncomplete(repo)) {
                     <p class="mt-1 text-[11px] font-medium text-amber-700">Cache incomplete</p>
+                  } @else if (preloadFailed(repo); as job) {
+                    <p class="mt-1 text-[11px] font-medium text-rose-700">Preload failed</p>
+                    @if (job.error) {
+                      <p class="mt-1 max-w-xs text-[11px] leading-4 text-rose-600">{{ job.error }}</p>
+                    }
                   }
                 </div>
               </div>
