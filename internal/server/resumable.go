@@ -71,7 +71,9 @@ func (s *Server) downloadResumable(ctx context.Context, objectStore *storage.S3,
 	if err != nil {
 		return nil, "", nil, err
 	}
-	_, _ = s.db.SQL.ExecContext(ctx, `UPDATE downloads SET bytes=$2 WHERE id=$1 AND status='downloading'`, downloadID, resume.CompletedBytes)
+	if _, err := s.db.SQL.ExecContext(ctx, `UPDATE downloads SET bytes=$2 WHERE id=$1 AND status='downloading'`, downloadID, resume.CompletedBytes); err != nil {
+		s.logger.Warn("download progress could not be recorded", "request_id", requestID(ctx))
+	}
 	if stream != nil && resume.CompletedBytes > 0 {
 		if err := s.streamCompletedResume(ctx, objectStore, resume, stream); err != nil {
 			return nil, "", resume, err

@@ -150,7 +150,9 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if err == nil && cookie.Value != "" {
 		candidates := s.keyRing().HashCandidates(cookie.Value)
 		_ = s.db.SQL.QueryRowContext(r.Context(), `SELECT user_id FROM sessions WHERE token_hash = ANY($1)`, candidates).Scan(&actorID)
-		_, _ = s.db.SQL.ExecContext(r.Context(), `DELETE FROM sessions WHERE token_hash = ANY($1)`, candidates)
+		if _, err := s.db.SQL.ExecContext(r.Context(), `DELETE FROM sessions WHERE token_hash = ANY($1)`, candidates); err != nil {
+			s.logger.Error("session could not be deleted at logout; it stays valid until it expires", "request_id", requestID(r.Context()))
+		}
 	}
 	s.audit(r.Context(), actorID, "auth.logout", "user", actorID, nil)
 	clearCookie(w, "hfproxy_session")
@@ -385,10 +387,6 @@ func usernameFromLogin(value string) string {
 		base = "user"
 	}
 	return base + "-" + randomSecret(4)
-}
-
-func (s *Server) renderDashboardLogout(w http.ResponseWriter, csrf string) template.HTML {
-	return template.HTML(`<form method="post" action="/logout"><input type="hidden" name="csrf_token" value="` + template.HTMLEscapeString(csrf) + `"><button class="quiet-button">Se déconnecter</button></form>`)
 }
 
 func clearCookie(w http.ResponseWriter, name string) {

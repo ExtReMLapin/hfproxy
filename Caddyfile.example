@@ -1,0 +1,8 @@
+# Reverse proxy TLS pour hfproxy (voir docker-compose.example.yml).
+# Remplacer le nom d'hôte ; Caddy obtient et renouvelle le certificat tout seul.
+hfproxy.example.com {
+	encode zstd gzip
+	# Ne pas exposer les métriques par le proxy public.
+	respond /metrics 404
+	reverse_proxy hfproxy:8080
+}

@@ -1,6 +1,6 @@
 # Running hfproxy in production
 
-The provided `docker-compose.yml` is for a trusted development machine. It uses published demo passwords and plain HTTP. Do not reuse it as is.
+The provided `docker-compose.yml` is for a trusted development machine. It uses published demo passwords and plain HTTP. Do not reuse it as is; start from `docker-compose.example.yml` and `Caddyfile.example`.
 
 ## Startup checks
 

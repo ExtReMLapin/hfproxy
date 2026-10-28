@@ -65,10 +65,3 @@ func formatBytes(n int64) string {
 
 func formatInt(v int64) string     { return strconv.FormatInt(v, 10) }
 func formatFloat(v float64) string { return strconv.FormatFloat(v, 'f', 1, 64) }
-func formatRatio(v float64) string { return strconv.FormatFloat(v*100, 'f', 1, 64) + "%" }
-func shortCommit(v string) string {
-	if len(v) > 12 {
-		return v[:12]
-	}
-	return v
-}

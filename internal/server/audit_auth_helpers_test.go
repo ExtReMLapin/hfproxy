@@ -82,16 +82,6 @@ func auditAuthCreateUser(t *testing.T, s *Server, username, role, password strin
 	return id
 }
 
-// auditAuthCreateToken mirrors `hfproxy admin token create` (default scopes).
-func auditAuthCreateToken(t *testing.T, s *Server, userID string) string {
-	t.Helper()
-	secret := "hfpx_" + randomSecret(32)
-	if _, err := s.db.SQL.Exec(`INSERT INTO access_tokens(id,user_id,token_hash,prefix,name) VALUES($1,$2,$3,$4,'test')`, db.NewID(), userID, HashToken(secret, auditAuthSecret), secret[:16]); err != nil {
-		t.Fatalf("create token: %v", err)
-	}
-	return secret
-}
-
 // auditAuthSession creates a browser session and returns its cookies.
 func auditAuthSession(t *testing.T, s *Server, userID string) []*http.Cookie {
 	t.Helper()
@@ -128,26 +118,4 @@ func auditAuthDoRequest(s *Server, method, target, body string, cookies []*http.
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 	return rec
-}
-
-func auditAuthCreateRepo(t *testing.T, s *Server, repoID, policy string) string {
-	t.Helper()
-	id := db.NewID()
-	if _, err := s.db.SQL.Exec(`INSERT INTO repositories(id,repo_type,repo_id,access_policy) VALUES($1,'models',$2,$3)`, id, repoID, policy); err != nil {
-		t.Fatalf("create repo: %v", err)
-	}
-	return id
-}
-
-func auditAuthCreateArtifact(t *testing.T, s *Server, repoPK, path string) {
-	t.Helper()
-	blobID := db.NewID()
-	sha := strings.Repeat("a", 63) + string("0123456789abcdef"[len(path)%16])
-	sha = blobID[:8] + sha[8:]
-	if _, err := s.db.SQL.Exec(`INSERT INTO blobs(id,sha256,size_bytes,storage_key) VALUES($1,$2,1234,$3)`, blobID, sha, "k/"+blobID); err != nil {
-		t.Fatalf("create blob: %v", err)
-	}
-	if _, err := s.db.SQL.Exec(`INSERT INTO artifacts(id,repository_id,commit_sha,path,blob_id) VALUES($1,$2,$3,$4,$5)`, db.NewID(), repoPK, strings.Repeat("c", 40), path, blobID); err != nil {
-		t.Fatalf("create artifact: %v", err)
-	}
 }

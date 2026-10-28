@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -700,9 +701,13 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 		if !ring.IsCurrent(token, storedHash) {
 			// Hashed under an older scheme or secret: move it to the current key
 			// now that the plaintext is in hand.
-			_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET token_hash=$3, key_id=$4 WHERE id=$1 AND token_hash=$2`, p.TokenID, storedHash, ring.Hash(token), ring.KeyID())
+			if _, err := s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET token_hash=$3, key_id=$4 WHERE id=$1 AND token_hash=$2`, p.TokenID, storedHash, ring.Hash(token), ring.KeyID()); err != nil {
+				s.logger.Warn("token hash could not be moved to the current key", "request_id", requestID(r.Context()))
+			}
 		}
-		_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET last_used_at=now() WHERE id=$1 AND (last_used_at IS NULL OR last_used_at < now()-interval '1 minute')`, p.TokenID)
+		if _, err := s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET last_used_at=now() WHERE id=$1 AND (last_used_at IS NULL OR last_used_at < now()-interval '1 minute')`, p.TokenID); err != nil {
+			s.logger.Warn("token last use could not be recorded", "request_id", requestID(r.Context()))
+		}
 		return &p, nil
 	}
 	cookie, err := r.Cookie("hfproxy_session")
@@ -723,19 +728,16 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 		return nil, errUnauthenticated
 	}
 	p.Authenticated = true
-	_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE sessions SET last_seen_at=now(), expires_at=LEAST(created_at + $2::interval, now() + $1::interval) WHERE token_hash=$3 AND last_seen_at < now()-interval '1 minute'`,
-		s.currentConfig().SessionIdleTTL.String(), s.currentConfig().SessionAbsoluteTTL.String(), digest)
+	if _, err := s.db.SQL.ExecContext(r.Context(), `UPDATE sessions SET last_seen_at=now(), expires_at=LEAST(created_at + $2::interval, now() + $1::interval) WHERE token_hash=$3 AND last_seen_at < now()-interval '1 minute'`,
+		s.currentConfig().SessionIdleTTL.String(), s.currentConfig().SessionAbsoluteTTL.String(), digest); err != nil {
+		s.logger.Warn("session activity could not be recorded", "request_id", requestID(r.Context()))
+	}
 	return &p, nil
 }
 
 func hasBearer(r *http.Request) bool {
 	parts := strings.Fields(r.Header.Get("Authorization"))
 	return len(parts) == 2 && strings.EqualFold(parts[0], "Bearer")
-}
-
-func (s *Server) currentPrincipal(r *http.Request) *Principal {
-	p, _ := s.authenticate(r)
-	return p
 }
 
 func (s *Server) createSession(ctx context.Context, userID string, w http.ResponseWriter, r *http.Request) (string, error) {
@@ -794,32 +796,24 @@ func (s *Server) checkCSRF(r *http.Request) bool {
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (*Principal, bool) {
-	p, err := s.authenticate(r)
-	if err != nil {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="hfproxy"`)
-		writeProblem(w, r, http.StatusUnauthorized, "Authentication required", "Provide a valid hfproxy token or sign in.")
-		return nil, false
-	}
-	if p.Role != "admin" {
-		writeProblem(w, r, http.StatusForbidden, "Forbidden", "Administrator role required.")
-		return nil, false
-	}
-	if !tokenAllowsAdministration(p) {
-		writeProblem(w, r, http.StatusForbidden, "Forbidden", "This token is read-only and cannot use the administration API.")
-		return nil, false
-	}
-	return p, true
+	return s.requireRole(w, r, "Administrator role required.", "admin")
 }
 
 func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request) (*Principal, bool) {
+	return s.requireRole(w, r, "Operator or administrator role required.", "admin", "operator")
+}
+
+// requireRole authenticates the request and checks that the principal holds one
+// of the roles and, for tokens, a scope that allows administration.
+func (s *Server) requireRole(w http.ResponseWriter, r *http.Request, denied string, roles ...string) (*Principal, bool) {
 	p, err := s.authenticate(r)
 	if err != nil {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="hfproxy"`)
 		writeProblem(w, r, http.StatusUnauthorized, "Authentication required", "Provide a valid hfproxy token or sign in.")
 		return nil, false
 	}
-	if p.Role != "admin" && p.Role != "operator" {
-		writeProblem(w, r, http.StatusForbidden, "Forbidden", "Operator or administrator role required.")
+	if !slices.Contains(roles, p.Role) {
+		writeProblem(w, r, http.StatusForbidden, "Forbidden", denied)
 		return nil, false
 	}
 	if !tokenAllowsAdministration(p) {

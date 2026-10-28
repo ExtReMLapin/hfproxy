@@ -65,6 +65,12 @@ type Config struct {
 	OTLPEndpoint           string
 	CacheInventoryRefresh  time.Duration
 
+	// LockedSettings lists the console-editable settings (by their JSON name,
+	// for example "s3_bucket") pinned to the environment: saved values are
+	// ignored for them and the console refuses to change them
+	// (HFPROXY_LOCKED_SETTINGS, "all" locks every one).
+	LockedSettings []string
+
 	// Environment-only settings: they are not editable from the console and
 	// are never overridden by saved settings.
 	StagingDir string
@@ -152,6 +158,10 @@ func Load() (Config, error) {
 	}
 	c.OTLPEndpoint = value("OTLP_ENDPOINT", "")
 	c.CacheInventoryRefresh = duration("CACHE_INVENTORY_REFRESH", 5*time.Minute)
+	c.LockedSettings = splitSecrets(value("LOCKED_SETTINGS", ""))
+	if err := ValidateLockedSettings(c.LockedSettings); err != nil {
+		return Config{}, err
+	}
 	c.StagingDir = value("STAGING_DIR", "")
 	c.StagingMinFreeBytes = int64(number("STAGING_MIN_FREE_BYTES", 0))
 	c.CacheFillConcurrency = number("CACHE_FILL_CONCURRENCY", 4)
@@ -174,6 +184,12 @@ var knownDevSecrets = []string{
 	"dev-only-session-secret-change-before-deployment-32-bytes",
 }
 
+// knownDevS3Keys are the Garage credentials shipped in docker-compose.yml.
+var knownDevS3Keys = []string{
+	"GK0123456789abcdef0123456789abcdef",
+	"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+}
+
 // CheckDeployment rejects settings that are acceptable on a developer machine
 // but unsafe on a shared deployment. It is applied when the server starts, not
 // by Validate, so tools such as `config validate` and tests stay usable.
@@ -187,6 +203,16 @@ func (c Config) CheckDeployment() error {
 	for _, dev := range knownDevSecrets {
 		if c.SessionSecret == dev && !loopbackPublic {
 			return fmt.Errorf("HFPROXY_SESSION_SECRET is the published development value; generate a unique secret")
+		}
+	}
+	if !loopbackPublic {
+		if strings.Contains(c.DatabaseURL, "hfproxy_dev_password") {
+			return fmt.Errorf("HFPROXY_DATABASE_URL uses the published development password; set a unique one")
+		}
+		for _, dev := range knownDevS3Keys {
+			if c.S3AccessKey == dev || c.S3SecretKey == dev {
+				return fmt.Errorf("the S3 credentials are the published development keys; generate unique ones")
+			}
 		}
 	}
 	if c.PublicURL == "" && !listensOnLoopback(c.ListenAddr) {

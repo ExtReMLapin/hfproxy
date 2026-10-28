@@ -1,3 +1,6 @@
+# Development only. Credentials come from .env (cp .env.example .env); there are
+# no built-in defaults, so the stack refuses to start without them.
+# Use docker-compose.example.yml as the starting point for production.
 name: hfproxy-dev
 
 services:
@@ -5,7 +8,7 @@ services:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-hfproxy}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hfproxy_dev_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Copy .env.example to .env}
       POSTGRES_DB: ${POSTGRES_DB:-hfproxy}
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -20,8 +23,8 @@ services:
     image: dxflrs/garage:v2.5.0
     command: ["/garage", "server", "--single-node", "--default-bucket"]
     environment:
-      GARAGE_DEFAULT_ACCESS_KEY: ${GARAGE_DEFAULT_ACCESS_KEY:-GK0123456789abcdef0123456789abcdef}
-      GARAGE_DEFAULT_SECRET_KEY: ${GARAGE_DEFAULT_SECRET_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      GARAGE_DEFAULT_ACCESS_KEY: ${GARAGE_DEFAULT_ACCESS_KEY:?Copy .env.example to .env}
+      GARAGE_DEFAULT_SECRET_KEY: ${GARAGE_DEFAULT_SECRET_KEY:?Copy .env.example to .env}
       GARAGE_DEFAULT_BUCKET: ${GARAGE_DEFAULT_BUCKET:-hfproxy}
     volumes:
       - ./garage.toml:/etc/garage.toml:ro
@@ -43,7 +46,7 @@ services:
       HFPROXY_LISTEN_ADDR: 0.0.0.0:8080
       HFPROXY_PUBLIC_URL: ${HFPROXY_PUBLIC_URL:-http://localhost:8080}
       HFPROXY_LOG_LEVEL: info
-      HFPROXY_DATABASE_URL: postgres://${POSTGRES_USER:-hfproxy}:${POSTGRES_PASSWORD:-hfproxy_dev_password}@postgres:5432/${POSTGRES_DB:-hfproxy}?sslmode=disable
+      HFPROXY_DATABASE_URL: postgres://${POSTGRES_USER:-hfproxy}:${POSTGRES_PASSWORD:?Copy .env.example to .env}@postgres:5432/${POSTGRES_DB:-hfproxy}?sslmode=disable
       HFPROXY_AUTO_MIGRATE: "true"
       HFPROXY_HF_BASE_URL: https://huggingface.co
       HFPROXY_HF_PROXY_URL: ${HFPROXY_HF_PROXY_URL:-}
@@ -55,11 +58,11 @@ services:
       HFPROXY_S3_PREFIX: hfproxy
       HFPROXY_S3_FORCE_PATH_STYLE: "true"
       HFPROXY_S3_SERVER_SIDE_ENCRYPTION: "false"
-      HFPROXY_S3_ACCESS_KEY: ${GARAGE_DEFAULT_ACCESS_KEY:-GK0123456789abcdef0123456789abcdef}
-      HFPROXY_S3_SECRET_KEY: ${GARAGE_DEFAULT_SECRET_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      HFPROXY_S3_ACCESS_KEY: ${GARAGE_DEFAULT_ACCESS_KEY:?Copy .env.example to .env}
+      HFPROXY_S3_SECRET_KEY: ${GARAGE_DEFAULT_SECRET_KEY:?Copy .env.example to .env}
       HFPROXY_AUTH_MODE: local
       HFPROXY_ANONYMOUS_PUBLIC_READ: ${HFPROXY_ANONYMOUS_PUBLIC_READ:-true}
-      HFPROXY_SESSION_SECRET: ${HFPROXY_SESSION_SECRET:-dev-only-session-secret-change-before-deployment-32-bytes}
+      HFPROXY_SESSION_SECRET: ${HFPROXY_SESSION_SECRET:?Copy .env.example to .env}
     depends_on:
       postgres:
         condition: service_healthy

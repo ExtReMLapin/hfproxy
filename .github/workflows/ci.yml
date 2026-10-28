@@ -60,12 +60,18 @@ jobs:
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test
         run: |
-          go test -race -count=1 -v ./... | tee test.log
+          go test -race -count=1 -v -coverprofile=coverage.out -coverpkg=./... ./... | tee test.log
           if grep -q -- '--- SKIP' test.log; then
             echo "Integration tests were skipped; PostgreSQL and S3 must both be available."
             grep -- '--- SKIP' test.log
             exit 1
           fi
+      - name: Coverage threshold
+        run: |
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%","",$3); print $3}')
+          echo "Total statement coverage: ${total}%"
+          # Measured at 54% when the threshold was set; raise it as coverage grows.
+          awk -v t="$total" 'BEGIN { exit (t >= 50.0) ? 0 : 1 }' || { echo "Coverage ${total}% is below the 50% minimum."; exit 1; }
       - name: Build
         run: go build -trimpath ./cmd/hfproxy
   vulncheck:
@@ -83,6 +89,58 @@ jobs:
             go.sum
       - name: Scan dependencies and standard library for known vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+  staticcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+      - name: Static analysis
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.2 ./...
+  gosec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+      # Reviewed exclusions (see docs/security-scanning.md): every other rule,
+      # including hard-coded credentials, weak crypto and file permissions,
+      # stays enabled and blocks the build.
+      - name: Security scan
+        run: >-
+          go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0
+          -severity medium -confidence medium -exclude-generated
+          -exclude=G115,G118,G124,G202,G304,G404,G701,G703,G704,G705
+          ./...
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Build image (not published)
+        run: docker build --tag hfproxy:ci .
+      - name: Scan image for known vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: hfproxy:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
   ui:
     runs-on: ubuntu-latest
     defaults:
@@ -99,6 +157,10 @@ jobs:
           cache-dependency-path: ui/package-lock.json
       - name: Install dependencies
         run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
       - name: Test
         run: npm test -- --watch=false
       - name: Build

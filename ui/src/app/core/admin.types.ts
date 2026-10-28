@@ -156,6 +156,8 @@ export interface ManagedSettings {
   tracing_sampling_ratio: number;
   otlp_endpoint: string;
   cache_inventory_refresh: string;
+  /** Settings pinned to the environment (HFPROXY_LOCKED_SETTINGS): read-only here. */
+  locked: string[];
 }
 
 export interface SettingsDraft extends ManagedSettings {
