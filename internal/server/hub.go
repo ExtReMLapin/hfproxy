@@ -22,6 +22,12 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/nicolas/hfproxy/internal/config"
 	"github.com/nicolas/hfproxy/internal/db"
 	"github.com/nicolas/hfproxy/internal/storage"
@@ -127,6 +133,7 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 	requestURL := upstreamResolvePath(parsed)
 	negativeKey := repoPK + "|" + parsed.Revision + "|" + parsed.FilePath
 	if status, headers, ok := s.negativeLookup(negativeKey); ok {
+		if s.metrics != nil { s.metrics.cacheDecision(r.Context(), "bypass") }
 		s.hubStatus(w, r, status, headers)
 		return
 	}
@@ -834,9 +841,55 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 		if s.currentConfig().HFToken != "" && strings.EqualFold(u.Hostname(), baseHost) {
 			req.Header.Set("Authorization", "Bearer "+s.currentConfig().HFToken)
 		}
+		operation := upstreamOperation(method, requestPath)
+		spanCtx, span := otel.Tracer("github.com/nicolas/hfproxy/internal/server").Start(ctx, "upstream.request", trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attribute.String("hfproxy.operation", operation)))
+		otel.GetTextMapPropagator().Inject(spanCtx, propagation.HeaderCarrier(req.Header))
+		req = req.WithContext(spanCtx)
+		attemptStarted := time.Now()
 		resp, err := s.currentHTTPClient().Do(req)
 		if err != nil {
+			span.SetAttributes(attribute.String("error.type", upstreamErrorReason(ctx, err)))
+			span.SetStatus(codes.Error, "upstream request failed")
+			span.End()
+			if s.metrics != nil {
+				reason := upstreamErrorReason(ctx, err)
+				s.metrics.add("hfproxy_upstream_requests_total", []string{"operation=" + operation, "status_class=error"}, 1)
+				s.metrics.add("hfproxy_upstream_errors_total", []string{"reason=" + reason}, 1)
+				s.metrics.observe("hfproxy_upstream_request_duration_seconds", []string{"operation=" + operation}, time.Since(attemptStarted).Seconds())
+			}
 			return nil, nil, fmt.Errorf("upstream request failed")
+		}
+		if s.metrics != nil {
+			class := strconv.Itoa(resp.StatusCode/100) + "xx"
+			s.metrics.add("hfproxy_upstream_requests_total", []string{"operation=" + operation, "status_class=" + class}, 1)
+			s.metrics.observe("hfproxy_upstream_request_duration_seconds", []string{"operation=" + operation}, time.Since(attemptStarted).Seconds())
+			if resp.StatusCode >= 400 {
+				s.metrics.add("hfproxy_upstream_errors_total", []string{"reason=http_" + class}, 1)
+			}
+			resp.Body = &countingBody{ReadCloser: resp.Body, onRead: func(n int) {
+				if n > 0 {
+					s.metrics.add("hfproxy_upstream_bytes_received_total", []string{"operation=" + operation}, float64(n))
+				}
+			}}
+		}
+		span.SetAttributes(attribute.Int("http.response.status_code", resp.StatusCode))
+		if resp.StatusCode >= 400 {
+			span.SetStatus(codes.Error, "upstream HTTP failure")
+		}
+		spanEnded := false
+		endSpan := func(readErr error) {
+			if !spanEnded {
+				if readErr != nil && readErr != io.EOF {
+					span.SetStatus(codes.Error, "upstream response read failed")
+				}
+				spanEnded = true
+				span.End()
+			}
+		}
+		if body, ok := resp.Body.(*countingBody); ok {
+			body.onClose = endSpan
+		} else {
+			resp.Body = &countingBody{ReadCloser: resp.Body, onRead: func(int) {}, onClose: endSpan}
 		}
 		if first == nil {
 			first = resp.Header.Clone()
@@ -867,6 +920,62 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 		target = next.String()
 	}
 	return nil, first, fmt.Errorf("upstream redirect limit exceeded")
+}
+
+func upstreamOperation(method, path string) string {
+	if method == http.MethodHead {
+		return "metadata"
+	}
+	if strings.Contains(path, "/resolve/") {
+		return "download"
+	}
+	if strings.Contains(path, "/revision/") {
+		return "resolve"
+	}
+	if strings.HasPrefix(path, "/api/") {
+		return "metadata"
+	}
+	return "other"
+}
+func upstreamErrorReason(ctx context.Context, err error) string {
+	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+		return "cancelled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "timeout"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return "connection"
+	}
+	return "other"
+}
+
+type countingBody struct {
+	io.ReadCloser
+	onRead    func(int)
+	onClose   func(error)
+	closeOnce sync.Once
+}
+
+func (b *countingBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.onRead(n)
+	return n, err
+}
+
+func (b *countingBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.closeOnce.Do(func() {
+		if b.onClose != nil {
+			b.onClose(err)
+		}
+	})
+	return err
 }
 
 // streamUncachedMiss serves requests that cannot wait for a cache fill, such as
@@ -1037,8 +1146,23 @@ func isHopByHop(key string) bool {
 func (s *Server) findArtifact(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, repoID, commit, file string) (artifact, error) {
+	ctx, span := otel.Tracer("github.com/nicolas/hfproxy/internal/server").Start(ctx, "cache.lookup", trace.WithAttributes(attribute.String("cache.operation", "artifact_lookup")))
+	defer span.End()
+	started := time.Now()
 	var a artifact
 	err := q.QueryRowContext(ctx, `SELECT a.id,a.repository_id,a.commit_sha,a.path,a.blob_id,b.storage_key,b.sha256,b.size_bytes,a.etag,b.content_type,a.last_modified FROM artifacts a JOIN blobs b ON b.id=a.blob_id WHERE a.repository_id=$1 AND a.commit_sha=$2 AND a.path=$3`, repoID, commit, file).Scan(&a.ID, &a.Repository, &a.Commit, &a.Path, &a.BlobID, &a.StorageKey, &a.SHA256, &a.Size, &a.ETag, &a.ContentType, &a.LastMod)
+	if s.metrics != nil {
+		result := "hit"
+		if isNoRows(err) {
+			result = "miss"
+		} else if err != nil {
+			result = "error"
+			span.SetStatus(codes.Error, "cache lookup failed")
+		}
+		span.SetAttributes(attribute.String("cache.result", result))
+		s.metrics.cacheDecision(ctx, result)
+		s.metrics.observe("hfproxy_cache_lookup_duration_seconds", nil, time.Since(started).Seconds())
+	}
 	return a, err
 }
 func isNoRows(err error) bool { return err == sql.ErrNoRows }
@@ -1129,7 +1253,10 @@ func (s *Server) serveArtifact(w http.ResponseWriter, r *http.Request, a artifac
 		w.Header().Set("Content-Length", strconv.FormatInt(a.Size, 10))
 	}
 	w.WriteHeader(status)
-	_, _ = io.Copy(w, out.Body)
+	n, _ := io.Copy(w, out.Body)
+	if s.metrics != nil {
+		s.metrics.add("hfproxy_cache_bytes_served_total", []string{"source=cache"}, float64(n))
+	}
 }
 
 func parseByteRange(value string, size int64) (int64, int64, bool, bool) {

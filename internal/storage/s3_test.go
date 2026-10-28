@@ -9,6 +9,21 @@ import (
 	"testing"
 )
 
+type testStorageObserver struct {
+	operations        int
+	operation, result string
+	duration          float64
+	bytes             int64
+}
+
+func (o *testStorageObserver) ObserveStorage(operation, result string, duration float64, bytes int64) {
+	o.operations++
+	o.operation = operation
+	o.result = result
+	o.duration = duration
+	o.bytes = bytes
+}
+
 func TestUploadFilePropagatesS3Outage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
@@ -21,6 +36,8 @@ func TestUploadFilePropagatesS3Outage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("storage.New: %v", err)
 	}
+	observer := &testStorageObserver{}
+	objects.SetObserver(observer)
 	file, err := os.CreateTemp(t.TempDir(), "upload")
 	if err != nil {
 		t.Fatal(err)
@@ -30,6 +47,9 @@ func TestUploadFilePropagatesS3Outage(t *testing.T) {
 	}
 	if err := objects.UploadFile(context.Background(), file, "object", "text/plain", int64(len("payload"))); err == nil {
 		t.Fatal("UploadFile unexpectedly succeeded during an S3 outage")
+	}
+	if observer.operations != 1 || observer.operation != "write" || observer.result != "error" || observer.duration < 0 {
+		t.Fatalf("storage instrumentation = %#v", observer)
 	}
 }
 

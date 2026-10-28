@@ -49,6 +49,13 @@ type managedSettings struct {
 	LDAPBaseDN             string        `json:"ldap_base_dn"`
 	LDAPUserFilter         string        `json:"ldap_user_filter"`
 	LDAPAutoProvision      bool          `json:"ldap_auto_provision"`
+	MetricsEnabled         bool          `json:"metrics_enabled"`
+	MetricsPath            string        `json:"metrics_path"`
+	TracingEnabled         bool          `json:"tracing_enabled"`
+	TracingServiceName     string        `json:"tracing_service_name"`
+	TracingSamplingRatio   float64       `json:"tracing_sampling_ratio"`
+	OTLPEndpoint           string        `json:"otlp_endpoint"`
+	CacheInventoryRefresh  time.Duration `json:"cache_inventory_refresh"`
 }
 
 func LoadPersisted(ctx context.Context, sqlDB *sql.DB, base Config) (Config, error) {
@@ -106,6 +113,7 @@ func managedFromConfig(c Config) managedSettings {
 		OIDCIssuer: c.OIDCIssuer, OIDCClientID: c.OIDCClientID, OIDCClientSecret: c.OIDCClientSecret, OIDCRedirectURL: c.OIDCRedirectURL,
 		OIDCAutoProvision: c.OIDCAutoProvision, LDAPURL: c.LDAPURL, LDAPStartTLS: c.LDAPStartTLS, LDAPBindDN: c.LDAPBindDN,
 		LDAPBindPassword: c.LDAPBindPassword, LDAPBaseDN: c.LDAPBaseDN, LDAPUserFilter: c.LDAPUserFilter, LDAPAutoProvision: c.LDAPAutoProvision,
+		MetricsEnabled: c.MetricsEnabled, MetricsPath: c.MetricsPath, TracingEnabled: c.TracingEnabled, TracingServiceName: c.TracingServiceName, TracingSamplingRatio: c.TracingSamplingRatio, OTLPEndpoint: c.OTLPEndpoint, CacheInventoryRefresh: c.CacheInventoryRefresh,
 	}
 }
 
@@ -124,6 +132,11 @@ func (s managedSettings) apply(c Config) Config {
 	c.OIDCIssuer, c.OIDCClientID, c.OIDCClientSecret, c.OIDCRedirectURL = s.OIDCIssuer, s.OIDCClientID, s.OIDCClientSecret, s.OIDCRedirectURL
 	c.OIDCAutoProvision, c.LDAPURL, c.LDAPStartTLS = s.OIDCAutoProvision, s.LDAPURL, s.LDAPStartTLS
 	c.LDAPBindDN, c.LDAPBindPassword, c.LDAPBaseDN, c.LDAPUserFilter, c.LDAPAutoProvision = s.LDAPBindDN, s.LDAPBindPassword, s.LDAPBaseDN, s.LDAPUserFilter, s.LDAPAutoProvision
+	c.MetricsEnabled, c.MetricsPath = s.MetricsEnabled, s.MetricsPath
+	c.TracingEnabled, c.TracingServiceName, c.TracingSamplingRatio, c.OTLPEndpoint = s.TracingEnabled, s.TracingServiceName, s.TracingSamplingRatio, s.OTLPEndpoint
+	if s.CacheInventoryRefresh > 0 {
+		c.CacheInventoryRefresh = s.CacheInventoryRefresh
+	}
 	return c
 }
 

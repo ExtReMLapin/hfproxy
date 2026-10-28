@@ -183,12 +183,14 @@ Health endpoints: `/healthz` provides liveness without dependency checks; `/read
 
 ## Current limitations
 
+See [Observability](docs/observability.md) for the Prometheus endpoint and current metric coverage.
+
 - Native Xet/CAS, uploads, repository write operations, inference, and Spaces execution are not supported.
 - The reference TTL applies to cache reads; a cache miss may still query the Hub API for metadata and to confirm the SHA before downloading.
 - OIDC verifies identities and sessions, but IdP group claims are not automatically mapped to local groups.
 - LDAP supports LDAPS/StartTLS and user binds; Active Directory group synchronization is not included.
 - The administration console manages runtime settings, repositories and grants, users, groups, cache entries, and audit events. Database connection, listen address, and session encryption secret remain environment-managed bootstrap settings.
-- Multi-part Range requests, Prometheus metrics, distributed rate limits, and paginated cache purge still need work before large-scale operation.
+- Multi-part Range requests, distributed rate limits, and paginated cache purge still need work before large-scale operation.
 - Negative-result caching is in-memory per process; `CACHE_NEGATIVE_TTL` controls its lifetime. Orphaned blobs are collected periodically after `CACHE_GC_GRACE`.
 - Public policies control local access; they do not replace Hugging Face license terms or gated-access conditions.
 

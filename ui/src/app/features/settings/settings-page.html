@@ -552,6 +552,35 @@
               </div>
             </section>
           }
+          @case ('observability') {
+            <section class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] sm:p-7">
+              <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700">Monitoring and tracing</p>
+              <h2 class="mt-1 text-lg font-semibold text-slate-950">Observability</h2>
+              <p class="mt-1 max-w-2xl text-xs leading-5 text-slate-500">
+                Metrics are exposed on the configured path without application authentication. Keep that path on a private monitoring network. Traces are exported over OTLP/HTTP; credentials and request data are never added to spans.
+              </p>
+              <div class="mt-6 space-y-5">
+                <div class="rounded-xl border border-slate-200 p-4">
+                  <label class="flex items-center gap-3 text-sm font-semibold text-slate-800">
+                    <input name="metricsEnabled" type="checkbox" [(ngModel)]="settings.metrics_enabled" /> Enable Prometheus metrics
+                  </label>
+                  <label class="field mt-4">Metrics path<input class="control" name="metricsPath" [(ngModel)]="settings.metrics_path" placeholder="/metrics" /></label>
+                  <label class="field mt-4">Cache inventory refresh<input class="control" name="inventoryRefresh" [(ngModel)]="settings.cache_inventory_refresh" placeholder="5m" /><span class="hint">Reads authoritative database metadata asynchronously; this interval avoids queries during Prometheus scrapes.</span></label>
+                  <p class="hint mt-2">Scrape from a private ServiceMonitor or PodMonitor. The endpoint is excluded from HTTP request metrics.</p>
+                </div>
+                <div class="rounded-xl border border-slate-200 p-4">
+                  <label class="flex items-center gap-3 text-sm font-semibold text-slate-800">
+                    <input name="tracingEnabled" type="checkbox" [(ngModel)]="settings.tracing_enabled" /> Enable distributed tracing
+                  </label>
+                  <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <label class="field">Service name<input class="control" name="traceService" [(ngModel)]="settings.tracing_service_name" placeholder="hfproxy" /></label>
+                    <label class="field">Sampling ratio<input class="control" name="traceSample" type="number" min="0" max="1" step="0.01" [(ngModel)]="settings.tracing_sampling_ratio" /><span class="hint">Use 0.1 to sample about one in ten traces.</span></label>
+                    <label class="field sm:col-span-2">OTLP HTTP endpoint<input class="control" name="otlpEndpoint" [(ngModel)]="settings.otlp_endpoint" placeholder="http://otel-collector:4318/v1/traces" /><span class="hint">Use an internal collector endpoint. A base endpoint receives the standard /v1/traces path.</span></label>
+                  </div>
+                </div>
+              </div>
+            </section>
+          }
         }
 
         <div class="mt-5 flex flex-col-reverse justify-between gap-3 sm:flex-row sm:items-center">

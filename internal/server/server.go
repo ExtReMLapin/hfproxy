@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"embed"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"path"
 	"strconv"
@@ -40,19 +42,21 @@ type runtimeState struct {
 }
 
 type Server struct {
-	runtime        atomic.Pointer[runtimeState]
-	db             *db.Store
-	logger         *slog.Logger
-	preloadsMu     sync.RWMutex
-	preloads       map[string]*preloadJob
-	preloadSlots   chan struct{}
-	loginMu        sync.Mutex
-	loginBuckets   map[string]loginBucket
-	loginHashSlots chan struct{}
-	negativeMu     sync.Mutex
-	negative       map[string]negativeCacheEntry
-	missMu         sync.Mutex
-	misses         map[string]*cacheMiss
+	runtime              atomic.Pointer[runtimeState]
+	db                   *db.Store
+	logger               *slog.Logger
+	preloadsMu           sync.RWMutex
+	preloads             map[string]*preloadJob
+	preloadSlots         chan struct{}
+	loginMu              sync.Mutex
+	loginBuckets         map[string]loginBucket
+	loginHashSlots       chan struct{}
+	negativeMu           sync.Mutex
+	negative             map[string]negativeCacheEntry
+	missMu               sync.Mutex
+	misses               map[string]*cacheMiss
+	metrics              *metrics
+	inventoryRefreshWake chan struct{}
 }
 
 type loginBucket struct {
@@ -89,14 +93,67 @@ func New(ctx context.Context, cfg config.Config, store *db.Store, objectStore *s
 	if err != nil {
 		return nil, err
 	}
+	if err := configureTracing(ctx, cfg); err != nil {
+		return nil, fmt.Errorf("configure trace exporter")
+	}
 	s := &Server{
-		db: store, logger: logger, preloads: make(map[string]*preloadJob),
+		db: store, logger: logger, metrics: newMetrics(), inventoryRefreshWake: make(chan struct{}, 1), preloads: make(map[string]*preloadJob),
 		preloadSlots: make(chan struct{}, 2), loginBuckets: make(map[string]loginBucket), loginHashSlots: make(chan struct{}, 4), negative: make(map[string]negativeCacheEntry), misses: make(map[string]*cacheMiss),
 	}
 	s.runtime.Store(state)
+	if objectStore != nil {
+		objectStore.SetObserver(s.metrics)
+	}
 	s.startDownloadResumeCleanup(ctx)
 	s.startOrphanedBlobGC(ctx)
+	s.startCacheInventoryMetrics(ctx)
 	return s, nil
+}
+
+func (s *Server) startCacheInventoryMetrics(ctx context.Context) {
+	refresh := s.currentConfig().CacheInventoryRefresh
+	if refresh <= 0 {
+		refresh = 5 * time.Minute
+	}
+	refreshInventory := func() {
+		var count, size int64
+		if err := s.db.SQL.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(size_bytes),0) FROM blobs`).Scan(&count, &size); err != nil {
+			s.logger.Warn("cache inventory metrics refresh failed")
+			return
+		}
+		s.metrics.setGauge("hfproxy_cache_objects", float64(count))
+		s.metrics.setGauge("hfproxy_cache_size_bytes", float64(size))
+	}
+	go func() {
+		refreshInventory()
+		timer := time.NewTimer(refresh)
+		defer timer.Stop()
+		for {
+			select {
+			case <-timer.C:
+				refreshInventory()
+				wait := s.currentConfig().CacheInventoryRefresh
+				if wait <= 0 {
+					wait = 5 * time.Minute
+				}
+				timer.Reset(wait)
+			case <-s.inventoryRefreshWake:
+				wait := s.currentConfig().CacheInventoryRefresh
+				if wait <= 0 {
+					wait = 5 * time.Minute
+				}
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(wait)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }
 
 func makeRuntimeState(ctx context.Context, cfg config.Config, objectStore *storage.S3, previous *runtimeState) (*runtimeState, error) {
@@ -138,18 +195,37 @@ func (s *Server) applyConfig(ctx context.Context, cfg config.Config, actorID str
 	if err != nil {
 		return fmt.Errorf("prepare S3 settings")
 	}
-	state, err := makeRuntimeState(ctx, cfg, objects, s.runtime.Load())
+	previous := s.runtime.Load()
+	state, err := makeRuntimeState(ctx, cfg, objects, previous)
 	if err != nil {
 		return err
 	}
+	traceProcessor, err := prepareTraceProcessor(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("configure trace exporter")
+	}
+	if objects != nil {
+		objects.SetObserver(s.metrics)
+	}
 	if err := config.SavePersisted(ctx, s.db.SQL, cfg, actorID); err != nil {
+		if traceProcessor != nil {
+			_ = traceProcessor.Shutdown(ctx)
+		}
 		return err
 	}
 	s.runtime.Store(state)
+	activatePreparedTracing(ctx, traceProcessor, cfg)
+	select {
+	case s.inventoryRefreshWake <- struct{}{}:
+	default:
+	}
 	return nil
 }
 
 func (s *Server) Handler() http.Handler {
+	if s.metrics == nil {
+		s.metrics = newMetrics()
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/readyz", s.ready)
@@ -164,10 +240,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/", s.apiV1)
 	mux.HandleFunc("/api/", s.hubAPI)
 	mux.HandleFunc("/", s.dashboardOrResolve)
-	return s.securityHeaders(s.requestLog(mux))
+	dispatch := http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){cfg:=s.currentConfig();metricsPath:=cfg.MetricsPath;if metricsPath==""{metricsPath="/metrics"};if cfg.MetricsEnabled&&r.URL.Path==metricsPath{s.metrics.handler().ServeHTTP(w,r);return};mux.ServeHTTP(w,r)})
+	return s.securityHeaders(s.traceMiddleware(s.requestLog(s.metrics.middlewareDynamic(func() string {
+		cfg := s.currentConfig()
+		if !cfg.MetricsEnabled {
+			return ""
+		}
+		if cfg.MetricsPath == "" {
+			return "/metrics"
+		}
+		return cfg.MetricsPath
+	}, dispatch))))
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	defer shutdownTracing()
 	server := &http.Server{
 		Addr: s.currentConfig().ListenAddr, Handler: s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second,
@@ -221,6 +308,15 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) dashboardOrResolve(w http.ResponseWriter, r *http.Request) {
+	cfg := s.currentConfig()
+	metricsPath := cfg.MetricsPath
+	if metricsPath == "" {
+		metricsPath = "/metrics"
+	}
+	if cfg.MetricsEnabled && r.URL.Path == metricsPath {
+		s.metrics.handler().ServeHTTP(w, r)
+		return
+	}
 	if r.URL.Path == "/" {
 		s.frontend(w, r)
 		return
@@ -325,10 +421,40 @@ func (w *responseRecorder) Write(b []byte) (int, error) {
 	return n, err
 }
 func (w *responseRecorder) Flush() {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
 }
+func (w *responseRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return h.Hijack()
+}
+func (w *responseRecorder) Push(target string, opts *http.PushOptions) error {
+	p, ok := w.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return p.Push(target, opts)
+}
+func (w *responseRecorder) ReadFrom(r io.Reader) (int64, error) {
+	if rf, ok := w.ResponseWriter.(io.ReaderFrom); ok {
+		if w.status == 0 {
+			w.WriteHeader(http.StatusOK)
+		}
+		n, err := rf.ReadFrom(r)
+		w.bytes += n
+		return n, err
+	}
+	return io.Copy(recorderWriterOnly{w}, r)
+}
+
+type recorderWriterOnly struct{ io.Writer }
 
 func (s *Server) requestLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

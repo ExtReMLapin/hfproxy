@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net/netip"
 	"net/url"
 	"os"
@@ -51,6 +52,13 @@ type Config struct {
 	LDAPBaseDN             string
 	LDAPUserFilter         string
 	LDAPAutoProvision      bool
+	MetricsEnabled         bool
+	MetricsPath            string
+	TracingEnabled         bool
+	TracingServiceName     string
+	TracingSamplingRatio   float64
+	OTLPEndpoint           string
+	CacheInventoryRefresh  time.Duration
 }
 
 func Load() (Config, error) {
@@ -105,6 +113,16 @@ func Load() (Config, error) {
 	c.LDAPBaseDN = value("LDAP_BASE_DN", "")
 	c.LDAPUserFilter = value("LDAP_USER_FILTER", "(uid={username})")
 	c.LDAPAutoProvision = boolean("LDAP_AUTO_PROVISION", false)
+	c.MetricsEnabled = boolean("METRICS_ENABLED", false)
+	c.MetricsPath = value("METRICS_PATH", "/metrics")
+	c.TracingEnabled = boolean("TRACING_ENABLED", false)
+	c.TracingServiceName = value("TRACING_SERVICE_NAME", "hfproxy")
+	c.TracingSamplingRatio, err = strconv.ParseFloat(value("TRACING_SAMPLING_RATIO", "0.1"), 64)
+	if err != nil {
+		return Config{}, fmt.Errorf("HFPROXY_TRACING_SAMPLING_RATIO must be a number between 0 and 1")
+	}
+	c.OTLPEndpoint = value("OTLP_ENDPOINT", "")
+	c.CacheInventoryRefresh = duration("CACHE_INVENTORY_REFRESH", 5*time.Minute)
 	if err := c.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -112,6 +130,27 @@ func Load() (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if c.MetricsPath != "" && (c.MetricsPath[0] != '/' || c.MetricsPath == "/" || strings.Count(c.MetricsPath,"/") != 1 || strings.ContainsAny(c.MetricsPath, "?#")) {
+		return fmt.Errorf("HFPROXY_METRICS_PATH must be a non-root top-level URL path")
+	}
+	if c.MetricsPath == "/healthz" || c.MetricsPath == "/readyz" || c.MetricsPath == "/login" || c.MetricsPath == "/logout" {
+		return fmt.Errorf("HFPROXY_METRICS_PATH must not replace a health or authentication endpoint")
+	}
+	if (c.TracingEnabled && c.TracingServiceName == "") || math.IsNaN(c.TracingSamplingRatio) || math.IsInf(c.TracingSamplingRatio,0) || c.TracingSamplingRatio < 0 || c.TracingSamplingRatio > 1 {
+		return fmt.Errorf("HFPROXY_TRACING_SERVICE_NAME must be non-empty and HFPROXY_TRACING_SAMPLING_RATIO must be between 0 and 1")
+	}
+	if c.OTLPEndpoint != "" {
+		endpoint, err := url.Parse(c.OTLPEndpoint)
+		if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+			return fmt.Errorf("HFPROXY_OTLP_ENDPOINT must be an HTTP(S) OTLP endpoint URL without credentials or query parameters")
+		}
+	}
+	if c.TracingEnabled && c.OTLPEndpoint == "" {
+		return fmt.Errorf("HFPROXY_OTLP_ENDPOINT is required when tracing is enabled")
+	}
+	if c.CacheInventoryRefresh < 0 {
+		return fmt.Errorf("HFPROXY_CACHE_INVENTORY_REFRESH must not be negative")
+	}
 	if c.LogLevel != "debug" && c.LogLevel != "info" && c.LogLevel != "warn" && c.LogLevel != "error" {
 		return fmt.Errorf("HFPROXY_LOG_LEVEL must be debug, info, warn, or error")
 	}

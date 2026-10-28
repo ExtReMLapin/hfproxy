@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -22,6 +24,24 @@ type S3 struct {
 	bucket               string
 	prefix               string
 	serverSideEncryption bool
+	observer             Observer
+}
+
+// Observer receives bounded storage operation measurements. It must be safe for concurrent use.
+type Observer interface {
+	ObserveStorage(operation, result string, durationSeconds float64, bytes int64)
+}
+
+func (s *S3) SetObserver(observer Observer) { s.observer = observer }
+func (s *S3) observe(operation string, started time.Time, err error, n int64) {
+	if s.observer == nil {
+		return
+	}
+	result := "success"
+	if err != nil {
+		result = "error"
+	}
+	s.observer.ObserveStorage(operation, result, time.Since(started).Seconds(), n)
 }
 
 func IsNotFound(err error) bool {
@@ -66,16 +86,22 @@ func (s *S3) PartialKey(id string, part int) string {
 	return key
 }
 
-func (s *S3) UploadFile(ctx context.Context, file *os.File, key, contentType string, size int64) error {
+func (s *S3) UploadFile(ctx context.Context, file *os.File, key, contentType string, size int64) (retErr error) {
+	ctx, span := startStorageSpan(ctx, "write")
+	defer func() { finishStorageSpan(span, retErr) }()
+	started := time.Now()
+	var transferred atomic.Int64
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		s.observe("write", started, err, 0)
 		return err
 	}
 	if size <= 64<<20 {
-		input := &s3.PutObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key), Body: file, ContentLength: aws.Int64(size), ContentType: aws.String(contentType)}
+		input := &s3.PutObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key), Body: &countingStorageReader{Reader: file, counter: &transferred}, ContentLength: aws.Int64(size), ContentType: aws.String(contentType)}
 		if s.serverSideEncryption {
 			input.ServerSideEncryption = "AES256"
 		}
 		_, err := s.client.PutObject(ctx, input)
+		s.observe("write", started, err, transferred.Load())
 		if err != nil {
 			return fmt.Errorf("upload object to S3: %w", err)
 		}
@@ -87,6 +113,7 @@ func (s *S3) UploadFile(ctx context.Context, file *os.File, key, contentType str
 	}
 	upload, err := s.client.CreateMultipartUpload(ctx, create)
 	if err != nil {
+		s.observe("write", started, err, transferred.Load())
 		return fmt.Errorf("start multipart upload: %w", err)
 	}
 	abort := func() {
@@ -101,39 +128,101 @@ func (s *S3) UploadFile(ctx context.Context, file *os.File, key, contentType str
 		if remaining := size - offset; remaining < length {
 			length = remaining
 		}
-		part, partErr := s.client.UploadPart(ctx, &s3.UploadPartInput{Bucket: aws.String(s.bucket), Key: aws.String(key), UploadId: upload.UploadId, PartNumber: aws.Int32(partNumber), Body: io.NewSectionReader(file, offset, length), ContentLength: aws.Int64(length)})
+		partBody := io.NewSectionReader(file, offset, length)
+		part, partErr := s.client.UploadPart(ctx, &s3.UploadPartInput{Bucket: aws.String(s.bucket), Key: aws.String(key), UploadId: upload.UploadId, PartNumber: aws.Int32(partNumber), Body: &countingStorageReader{Reader: partBody, counter: &transferred}, ContentLength: aws.Int64(length)})
 		if partErr != nil {
+			s.observe("write", started, partErr, transferred.Load())
 			abort()
 			return fmt.Errorf("upload multipart part: %w", partErr)
 		}
 		parts = append(parts, types.CompletedPart{ETag: part.ETag, PartNumber: aws.Int32(partNumber)})
 	}
 	if _, err := s.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{Bucket: aws.String(s.bucket), Key: aws.String(key), UploadId: upload.UploadId, MultipartUpload: &types.CompletedMultipartUpload{Parts: parts}}); err != nil {
+		s.observe("write", started, err, transferred.Load())
 		abort()
 		return fmt.Errorf("complete multipart upload: %w", err)
 	}
+	s.observe("write", started, nil, transferred.Load())
 	return nil
 }
 
-func (s *S3) Get(ctx context.Context, key, byteRange string) (*s3.GetObjectOutput, error) {
+type countingStorageReader struct {
+	io.Reader
+	counter *atomic.Int64
+}
+
+func (r *countingStorageReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.counter.Add(int64(n))
+	return n, err
+}
+
+func (s *S3) Get(ctx context.Context, key, byteRange string) (out *s3.GetObjectOutput, retErr error) {
+	ctx, span := startStorageSpan(ctx, "read")
+	started := time.Now()
 	input := &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)}
 	if byteRange != "" {
 		input.Range = aws.String(byteRange)
 	}
-	return s.client.GetObject(ctx, input)
+	out, err := s.client.GetObject(ctx, input)
+	if err != nil {
+		s.observe("read", started, err, 0)
+		finishStorageSpan(span, err)
+		return nil, err
+	}
+	out.Body = &observedBody{ReadCloser: out.Body, done: func(n int64, readErr error) { s.observe("read", started, readErr, n); finishStorageSpan(span, readErr) }}
+	return out, nil
 }
 
-func (s *S3) Head(ctx context.Context, key string) (*s3.HeadObjectOutput, error) {
-	return s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
+type observedBody struct {
+	io.ReadCloser
+	bytes int64
+	done  func(int64, error)
+	err   error
+	once  sync.Once
 }
 
-func (s *S3) Delete(ctx context.Context, key string) error {
-	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
+func (b *observedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.bytes += int64(n)
+	if err != nil && err != io.EOF {
+		b.err = err
+	}
+	return n, err
+}
+func (b *observedBody) Close() error {
+	err := b.ReadCloser.Close()
+	if b.err == nil {
+		b.err = err
+	}
+	b.once.Do(func() { b.done(b.bytes, b.err) })
 	return err
 }
 
-func (s *S3) Ready(ctx context.Context) error {
+func (s *S3) Head(ctx context.Context, key string) (out *s3.HeadObjectOutput, retErr error) {
+	ctx, span := startStorageSpan(ctx, "metadata")
+	defer func() { finishStorageSpan(span, retErr) }()
+	started := time.Now()
+	out, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
+	s.observe("metadata", started, err, 0)
+	return out, err
+}
+
+func (s *S3) Delete(ctx context.Context, key string) (retErr error) {
+	ctx, span := startStorageSpan(ctx, "delete")
+	defer func() { finishStorageSpan(span, retErr) }()
+	started := time.Now()
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})
+	s.observe("delete", started, err, 0)
+	return err
+}
+
+func (s *S3) Ready(ctx context.Context) (retErr error) {
+	ctx, span := startStorageSpan(ctx, "metadata")
+	defer func() { finishStorageSpan(span, retErr) }()
+	started := time.Now()
 	_, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(s.bucket)})
+	s.observe("metadata", started, err, 0)
 	return err
 }
 

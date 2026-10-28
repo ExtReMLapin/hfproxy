@@ -148,6 +148,13 @@ export interface ManagedSettings {
   ldap_base_dn: string;
   ldap_user_filter: string;
   ldap_auto_provision: boolean;
+  metrics_enabled: boolean;
+  metrics_path: string;
+  tracing_enabled: boolean;
+  tracing_service_name: string;
+  tracing_sampling_ratio: number;
+  otlp_endpoint: string;
+  cache_inventory_refresh: string;
 }
 
 export interface SettingsDraft extends ManagedSettings {
