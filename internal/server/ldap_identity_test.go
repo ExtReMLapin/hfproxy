@@ -79,8 +79,7 @@ func TestLDAPGroupSyncOnlyTouchesLDAPGroups(t *testing.T) {
 	s := auditAPINewServer(t, store, auditAPIConfig())
 	ctx := context.Background()
 	user := settingsAdmin(t, store)
-	var localID string
-	localID = db.NewID()
+	localID := db.NewID()
 	if _, err := store.SQL.Exec(`INSERT INTO groups(id,name,source) VALUES($1,'ml-team','local')`, localID); err != nil {
 		t.Fatal(err)
 	}
