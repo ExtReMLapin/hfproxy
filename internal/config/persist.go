@@ -32,6 +32,7 @@ type managedSettings struct {
 	SessionIdleTTL         time.Duration `json:"session_idle_ttl"`
 	SessionAbsoluteTTL     time.Duration `json:"session_absolute_ttl"`
 	CacheMaxFileSize       int64         `json:"cache_max_file_size"`
+	CacheMaxTotalSize      *int64        `json:"cache_max_total_size,omitempty"`
 	CacheRefTTL            time.Duration `json:"cache_ref_ttl"`
 	CacheNegativeTTL       time.Duration `json:"cache_negative_ttl"`
 	CacheGCGrace           time.Duration `json:"cache_gc_grace"`
@@ -145,7 +146,7 @@ func managedFromConfig(c Config) managedSettings {
 		PublicURL: c.PublicURL, HFBaseURL: c.HFBaseURL, HFProxyURL: stringPointer(c.HFProxyURL), HFToken: c.HFToken, HFAllowedHosts: c.HFAllowedHosts, HFTimeout: c.HFTimeout,
 		S3Endpoint: c.S3Endpoint, S3Region: c.S3Region, S3Bucket: c.S3Bucket, S3Prefix: c.S3Prefix, S3ForcePathStyle: c.S3ForcePathStyle,
 		S3AccessKey: c.S3AccessKey, S3SecretKey: c.S3SecretKey, S3ServerSideEncryption: boolPointer(c.S3ServerSideEncryption), AuthMode: c.AuthMode, AnonymousPublicRead: c.AnonymousPublicRead,
-		SessionIdleTTL: c.SessionIdleTTL, SessionAbsoluteTTL: c.SessionAbsoluteTTL, CacheMaxFileSize: c.CacheMaxFileSize,
+		SessionIdleTTL: c.SessionIdleTTL, SessionAbsoluteTTL: c.SessionAbsoluteTTL, CacheMaxFileSize: c.CacheMaxFileSize, CacheMaxTotalSize: int64Pointer(c.CacheMaxTotalSize),
 		CacheRefTTL: c.CacheRefTTL, CacheNegativeTTL: c.CacheNegativeTTL, CacheGCGrace: c.CacheGCGrace,
 		OIDCIssuer: c.OIDCIssuer, OIDCClientID: c.OIDCClientID, OIDCClientSecret: c.OIDCClientSecret, OIDCRedirectURL: c.OIDCRedirectURL,
 		OIDCAutoProvision: c.OIDCAutoProvision, LDAPURL: c.LDAPURL, LDAPStartTLS: c.LDAPStartTLS, LDAPBindDN: c.LDAPBindDN,
@@ -165,6 +166,11 @@ func (s managedSettings) apply(c Config) Config {
 		c.S3ServerSideEncryption = *s.S3ServerSideEncryption
 	}
 	c.SessionIdleTTL, c.SessionAbsoluteTTL, c.CacheMaxFileSize = s.SessionIdleTTL, s.SessionAbsoluteTTL, s.CacheMaxFileSize
+	// Settings saved before this limit existed leave it unset, so the value from
+	// the environment is kept rather than reset to "unlimited".
+	if s.CacheMaxTotalSize != nil {
+		c.CacheMaxTotalSize = *s.CacheMaxTotalSize
+	}
 	c.CacheRefTTL, c.CacheNegativeTTL, c.CacheGCGrace = s.CacheRefTTL, s.CacheNegativeTTL, s.CacheGCGrace
 	c.OIDCIssuer, c.OIDCClientID, c.OIDCClientSecret, c.OIDCRedirectURL = s.OIDCIssuer, s.OIDCClientID, s.OIDCClientSecret, s.OIDCRedirectURL
 	c.OIDCAutoProvision, c.LDAPURL, c.LDAPStartTLS = s.OIDCAutoProvision, s.LDAPURL, s.LDAPStartTLS
@@ -192,4 +198,5 @@ func OverriddenFields(fromEnvironment, effective Config) []string {
 }
 
 func boolPointer(value bool) *bool       { return &value }
+func int64Pointer(value int64) *int64    { return &value }
 func stringPointer(value string) *string { return &value }

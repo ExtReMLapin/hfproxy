@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -24,7 +25,7 @@ func (s *Server) apiRepoPins(w http.ResponseWriter, r *http.Request, repositoryI
 	}
 	switch r.Method {
 	case http.MethodGet:
-		rows, err := s.db.SQL.QueryContext(r.Context(), `SELECT commit_sha,created_at FROM cache_pins WHERE repository_id=$1 ORDER BY commit_sha`, repositoryID)
+		rows, err := s.db.SQL.QueryContext(r.Context(), `SELECT commit_sha,ref,created_at FROM cache_pins WHERE repository_id=$1 ORDER BY ref,commit_sha`, repositoryID)
 		if err != nil {
 			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to list pins.")
 			return
@@ -32,47 +33,49 @@ func (s *Server) apiRepoPins(w http.ResponseWriter, r *http.Request, repositoryI
 		defer rows.Close()
 		type pin struct {
 			Commit  string    `json:"commit"`
+			Ref     string    `json:"ref"`
 			Scope   string    `json:"scope"`
 			Created time.Time `json:"created_at"`
 		}
 		pins := []pin{}
 		for rows.Next() {
 			var item pin
-			if err := rows.Scan(&item.Commit, &item.Created); err != nil {
+			if err := rows.Scan(&item.Commit, &item.Ref, &item.Created); err != nil {
 				writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to list pins.")
 				return
 			}
-			item.Scope = pinScope(item.Commit)
+			item.Scope = pinScope(item.Commit, item.Ref)
 			pins = append(pins, item)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"pins": pins})
 	case http.MethodPost:
 		var input struct {
 			Commit string `json:"commit"`
+			Ref    string `json:"ref"`
 		}
 		if !decodeJSON(w, r, &input) {
 			return
 		}
-		if !validPinCommit(input.Commit) {
-			writeProblem(w, r, http.StatusBadRequest, "Invalid commit", "commit must be a full 40 or 64 character commit SHA, or empty to pin the whole repository.")
+		if problem := pinTargetProblem(input.Commit, input.Ref); problem != "" {
+			writeProblem(w, r, http.StatusBadRequest, "Invalid pin", problem)
 			return
 		}
-		result, err := s.db.SQL.ExecContext(r.Context(), `INSERT INTO cache_pins(repository_id,commit_sha,created_by) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, repositoryID, input.Commit, p.ID)
+		result, err := s.db.SQL.ExecContext(r.Context(), `INSERT INTO cache_pins(repository_id,commit_sha,ref,created_by) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, repositoryID, input.Commit, input.Ref, p.ID)
 		if err != nil {
 			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to pin.")
 			return
 		}
 		if added, _ := result.RowsAffected(); added > 0 {
-			s.audit(r.Context(), p.ID, "cache.pin", "repository", repositoryID, map[string]any{"scope": pinScope(input.Commit), "commit": input.Commit})
+			s.audit(r.Context(), p.ID, "cache.pin", "repository", repositoryID, map[string]any{"scope": pinScope(input.Commit, input.Ref), "commit": input.Commit, "ref": input.Ref})
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"commit": input.Commit, "scope": pinScope(input.Commit)})
+		writeJSON(w, http.StatusOK, map[string]string{"commit": input.Commit, "ref": input.Ref, "scope": pinScope(input.Commit, input.Ref)})
 	case http.MethodDelete:
-		commit := r.URL.Query().Get("commit")
-		if !validPinCommit(commit) {
-			writeProblem(w, r, http.StatusBadRequest, "Invalid commit", "commit must be a full 40 or 64 character commit SHA, or empty for the repository-wide pin.")
+		commit, ref := r.URL.Query().Get("commit"), r.URL.Query().Get("ref")
+		if problem := pinTargetProblem(commit, ref); problem != "" {
+			writeProblem(w, r, http.StatusBadRequest, "Invalid pin", problem)
 			return
 		}
-		result, err := s.db.SQL.ExecContext(r.Context(), `DELETE FROM cache_pins WHERE repository_id=$1 AND commit_sha=$2`, repositoryID, commit)
+		result, err := s.db.SQL.ExecContext(r.Context(), `DELETE FROM cache_pins WHERE repository_id=$1 AND commit_sha=$2 AND ref=$3`, repositoryID, commit, ref)
 		if err != nil {
 			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to unpin.")
 			return
@@ -81,18 +84,46 @@ func (s *Server) apiRepoPins(w http.ResponseWriter, r *http.Request, repositoryI
 			writeProblem(w, r, http.StatusNotFound, "Pin not found", "That pin does not exist.")
 			return
 		}
-		s.audit(r.Context(), p.ID, "cache.unpin", "repository", repositoryID, map[string]any{"scope": pinScope(commit), "commit": commit})
+		s.audit(r.Context(), p.ID, "cache.unpin", "repository", repositoryID, map[string]any{"scope": pinScope(commit, ref), "commit": commit, "ref": ref})
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		methodNotAllowedWith(w, "GET, POST, DELETE")
 	}
 }
 
-func validPinCommit(commit string) bool { return commit == "" || validCommit(commit) }
-
-func pinScope(commit string) string {
-	if commit == "" {
-		return "repository"
+// pinTargetProblem explains why a commit/ref pair cannot name a pin, or returns
+// "" when it can. Both empty means the whole repository; otherwise exactly one
+// of them is given.
+func pinTargetProblem(commit, ref string) string {
+	switch {
+	case commit != "" && ref != "":
+		return "Give either a commit or a ref, not both."
+	case commit != "" && !validCommit(commit):
+		return "commit must be a full 40 or 64 character commit SHA."
+	case ref != "" && validCommit(ref):
+		return "That looks like a commit SHA: pin it with the commit field."
+	case ref != "" && !validRefName(ref):
+		return "ref must be a branch or tag name."
 	}
-	return "commit"
+	return ""
+}
+
+// validRefName accepts what Git allows in a branch or tag name: no whitespace,
+// control characters or any of ~ ^ : ? * [ \, no "..", "@{" or ".lock" ending,
+// and no empty path segment.
+func validRefName(ref string) bool {
+	if !validRevision(ref) || len(ref) > 255 || strings.ContainsAny(ref, " \t~^:?*[") || strings.Contains(ref, "..") || strings.Contains(ref, "@{") || strings.HasSuffix(ref, ".lock") || strings.HasSuffix(ref, ".") {
+		return false
+	}
+	return true
+}
+
+func pinScope(commit, ref string) string {
+	switch {
+	case ref != "":
+		return "ref"
+	case commit != "":
+		return "commit"
+	}
+	return "repository"
 }

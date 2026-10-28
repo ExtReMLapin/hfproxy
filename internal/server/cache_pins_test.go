@@ -185,3 +185,88 @@ func TestDeletingARepositoryRemovesItsPins(t *testing.T) {
 		t.Fatalf("%d pins outlived their repository", left)
 	}
 }
+
+func TestPinnedBranchFollowsTheCommitItPointsTo(t *testing.T) {
+	store := auditAPIFreshStore(t)
+	cfg := auditAPIConfig()
+	cfg.CacheMaxTotalSize = 5
+	s := auditAPINewServer(t, store, cfg)
+	repo := seedRepository(t, store, "org/branch")
+	seedPinnedArtifact(t, store, repo, pinCommitA, "old-main", 10, "5 days")
+	seedPinnedArtifact(t, store, repo, pinCommitB, "new-main", 10, "9 days")
+	if _, err := store.SQL.Exec(`INSERT INTO cache_pins(repository_id,commit_sha,ref) VALUES($1,'','main')`, repo); err != nil {
+		t.Fatal(err)
+	}
+
+	// A branch nobody has requested yet points nowhere, so it protects nothing.
+	if pinned, _ := s.pinnedBytes(context.Background()); pinned != 0 {
+		t.Fatalf("an unresolved branch pinned %d bytes", pinned)
+	}
+
+	if _, err := store.SQL.Exec(`INSERT INTO revisions(id,repository_id,requested_ref,commit_sha) VALUES($1,$2,'main',$3)`, db.NewID(), repo, pinCommitA); err != nil {
+		t.Fatal(err)
+	}
+	if pinned, _ := s.pinnedBytes(context.Background()); pinned != 10 {
+		t.Fatalf("pinned bytes = %d, want the 10 of the commit main points to", pinned)
+	}
+	if _, err := s.evictOverQuota(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := remainingArtifacts(t, store); got != "old-main" {
+		t.Fatalf("remaining = %q, want only the commit main points to (the other was older in use but unpinned)", got)
+	}
+
+	// The branch moves: what it used to point to is no longer protected.
+	seedPinnedArtifact(t, store, repo, pinCommitB, "newer-main", 10, "1 day")
+	if _, err := store.SQL.Exec(`UPDATE revisions SET commit_sha=$1 WHERE repository_id=$2 AND requested_ref='main'`, pinCommitB, repo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.evictOverQuota(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := remainingArtifacts(t, store); got != "newer-main" {
+		t.Fatalf("remaining = %q, want the commit main points to now", got)
+	}
+}
+
+func TestPinAPIAcceptsBranchesAndRejectsAmbiguousPins(t *testing.T) {
+	store := auditAPIFreshStore(t)
+	s := auditAPINewServer(t, store, auditAPIConfig())
+	repo := seedRepository(t, store, "org/api-ref")
+	adminID := db.NewID()
+	if _, err := store.SQL.Exec(`INSERT INTO users(id,username,role) VALUES($1,'ref-admin','admin')`, adminID); err != nil {
+		t.Fatal(err)
+	}
+	admin := &Principal{ID: adminID, Username: "ref-admin", Role: "admin", Authenticated: true, TokenID: "ref-token", Scopes: []string{"admin"}}
+	route := "/api/v1/repos/" + repo + "/pins"
+
+	if rec := auditAPIDoAs(s, admin, http.MethodPost, route, `{"ref":"main"}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"scope":"ref"`) {
+		t.Fatalf("pin a branch: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := auditAPIDoAs(s, admin, http.MethodPost, route, `{"ref":"refs/pr/12"}`); rec.Code != http.StatusOK {
+		t.Fatalf("pin a ref with a slash: %d", rec.Code)
+	}
+	if rec := auditAPIDoAs(s, admin, http.MethodPost, route, `{}`); rec.Code != http.StatusOK {
+		t.Fatalf("a branch pin and a repository pin must coexist: %d", rec.Code)
+	}
+	for _, bad := range []string{`{"ref":"main","commit":"` + pinCommitA + `"}`, `{"ref":"` + pinCommitA + `"}`, `{"ref":"../x"}`, `{"ref":"a b"}`} {
+		if rec := auditAPIDoAs(s, admin, http.MethodPost, route, bad); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", bad, rec.Code)
+		}
+	}
+	list := auditAPIDoAs(s, admin, http.MethodGet, route, "")
+	if strings.Count(list.Body.String(), `"scope"`) != 3 || !strings.Contains(list.Body.String(), `"ref":"main"`) {
+		t.Fatalf("list: %s", list.Body.String())
+	}
+	if rec := auditAPIDoAs(s, admin, http.MethodDelete, route+"?ref=main", ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("unpin the branch: %d", rec.Code)
+	}
+	if rec := auditAPIDoAs(s, admin, http.MethodDelete, route+"?ref=main", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("unpinning twice = %d, want 404", rec.Code)
+	}
+	var whole int
+	_ = store.SQL.QueryRow(`SELECT COUNT(*) FROM cache_pins WHERE commit_sha='' AND ref=''`).Scan(&whole)
+	if whole != 1 {
+		t.Fatal("removing a branch pin removed the repository-wide pin")
+	}
+}

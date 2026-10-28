@@ -133,6 +133,7 @@ export interface ManagedSettings {
   session_idle_ttl: string;
   session_absolute_ttl: string;
   cache_max_file_size: number;
+  cache_max_total_size: number;
   cache_ref_ttl: string;
   cache_negative_ttl: string;
   cache_gc_grace: string;

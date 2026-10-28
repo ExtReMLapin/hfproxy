@@ -19,7 +19,11 @@ func TestCachePinCommands(t *testing.T) {
 	var out bytes.Buffer
 	run := func(pin bool, repoType, repo, sha string) error {
 		out.Reset()
-		return changePin(ctx, &out, sqlDB, pin, repoType, repo, sha)
+		return changePin(ctx, &out, sqlDB, pin, repoType, repo, sha, "")
+	}
+	runRef := func(pin bool, repo, commit, ref string) error {
+		out.Reset()
+		return changePin(ctx, &out, sqlDB, pin, "models", repo, commit, ref)
 	}
 
 	if err := run(true, "models", "org/model", ""); err != nil || !strings.Contains(out.String(), "every revision of models/org/model") {
@@ -48,6 +52,38 @@ func TestCachePinCommands(t *testing.T) {
 		if err := call(); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
+	}
+
+	if err := runRef(true, "org/model", "", "main"); err != nil || !strings.Contains(out.String(), "main points to") {
+		t.Fatalf("pin a branch: %v %q", err, out.String())
+	}
+	out.Reset()
+	if err := listPins(ctx, &out, sqlDB); err != nil || !strings.Contains(out.String(), "ref main (not requested through hfproxy yet)") {
+		t.Fatalf("a branch never requested must say so: %v\n%s", err, out.String())
+	}
+	var repositoryID string
+	if err := sqlDB.QueryRow(`SELECT id FROM repositories WHERE repo_id='org/model'`).Scan(&repositoryID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlDB.Exec(`INSERT INTO revisions(id,repository_id,requested_ref,commit_sha) VALUES($1,$2,'main',$3)`, db.NewID(), repositoryID, commit); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := listPins(ctx, &out, sqlDB); err != nil || !strings.Contains(out.String(), "ref main (now "+commit+")") {
+		t.Fatalf("a resolved branch must show its commit: %v\n%s", err, out.String())
+	}
+	for name, call := range map[string]func() error{
+		"commit and ref together": func() error { return runRef(true, "org/model", commit, "main") },
+		"a commit given as ref":   func() error { return runRef(true, "org/model", "", commit) },
+		"malformed ref":           func() error { return runRef(true, "org/model", "", "/main") },
+		"unpin a missing ref":     func() error { return runRef(false, "org/model", "", "dev") },
+	} {
+		if err := call(); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+	if err := runRef(false, "org/model", "", "main"); err != nil || !strings.Contains(out.String(), "Unpinned the commit that main points to") {
+		t.Fatalf("unpin a branch: %v %q", err, out.String())
 	}
 
 	if err := run(false, "models", "org/model", commit); err != nil || !strings.Contains(out.String(), "Unpinned commit") {

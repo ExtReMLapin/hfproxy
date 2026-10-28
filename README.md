@@ -118,23 +118,26 @@ PostgreSQL is required. The S3 bucket must exist, remain private, and allow the 
 
 The upstream HF token is optional for public repositories and required for private or gated repositories. It is sent only to the configured HF host, never to the client. Redirects are followed over HTTPS to allowed HF hosts. Add the delivery hosts observed in your environment to `HF_ALLOWED_REDIRECT_HOSTS`.
 
-Capacity and retention settings are read from the environment only:
+Capacity and retention settings come from the environment, except the cache size limit, which can also be changed in the console:
 
-- `CACHE_MAX_TOTAL_SIZE` (bytes, `0` = unlimited): when live blobs exceed it, the least recently used artifacts are dropped until usage is under 90% of the quota. Their objects are deleted by the garbage collector after `CACHE_GC_GRACE`.
+- `CACHE_MAX_TOTAL_SIZE` (bytes, `0` = unlimited): when live blobs exceed it, the least recently used artifacts are dropped until usage is under 90% of the quota. Their objects are deleted by the garbage collector after `CACHE_GC_GRACE`. It can also be set under **Settings → Cache rules**; a value saved there replaces the environment's and is enforced within seconds, without a restart. Leaving it out of an API request keeps the current limit, and `0` removes it.
 - `CACHE_FILL_CONCURRENCY` (default `4`): how many files may be fetched from the Hub at once. Further requests wait up to 15 seconds, then receive `503` with `Retry-After`.
 - `STAGING_DIR` (default: the system temporary directory): where files are staged before upload. Size it for `CACHE_FILL_CONCURRENCY` times your largest file; a fill that does not fit in the free space is refused with `507`. `hfproxy_staging_free_bytes` and `hfproxy_staging_reserved_bytes` show the room left.
 - `STAGING_MIN_FREE_BYTES` (default `0`, off): when set, `/readyz` answers `503` with `"reason":"staging_space"` while the staging directory has less free space than this. Use it when several instances share traffic, so a full disk takes that instance out of rotation; with a single instance it would also stop cache hits, so leave it off and alert on the gauge instead.
 - `RETENTION_DOWNLOADS` (default `2160h`) and `RETENTION_AUDIT` (default `8760h`): Go durations after which download events and audit events are deleted; `0` keeps them. Expired sessions are always purged.
 - `METRICS_ADDR` (for example `127.0.0.1:9090`): serve metrics on a dedicated listener instead of the public port.
 
-When `CACHE_MAX_TOTAL_SIZE` is set, files you cannot afford to lose can be **pinned**. A pin covers either every revision of a repository or one commit, and eviction never touches what a pin covers:
+When `CACHE_MAX_TOTAL_SIZE` is set, files you cannot afford to lose can be **pinned**. A pin covers every revision of a repository, one commit, or a branch or tag, and eviction never touches what a pin covers:
 
     hfproxy cache pin --repo org/model                    # every revision
     hfproxy cache pin --repo org/model --commit <full SHA>
-    hfproxy cache unpin --repo org/model [--commit <full SHA>]
+    hfproxy cache pin --repo org/model --ref main         # a branch or tag
+    hfproxy cache unpin --repo org/model [--commit <full SHA> | --ref main]
     hfproxy cache pins                                    # what is pinned and how much it holds
 
-The same is available to administrators at `GET|POST|DELETE /api/v1/repos/{id}/pins` (the commit goes in the body for `POST` and in `?commit=` for `DELETE`; empty means the whole repository). Pinned files still count towards the quota, so pinning more than the quota allows leaves the cache above its limit; a warning is logged and `hfproxy_cache_pinned_bytes` shows how much is pinned. `cache purge` is an explicit action and does not honor pins.
+A pinned branch or tag **follows** the name: it protects the commit the name points to now, and when the branch moves to a new commit the old one stops being protected. hfproxy learns where a name points when a client requests it, so a branch nobody has requested yet protects nothing, and `cache pins` says so. Pin a commit SHA to hold one exact version.
+
+The same is available to administrators at `GET|POST|DELETE /api/v1/repos/{id}/pins`: the body of `POST` carries `{"commit": "<SHA>"}` or `{"ref": "main"}` (or `{}` for the whole repository), and `DELETE` takes `?commit=` or `?ref=`. Pinned files still count towards the quota, so pinning more than the quota allows leaves the cache above its limit; a warning is logged and `hfproxy_cache_pinned_bytes` shows how much is pinned. `cache purge` is an explicit action and does not honor pins.
 
 If the Hub is unreachable or answers 429/5xx and a branch or tag was resolved before, hfproxy serves the cached file for the last known commit with `X-Cache: STALE`. Transient Hub errors are retried twice with backoff.
 

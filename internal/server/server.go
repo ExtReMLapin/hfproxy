@@ -68,6 +68,7 @@ type Server struct {
 	apiCache             *apiCache
 	apiFlightMu          sync.Mutex
 	apiFlights           map[string]*apiFlight
+	maintenanceWake      chan struct{}
 }
 
 type loginBucket struct {
@@ -120,6 +121,7 @@ func New(ctx context.Context, cfg config.Config, store *db.Store, objectStore *s
 		slots = defaultFillConcurrency
 	}
 	s.fillSlots = make(chan struct{}, slots)
+	s.maintenanceWake = make(chan struct{}, 1)
 	if cfg.StagingDir != "" {
 		if err := os.MkdirAll(cfg.StagingDir, 0o700); err != nil {
 			return nil, fmt.Errorf("prepare staging directory: %w", err)
@@ -252,6 +254,11 @@ func (s *Server) applyConfig(ctx context.Context, cfg config.Config, actorID str
 	activatePreparedTracing(ctx, traceProcessor, cfg)
 	select {
 	case s.inventoryRefreshWake <- struct{}{}:
+	default:
+	}
+	// A changed cache size limit should take effect now, not at the next tick.
+	select {
+	case s.maintenanceWake <- struct{}{}:
 	default:
 	}
 	return nil

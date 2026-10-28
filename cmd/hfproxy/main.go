@@ -92,7 +92,7 @@ Usage:
   hfproxy cache inspect [--repo ID] [--path QUERY]
   hfproxy cache purge [--repo ID] [--path QUERY] [--execute --yes]
   hfproxy cache verify
-  hfproxy cache pin|unpin --repo ID [--type models] [--commit SHA]
+  hfproxy cache pin|unpin --repo ID [--type models] [--commit SHA | --ref BRANCH]
   hfproxy cache pins
   hfproxy config validate
   hfproxy healthcheck
@@ -533,11 +533,12 @@ func cache(args []string) error {
 		flags := flag.NewFlagSet("cache "+args[0], flag.ContinueOnError)
 		repoType := flags.String("type", "models", "models, datasets or spaces")
 		repoID := flags.String("repo", "", "repository id, for example org/name")
-		commit := flags.String("commit", "", "full commit SHA; omit to cover every revision of the repository")
+		commit := flags.String("commit", "", "full commit SHA to pin")
+		ref := flags.String("ref", "", "branch or tag to pin; follows it as it moves")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		return changePin(ctx, os.Stdout, store.SQL, args[0] == "pin", *repoType, *repoID, *commit)
+		return changePin(ctx, os.Stdout, store.SQL, args[0] == "pin", *repoType, *repoID, *commit, *ref)
 	case "pins":
 		return listPins(ctx, os.Stdout, store.SQL)
 	case "inspect":
@@ -836,15 +837,24 @@ func rotateSecret(ctx context.Context, out io.Writer, cfg config.Config, sqlDB *
 // changePin adds or removes a cache pin. A pin keeps the cache from evicting
 // the files of a whole repository, or of one commit, when it enforces its size
 // limit.
-func changePin(ctx context.Context, out io.Writer, sqlDB *sql.DB, pin bool, repoType, repoID, commit string) error {
+func changePin(ctx context.Context, out io.Writer, sqlDB *sql.DB, pin bool, repoType, repoID, commit, ref string) error {
 	if repoID == "" {
 		return fmt.Errorf("--repo is required")
 	}
 	if repoType != "models" && repoType != "datasets" && repoType != "spaces" {
 		return fmt.Errorf("--type must be models, datasets or spaces")
 	}
+	if commit != "" && ref != "" {
+		return fmt.Errorf("give --commit or --ref, not both")
+	}
 	if commit != "" && !fullCommit(commit) {
 		return fmt.Errorf("--commit must be a full 40 or 64 character commit SHA")
+	}
+	if ref != "" && fullCommit(ref) {
+		return fmt.Errorf("%s looks like a commit SHA: use --commit", ref)
+	}
+	if ref != "" && !validRefName(ref) {
+		return fmt.Errorf("--ref must be a branch or tag name")
 	}
 	var repositoryID string
 	if err := sqlDB.QueryRowContext(ctx, `SELECT id FROM repositories WHERE repo_type=$1 AND repo_id=$2 AND deleted_at IS NULL`, repoType, repoID).Scan(&repositoryID); err != nil {
@@ -857,14 +867,17 @@ func changePin(ctx context.Context, out io.Writer, sqlDB *sql.DB, pin bool, repo
 	if commit != "" {
 		scope = "commit " + commit + " of " + repoType + "/" + repoID
 	}
+	if ref != "" {
+		scope = "the commit that " + ref + " points to in " + repoType + "/" + repoID + " (following it as it moves)"
+	}
 	if pin {
-		if _, err := sqlDB.ExecContext(ctx, `INSERT INTO cache_pins(repository_id,commit_sha) VALUES($1,$2) ON CONFLICT DO NOTHING`, repositoryID, commit); err != nil {
+		if _, err := sqlDB.ExecContext(ctx, `INSERT INTO cache_pins(repository_id,commit_sha,ref) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, repositoryID, commit, ref); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "Pinned %s: its cached files are kept when the cache enforces its size limit.\n", scope)
 		return nil
 	}
-	result, err := sqlDB.ExecContext(ctx, `DELETE FROM cache_pins WHERE repository_id=$1 AND commit_sha=$2`, repositoryID, commit)
+	result, err := sqlDB.ExecContext(ctx, `DELETE FROM cache_pins WHERE repository_id=$1 AND commit_sha=$2 AND ref=$3`, repositoryID, commit, ref)
 	if err != nil {
 		return err
 	}
@@ -876,25 +889,34 @@ func changePin(ctx context.Context, out io.Writer, sqlDB *sql.DB, pin bool, repo
 }
 
 func listPins(ctx context.Context, out io.Writer, sqlDB *sql.DB) error {
-	rows, err := sqlDB.QueryContext(ctx, `SELECT r.repo_type,r.repo_id,p.commit_sha,p.created_at,
+	rows, err := sqlDB.QueryContext(ctx, `SELECT r.repo_type,r.repo_id,p.commit_sha,p.ref,p.created_at,
+			COALESCE((SELECT v.commit_sha FROM revisions v WHERE v.repository_id=p.repository_id AND v.requested_ref=p.ref),''),
 			COALESCE((SELECT SUM(b.size_bytes) FROM artifacts a JOIN blobs b ON b.id=a.blob_id
-				WHERE a.repository_id=p.repository_id AND (p.commit_sha='' OR a.commit_sha=p.commit_sha)),0)
+				WHERE a.repository_id=p.repository_id AND (
+					(p.commit_sha='' AND p.ref='')
+					OR (p.commit_sha<>'' AND a.commit_sha=p.commit_sha)
+					OR (p.ref<>'' AND EXISTS (SELECT 1 FROM revisions v WHERE v.repository_id=p.repository_id AND v.requested_ref=p.ref AND v.commit_sha=a.commit_sha)))),0)
 		FROM cache_pins p JOIN repositories r ON r.id=p.repository_id WHERE r.deleted_at IS NULL
-		ORDER BY r.repo_type,r.repo_id,p.commit_sha`)
+		ORDER BY r.repo_type,r.repo_id,p.ref,p.commit_sha`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	count := 0
 	for rows.Next() {
-		var repoType, repoID, commit string
+		var repoType, repoID, commit, ref, resolved string
 		var created time.Time
 		var size int64
-		if err := rows.Scan(&repoType, &repoID, &commit, &created, &size); err != nil {
+		if err := rows.Scan(&repoType, &repoID, &commit, &ref, &created, &resolved, &size); err != nil {
 			return err
 		}
 		target := "every revision"
-		if commit != "" {
+		switch {
+		case ref != "" && resolved != "":
+			target = "ref " + ref + " (now " + resolved + ")"
+		case ref != "":
+			target = "ref " + ref + " (not requested through hfproxy yet)"
+		case commit != "":
 			target = "commit " + commit
 		}
 		fmt.Fprintf(out, "%s/%s  %s  %s cached  pinned %s\n", repoType, repoID, target, humanBytes(size), created.Format(time.RFC3339))
@@ -917,6 +939,16 @@ func fullCommit(value string) bool {
 		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
 			return false
 		}
+	}
+	return true
+}
+
+// validRefName accepts what Git allows in a branch or tag name.
+func validRefName(ref string) bool {
+	if ref == "" || len(ref) > 255 || strings.HasPrefix(ref, "/") || strings.HasSuffix(ref, "/") || strings.Contains(ref, "//") ||
+		strings.ContainsAny(ref, " \t\\\x00~^:?*[") || strings.Contains(ref, "..") || strings.Contains(ref, "@{") ||
+		strings.HasSuffix(ref, ".lock") || strings.HasSuffix(ref, ".") {
+		return false
 	}
 	return true
 }

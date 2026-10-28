@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/nicolas/hfproxy/internal/db"
 )
 
 var (
@@ -102,11 +104,14 @@ func (s *Server) startMaintenance(ctx context.Context) {
 	go func() {
 		timer := time.NewTimer(time.Minute)
 		defer timer.Stop()
-		for tick := 0; ; tick++ {
+		for tick := 0; ; {
+			evictionOnly := false
 			select {
 			case <-ctx.Done():
 				return
 			case <-timer.C:
+			case <-s.maintenanceWake:
+				evictionOnly = true
 			}
 			s.observeStaging(s.stagingReserved.Load())
 			if evicted, err := s.evictOverQuota(ctx); err != nil {
@@ -116,9 +121,13 @@ func (s *Server) startMaintenance(ctx context.Context) {
 			} else if evicted > 0 {
 				s.logger.Info("cache eviction completed", "artifacts", evicted)
 			}
+			if evictionOnly {
+				continue // the periodic timer is still running
+			}
 			if tick%6 == 0 {
 				s.runRetention(ctx)
 			}
+			tick++
 			timer.Reset(maintenanceInterval)
 		}
 	}()
@@ -248,9 +257,8 @@ func (s *Server) evictOverQuota(ctx context.Context) (int, error) {
 	return evicted, nil
 }
 
-// pinnedArtifact is a correlated subquery, true for an artifact a that belongs
-// to a pinned repository or to a pinned commit.
-const pinnedArtifact = `SELECT 1 FROM cache_pins p WHERE p.repository_id=a.repository_id AND (p.commit_sha='' OR p.commit_sha=a.commit_sha)`
+// pinnedArtifact is true for an artifact "a" that a pin covers.
+const pinnedArtifact = db.PinnedArtifactSQL
 
 // pinnedBytes is the size of the live blobs that eviction must not touch.
 func (s *Server) pinnedBytes(ctx context.Context) (int64, error) {

@@ -525,6 +525,18 @@
                     min="1"
                     [(ngModel)]="settings.cache_max_file_size" /></label
                 ><label class="field"
+                  >Total cache size limit <span class="font-normal text-slate-400">(bytes, 0 = no limit)</span
+                  ><input
+                    class="control"
+                    name="maxTotalSize"
+                    type="number"
+                    min="0"
+                    [(ngModel)]="settings.cache_max_total_size" /><span
+                    class="mt-1 block text-[11px] font-normal leading-4 text-slate-500"
+                    >When the cache grows past this, the least recently used files are removed.
+                    Pinned files are never removed. For example, 107374182400 is 100 GiB.</span
+                  ></label
+                ><label class="field"
                   >Reference TTL<input
                     class="control"
                     name="refTTL"
