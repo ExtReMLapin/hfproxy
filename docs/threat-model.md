@@ -27,10 +27,10 @@ hfproxy sits between internal clients and Hugging Face. It authenticates clients
 | Server-side request forgery through redirects or settings | Redirects only to allowlisted HTTPS hosts and ports; the dialer refuses non-public addresses | An administrator can point the Hub URL elsewhere, so treat that role as privileged |
 | Tampered or corrupted download | LFS files are verified against the Hub's SHA-256 before they are published | Small non-LFS files carry no digest to verify |
 | Stolen read token | Tokens are stored as keyed hashes, expire, can be revoked; a `read` token cannot use the administration API | Anyone holding it can read what its owner can |
-| Credential guessing | Argon2id, per-address and per-user login rate limits, constant-time comparisons | Limits are per process; see the single-instance note in production.md |
+| Credential guessing | Argon2id, constant-time comparisons, login limits shared by all instances through PostgreSQL: per address, per address and account, and per account on failures only | Someone with many addresses can still make 50 failed guesses a minute against one account, which also briefly blocks that account |
 | Disk or storage exhaustion | Per-file size cap, concurrent fill limit, free-space check, optional total quota with LRU eviction | Size the staging volume for the configured concurrency |
 | Upstream outage or rate limiting | Retries with backoff, and cached files are served when a known ref cannot be confirmed (`X-Cache: STALE`) | Uncached files fail until the Hub recovers |
-| Loss of the settings key | None automatic | Back up `SESSION_SECRET`; losing it makes saved settings unreadable |
+| Compromise or loss of the session secret | Separate derived keys for tokens, sessions and settings; rotation with `HFPROXY_SESSION_SECRET_PREVIOUS` and `hfproxy admin rotate-secret` | Rotate promptly after a leak and revoke old tokens; losing every copy of the secret makes saved settings unreadable |
 
 ## Out of scope
 

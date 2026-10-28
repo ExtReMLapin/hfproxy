@@ -35,6 +35,10 @@ type Config struct {
 	AuthMode               string
 	AnonymousPublicRead    bool
 	SessionSecret          string
+	// PreviousSessionSecrets are older secrets still accepted while rotating
+	// (HFPROXY_SESSION_SECRET_PREVIOUS). New data is always protected with
+	// SessionSecret.
+	PreviousSessionSecrets []string
 	SessionIdleTTL         time.Duration
 	SessionAbsoluteTTL     time.Duration
 	CacheMaxFileSize       int64
@@ -105,6 +109,7 @@ func Load() (Config, error) {
 	c.AuthMode = strings.ToLower(value("AUTH_MODE", "local"))
 	c.AnonymousPublicRead = boolean("ANONYMOUS_PUBLIC_READ", false)
 	c.SessionSecret = secret("SESSION_SECRET", "")
+	c.PreviousSessionSecrets = splitSecrets(secret("SESSION_SECRET_PREVIOUS", ""))
 	c.SessionIdleTTL = duration("SESSION_IDLE_TTL", 8*time.Hour)
 	c.SessionAbsoluteTTL = duration("SESSION_ABSOLUTE_TTL", 24*time.Hour)
 	c.CacheMaxFileSize = int64(number("CACHE_MAX_FILE_SIZE", 100<<30))
@@ -169,6 +174,13 @@ func (c Config) CheckDeployment() error {
 		return fmt.Errorf("HFPROXY_PUBLIC_URL is required when listening on a non-loopback address (it enables Secure cookies and HSTS)")
 	}
 	return nil
+}
+
+const maxPreviousSecrets = 4
+
+// splitSecrets splits a list of secrets separated by commas or whitespace.
+func splitSecrets(value string) []string {
+	return strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\r' || r == '\t' })
 }
 
 func listensOnLoopback(addr string) bool {
@@ -296,6 +308,14 @@ func (c Config) Validate() error {
 	if c.SessionSecret != "" && len(c.SessionSecret) < 32 {
 		return fmt.Errorf("HFPROXY_SESSION_SECRET must contain at least 32 bytes")
 	}
+	if len(c.PreviousSessionSecrets) > maxPreviousSecrets {
+		return fmt.Errorf("HFPROXY_SESSION_SECRET_PREVIOUS lists %d secrets; keep at most %d", len(c.PreviousSessionSecrets), maxPreviousSecrets)
+	}
+	for _, previous := range c.PreviousSessionSecrets {
+		if len(previous) < 32 {
+			return fmt.Errorf("every secret in HFPROXY_SESSION_SECRET_PREVIOUS must contain at least 32 bytes")
+		}
+	}
 	if c.DatabaseURL == "" {
 		return fmt.Errorf("HFPROXY_DATABASE_URL is required")
 	}
@@ -339,8 +359,8 @@ func secret(key, fallback string) string {
 
 func validateEnvironmentOverrides() error {
 	for _, key := range []string{
-		"DATABASE_URL", "HF_PROXY_URL", "HF_TOKEN", "S3_ACCESS_KEY", "S3_SECRET_KEY", "SESSION_SECRET",
-		"OIDC_CLIENT_SECRET", "LDAP_BIND_PASSWORD", "OIDC_CLIENT_SECRET",
+		"DATABASE_URL", "HF_PROXY_URL", "HF_TOKEN", "S3_ACCESS_KEY", "S3_SECRET_KEY", "SESSION_SECRET", "SESSION_SECRET_PREVIOUS",
+		"OIDC_CLIENT_SECRET", "LDAP_BIND_PASSWORD",
 	} {
 		if file := os.Getenv("HFPROXY_" + key + "_FILE"); file != "" {
 			data, err := os.ReadFile(file)

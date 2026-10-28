@@ -74,7 +74,7 @@ The console is served by the Go service at `/` and is available after creating t
 
 The Angular source is in `ui/`. For frontend development, start the Go service on port 8080, then run `nvm use && npm ci && npm start` from `ui/`; `.nvmrc` pins Node 24.22.1. Angular serves the UI on port 4200 and proxies API requests to Go. The Docker build compiles and embeds the production UI.
 
-The database URL, listen address, and `SESSION_SECRET` remain bootstrap settings in the environment. Keep `SESSION_SECRET` unchanged: it encrypts saved runtime settings as well as signing sessions. Changing it without migrating the saved settings will make those credentials unreadable. Changing the S3 bucket or prefix does not move existing objects.
+The database URL, listen address, and `SESSION_SECRET` remain bootstrap settings in the environment. `SESSION_SECRET` protects access tokens, sessions and the saved settings, each with its own key derived from it. Do not simply replace it: follow [Rotating the session secret](docs/operations.md#rotating-the-session-secret), which keeps existing tokens and settings working. Changing the S3 bucket or prefix does not move existing objects.
 
 For a fresh installation that should configure S3 only through the console, leave `HFPROXY_S3_BUCKET` unset in the environment. hfproxy will serve the sign-in and setup pages, while `/readyz` stays unavailable until a valid bucket is saved. PostgreSQL and `SESSION_SECRET` are still needed at startup. The provided Compose setup preconfigures a single-node Garage instance and its default bucket for local use.
 
@@ -89,6 +89,7 @@ Local username/password authentication is enabled by default. OIDC/SSO and LDAP 
     hfproxy admin token create|list|revoke
     hfproxy admin repo add
     hfproxy admin identity link
+    hfproxy admin rotate-secret
     hfproxy cache inspect|purge|verify
     hfproxy config validate
     hfproxy version
@@ -104,7 +105,7 @@ Environment variables use the `HFPROXY_` prefix. Common settings for local Compo
 | HTTP and database | LISTEN_ADDR, PUBLIC_URL, DATABASE_URL, AUTO_MIGRATE, LOG_LEVEL |
 | Hugging Face | HF_BASE_URL, HF_PROXY_URL, HF_TOKEN, HF_ALLOWED_REDIRECT_HOSTS, HF_TIMEOUT |
 | S3 | S3_ENDPOINT, S3_REGION, S3_BUCKET, S3_PREFIX, S3_FORCE_PATH_STYLE, S3_SERVER_SIDE_ENCRYPTION, S3_ACCESS_KEY, S3_SECRET_KEY |
-| Authentication | AUTH_MODE=local or oidc, SESSION_SECRET, SESSION_IDLE_TTL, SESSION_ABSOLUTE_TTL, ANONYMOUS_PUBLIC_READ |
+| Authentication | AUTH_MODE=local or oidc, SESSION_SECRET, SESSION_SECRET_PREVIOUS, SESSION_IDLE_TTL, SESSION_ABSOLUTE_TTL, ANONYMOUS_PUBLIC_READ |
 | OIDC | OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_REDIRECT_URL, OIDC_AUTO_PROVISION |
 | LDAP | LDAP_URL, LDAP_STARTTLS, LDAP_BIND_DN, LDAP_BIND_PASSWORD, LDAP_BASE_DN, LDAP_USER_FILTER, LDAP_AUTO_PROVISION |
 | Cache limits | CACHE_MAX_FILE_SIZE, CACHE_REF_TTL, CACHE_NEGATIVE_TTL, CACHE_GC_GRACE |

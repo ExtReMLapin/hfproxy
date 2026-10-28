@@ -2,9 +2,7 @@ package server
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"database/sql"
@@ -23,6 +21,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/nicolas/hfproxy/internal/keyring"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/oauth2"
 )
@@ -149,9 +148,9 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("hfproxy_session")
 	var actorID string
 	if err == nil && cookie.Value != "" {
-		digest := HashToken(cookie.Value, s.currentConfig().SessionSecret)
-		_ = s.db.SQL.QueryRowContext(r.Context(), `SELECT user_id FROM sessions WHERE token_hash=$1`, digest).Scan(&actorID)
-		_, _ = s.db.SQL.ExecContext(r.Context(), `DELETE FROM sessions WHERE token_hash=$1`, digest)
+		candidates := s.keyRing().HashCandidates(cookie.Value)
+		_ = s.db.SQL.QueryRowContext(r.Context(), `SELECT user_id FROM sessions WHERE token_hash = ANY($1)`, candidates).Scan(&actorID)
+		_, _ = s.db.SQL.ExecContext(r.Context(), `DELETE FROM sessions WHERE token_hash = ANY($1)`, candidates)
 	}
 	s.audit(r.Context(), actorID, "auth.logout", "user", actorID, nil)
 	clearCookie(w, "hfproxy_session")
@@ -396,11 +395,10 @@ func clearCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 }
 
-func HashToken(token, pepper string) []byte {
-	h := hmac.New(sha256.New, []byte(pepper))
-	_, _ = h.Write([]byte(token))
-	return h.Sum(nil)
-}
+// HashToken is the original token hash, HMAC-SHA256 keyed with the raw session
+// secret. New tokens use keys derived from the secret (see internal/keyring);
+// this form is still accepted so existing tokens keep working.
+func HashToken(token, pepper string) []byte { return keyring.LegacyHash(token, pepper) }
 
 func HashPassword(password string) (string, error) {
 	if len(password) < 12 || len(password) > 1024 {
@@ -555,10 +553,6 @@ func randomID() string { return randomSecret(12) }
 
 func constantEqual(a, b string) bool {
 	return len(a) == len(b) && subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
-}
-
-func constantEqualBytes(a, b []byte) bool {
-	return len(a) == len(b) && subtle.ConstantTimeCompare(a, b) == 1
 }
 
 func usernameFromEmail(email string) string {

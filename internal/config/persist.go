@@ -2,17 +2,14 @@ package config
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"reflect"
 	"time"
+
+	"github.com/nicolas/hfproxy/internal/keyring"
 )
 
 type managedSettings struct {
@@ -68,9 +65,9 @@ func LoadPersisted(ctx context.Context, sqlDB *sql.DB, base Config) (Config, err
 	if err != nil {
 		return Config{}, fmt.Errorf("load saved settings: %w", err)
 	}
-	plaintext, err := decryptSettings(base.SessionSecret, ciphertext)
+	plaintext, _, err := secretRing(base).Open(ciphertext)
 	if err != nil {
-		return Config{}, fmt.Errorf("saved settings cannot be decrypted; check the session secret")
+		return Config{}, fmt.Errorf("saved settings cannot be decrypted; check HFPROXY_SESSION_SECRET and HFPROXY_SESSION_SECRET_PREVIOUS")
 	}
 	var saved managedSettings
 	if err := json.Unmarshal(plaintext, &saved); err != nil {
@@ -84,16 +81,55 @@ func SavePersisted(ctx context.Context, sqlDB *sql.DB, cfg Config, actorID strin
 	if err != nil {
 		return fmt.Errorf("encode settings")
 	}
-	ciphertext, err := encryptSettings(cfg.SessionSecret, plaintext)
+	ciphertext, err := secretRing(cfg).Seal(plaintext)
 	if err != nil {
 		return fmt.Errorf("encrypt settings")
 	}
 	_, err = sqlDB.ExecContext(ctx, `INSERT INTO app_settings(setting_key,ciphertext,updated_by,updated_at)
-		VALUES('runtime',$1,$2,now()) ON CONFLICT(setting_key) DO UPDATE SET ciphertext=EXCLUDED.ciphertext,updated_by=EXCLUDED.updated_by,updated_at=now()`, ciphertext, actorID)
+		VALUES('runtime',$1,NULLIF($2,''),now()) ON CONFLICT(setting_key) DO UPDATE SET ciphertext=EXCLUDED.ciphertext,updated_by=EXCLUDED.updated_by,updated_at=now()`, ciphertext, actorID)
 	if err != nil {
 		return fmt.Errorf("save settings: %w", err)
 	}
 	return nil
+}
+
+func secretRing(cfg Config) *keyring.Ring {
+	return keyring.NewRing(cfg.SessionSecret, cfg.PreviousSessionSecrets...)
+}
+
+// ReencryptPersisted seals the saved settings again under the current session
+// secret. It reports whether anything had to change; settings already sealed
+// under the current secret are left alone, and none saved is not an error.
+func ReencryptPersisted(ctx context.Context, sqlDB *sql.DB, cfg Config) (bool, error) {
+	tx, err := sqlDB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("start settings re-encryption: %w", err)
+	}
+	defer tx.Rollback()
+	var ciphertext []byte
+	err = tx.QueryRowContext(ctx, `SELECT ciphertext FROM app_settings WHERE setting_key='runtime' FOR UPDATE`).Scan(&ciphertext)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("load saved settings: %w", err)
+	}
+	ring := secretRing(cfg)
+	plaintext, current, err := ring.Open(ciphertext)
+	if err != nil {
+		return false, fmt.Errorf("saved settings cannot be decrypted; check HFPROXY_SESSION_SECRET and HFPROXY_SESSION_SECRET_PREVIOUS")
+	}
+	if current {
+		return false, nil
+	}
+	sealed, err := ring.Seal(plaintext)
+	if err != nil {
+		return false, fmt.Errorf("encrypt settings")
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE app_settings SET ciphertext=$1,updated_at=now() WHERE setting_key='runtime'`, sealed); err != nil {
+		return false, fmt.Errorf("save settings: %w", err)
+	}
+	return true, tx.Commit()
 }
 
 func DeletePersisted(ctx context.Context, sqlDB *sql.DB) error {
@@ -157,36 +193,3 @@ func OverriddenFields(fromEnvironment, effective Config) []string {
 
 func boolPointer(value bool) *bool       { return &value }
 func stringPointer(value string) *string { return &value }
-
-func encryptSettings(secret string, plaintext []byte) ([]byte, error) {
-	gcm, err := settingsCipher(secret)
-	if err != nil {
-		return nil, err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, err
-	}
-	return gcm.Seal(nonce, nonce, plaintext, []byte("hfproxy-runtime-settings-v1")), nil
-}
-
-func decryptSettings(secret string, ciphertext []byte) ([]byte, error) {
-	gcm, err := settingsCipher(secret)
-	if err != nil {
-		return nil, err
-	}
-	if len(ciphertext) < gcm.NonceSize() {
-		return nil, fmt.Errorf("invalid ciphertext")
-	}
-	nonce, encrypted := ciphertext[:gcm.NonceSize()], ciphertext[gcm.NonceSize():]
-	return gcm.Open(nil, nonce, encrypted, []byte("hfproxy-runtime-settings-v1"))
-}
-
-func settingsCipher(secret string) (cipher.AEAD, error) {
-	key := sha256.Sum256([]byte("hfproxy settings encryption v1:" + secret))
-	block, err := aes.NewCipher(key[:])
-	if err != nil {
-		return nil, err
-	}
-	return cipher.NewGCM(block)
-}

@@ -14,14 +14,14 @@ When `HFPROXY_PUBLIC_URL` is `https://…`, session cookies are `Secure` and res
 ## Checklist
 
 1. **TLS.** hfproxy speaks plain HTTP. Terminate TLS in a reverse proxy, set `HFPROXY_PUBLIC_URL` to the public `https://` URL, and list the proxy addresses in `HFPROXY_TRUSTED_PROXIES` so login rate limiting sees client addresses.
-2. **Secrets.** Provide `SESSION_SECRET`, `DATABASE_URL`, `S3_ACCESS_KEY` and `S3_SECRET_KEY` with the `HFPROXY_*_FILE` variants from a secrets manager. Generate the session secret with `openssl rand -base64 48`. Keep a backup: it encrypts the saved settings, and changing it invalidates every session and token.
+2. **Secrets.** Provide `SESSION_SECRET`, `DATABASE_URL`, `S3_ACCESS_KEY` and `S3_SECRET_KEY` with the `HFPROXY_*_FILE` variants from a secrets manager. Generate the session secret with `openssl rand -base64 48`. Keep a backup: it protects the saved settings, access tokens and sessions. To change it without breaking them, follow [Rotating the session secret](operations.md#rotating-the-session-secret).
 3. **PostgreSQL.** Use `sslmode=require` (or stricter) and a dedicated role. Run `hfproxy migrate up` before starting a new version, or set `HFPROXY_AUTO_MIGRATE=true` on one instance.
 4. **Object storage.** Keep the bucket private. Plain-HTTP endpoints are supported on a trusted network; prefer HTTPS otherwise.
 5. **Disk.** Mount a volume for `HFPROXY_STAGING_DIR` large enough for `HFPROXY_CACHE_FILL_CONCURRENCY` times your largest file.
 6. **Capacity.** Set `HFPROXY_CACHE_MAX_TOTAL_SIZE` and alert on `hfproxy_cache_size_bytes` and `hfproxy_cache_evictions_total`.
 7. **Metrics.** Set `HFPROXY_METRICS_ADDR` to an internal interface and scrape that port; do not publish `/metrics` through the reverse proxy.
 8. **Content origin.** Repository files are untrusted. hfproxy sends `Content-Security-Policy: sandbox` and forces HTML, SVG, XML and script files to download, but for defense in depth serve the proxy's file routes from a different hostname than the administration console.
-9. **Single instance.** The negative cache, the single-flight table and the login rate limiter are per process. Run one active instance, or accept that these are not shared across replicas.
+9. **Several instances.** Login throttling is shared through PostgreSQL. The negative cache and the single-flight table that deduplicates cache fills are still per process: replicas stay correct, but may fetch the same file from the Hub at the same time.
 10. **Tokens.** Give automation `read` tokens. A `read` token cannot use the administration API, even when its owner is an administrator.
 
 ## Backups

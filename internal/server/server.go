@@ -23,6 +23,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/nicolas/hfproxy/internal/config"
 	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/nicolas/hfproxy/internal/keyring"
 	"github.com/nicolas/hfproxy/internal/storage"
 	"golang.org/x/oauth2"
 )
@@ -40,6 +41,7 @@ type runtimeState struct {
 	oidcProvider *oidc.Provider
 	oidcConfig   *oauth2.Config
 	oidcVerifier *oidc.IDTokenVerifier
+	ring         *keyring.Ring
 }
 
 type Server struct {
@@ -171,7 +173,7 @@ func (s *Server) startCacheInventoryMetrics(ctx context.Context) {
 }
 
 func makeRuntimeState(ctx context.Context, cfg config.Config, objectStore *storage.S3, previous *runtimeState) (*runtimeState, error) {
-	state := &runtimeState{config: cfg, storage: objectStore, httpClient: newHFHTTPClient(cfg)}
+	state := &runtimeState{config: cfg, storage: objectStore, httpClient: newHFHTTPClient(cfg), ring: keyring.NewRing(cfg.SessionSecret, cfg.PreviousSessionSecrets...)}
 	if cfg.OIDCIssuer != "" {
 		var provider *oidc.Provider
 		if previous != nil && previous.config.OIDCIssuer == cfg.OIDCIssuer {
@@ -193,6 +195,16 @@ func makeRuntimeState(ctx context.Context, cfg config.Config, objectStore *stora
 		state.oidcVerifier = provider.Verifier(&oidc.Config{ClientID: cfg.OIDCClientID})
 	}
 	return state, nil
+}
+
+// keyRing returns the keys derived from the session secret and any previous
+// secrets still accepted.
+func (s *Server) keyRing() *keyring.Ring {
+	state := s.runtime.Load()
+	if state.ring != nil {
+		return state.ring
+	}
+	return keyring.NewRing(state.config.SessionSecret, state.config.PreviousSessionSecrets...)
 }
 
 func (s *Server) currentConfig() config.Config               { return s.runtime.Load().config }
@@ -651,19 +663,25 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 		if len(token) < 24 || strings.ContainsAny(token, " \t\r\n") {
 			return nil, errUnauthenticated
 		}
-		digest := HashToken(token, s.currentConfig().SessionSecret)
+		ring := s.keyRing()
 		var p Principal
 		var status string
 		var scopes []string
-		err := s.db.SQL.QueryRowContext(r.Context(), `SELECT u.id,u.username,u.email,u.display_name,u.role,u.status,t.id,t.scopes
+		var storedHash []byte
+		err := s.db.SQL.QueryRowContext(r.Context(), `SELECT u.id,u.username,u.email,u.display_name,u.role,u.status,t.id,t.scopes,t.token_hash
 			FROM access_tokens t JOIN users u ON u.id=t.user_id
-			WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at>now())`, digest).
-			Scan(&p.ID, &p.Username, &p.Email, &p.DisplayName, &p.Role, &status, &p.TokenID, &scopes)
+			WHERE t.token_hash = ANY($1) AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at>now())`, ring.HashCandidates(token)).
+			Scan(&p.ID, &p.Username, &p.Email, &p.DisplayName, &p.Role, &status, &p.TokenID, &scopes, &storedHash)
 		if err != nil || status != "active" {
 			return nil, errUnauthenticated
 		}
 		p.Authenticated = true
 		p.Scopes = scopes
+		if !ring.IsCurrent(token, storedHash) {
+			// Hashed under an older scheme or secret: move it to the current key
+			// now that the plaintext is in hand.
+			_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET token_hash=$3, key_id=$4 WHERE id=$1 AND token_hash=$2`, p.TokenID, storedHash, ring.Hash(token), ring.KeyID())
+		}
 		_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET last_used_at=now() WHERE id=$1 AND (last_used_at IS NULL OR last_used_at < now()-interval '1 minute')`, p.TokenID)
 		return &p, nil
 	}
@@ -674,13 +692,13 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 	if cookie.Value == "" {
 		return nil, errUnauthenticated
 	}
-	digest := HashToken(cookie.Value, s.currentConfig().SessionSecret)
 	var p Principal
 	var status string
-	err = s.db.SQL.QueryRowContext(r.Context(), `SELECT u.id,u.username,u.email,u.display_name,u.role,u.status
+	var digest []byte
+	err = s.db.SQL.QueryRowContext(r.Context(), `SELECT u.id,u.username,u.email,u.display_name,u.role,u.status,ss.token_hash
 		FROM sessions ss JOIN users u ON u.id=ss.user_id
-		WHERE ss.token_hash=$1 AND ss.expires_at>now()`, digest).
-		Scan(&p.ID, &p.Username, &p.Email, &p.DisplayName, &p.Role, &status)
+		WHERE ss.token_hash = ANY($1) AND ss.expires_at>now()`, s.keyRing().HashCandidates(cookie.Value)).
+		Scan(&p.ID, &p.Username, &p.Email, &p.DisplayName, &p.Role, &status, &digest)
 	if err != nil || status != "active" {
 		return nil, errUnauthenticated
 	}
@@ -705,15 +723,14 @@ func (s *Server) createSession(ctx context.Context, userID string, w http.Respon
 	// holds so a pre-login session identifier can never survive authentication.
 	if r != nil {
 		if old, err := r.Cookie("hfproxy_session"); err == nil && old.Value != "" {
-			_, _ = s.db.SQL.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash=$1`, HashToken(old.Value, s.currentConfig().SessionSecret))
+			_, _ = s.db.SQL.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ANY($1)`, s.keyRing().HashCandidates(old.Value))
 		}
 	}
 	token := randomSecret(32)
 	csrf := randomSecret(32)
-	tokenHash := HashToken(token, s.currentConfig().SessionSecret)
-	csrfHash := HashToken(csrf, s.currentConfig().SessionSecret)
-	_, err := s.db.SQL.ExecContext(ctx, `INSERT INTO sessions(token_hash,user_id,csrf_hash,expires_at) VALUES ($1,$2,$3,$4)`,
-		tokenHash, userID, csrfHash, time.Now().Add(s.currentConfig().SessionIdleTTL))
+	ring := s.keyRing()
+	_, err := s.db.SQL.ExecContext(ctx, `INSERT INTO sessions(token_hash,user_id,csrf_hash,expires_at,key_id) VALUES ($1,$2,$3,$4,$5)`,
+		ring.Hash(token), userID, ring.Hash(csrf), time.Now().Add(s.currentConfig().SessionIdleTTL), ring.KeyID())
 	if err != nil {
 		return "", err
 	}
@@ -748,12 +765,12 @@ func (s *Server) checkCSRF(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
-	digest := HashToken(cookie.Value, s.currentConfig().SessionSecret)
+	ring := s.keyRing()
 	var stored []byte
-	if err := s.db.SQL.QueryRowContext(r.Context(), `SELECT csrf_hash FROM sessions WHERE token_hash=$1 AND expires_at>now()`, digest).Scan(&stored); err != nil {
+	if err := s.db.SQL.QueryRowContext(r.Context(), `SELECT csrf_hash FROM sessions WHERE token_hash = ANY($1) AND expires_at>now()`, ring.HashCandidates(cookie.Value)).Scan(&stored); err != nil {
 		return false
 	}
-	return constantEqualBytes(stored, HashToken(provided, s.currentConfig().SessionSecret))
+	return ring.MatchesAny(provided, stored)
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (*Principal, bool) {
