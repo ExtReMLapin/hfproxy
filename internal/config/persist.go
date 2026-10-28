@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"time"
 )
 
@@ -138,6 +139,20 @@ func (s managedSettings) apply(c Config) Config {
 		c.CacheInventoryRefresh = s.CacheInventoryRefresh
 	}
 	return c
+}
+
+// OverriddenFields lists the settings whose effective value differs from the
+// one read from the environment because saved settings took precedence. Names
+// only: values may be secrets.
+func OverriddenFields(fromEnvironment, effective Config) []string {
+	before, after := reflect.ValueOf(fromEnvironment), reflect.ValueOf(effective)
+	var names []string
+	for i := 0; i < before.NumField(); i++ {
+		if !reflect.DeepEqual(before.Field(i).Interface(), after.Field(i).Interface()) {
+			names = append(names, before.Type().Field(i).Name)
+		}
+	}
+	return names
 }
 
 func boolPointer(value bool) *bool       { return &value }

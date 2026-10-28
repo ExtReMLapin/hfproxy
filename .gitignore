@@ -4,8 +4,8 @@ secrets/
 *.log
 bin/
 dist/
-test
+/test
 __pycache__/
 *.py[cod]
-tests/
+/tests/
 SPEC.md

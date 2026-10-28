@@ -27,3 +27,9 @@ When `HFPROXY_PUBLIC_URL` is `https://…`, session cookies are `Secure` and res
 ## Backups
 
 Back up PostgreSQL and the S3 bucket together and restore them from the same point in time: the catalog references objects by hash. Also back up `SESSION_SECRET`.
+
+## More
+
+- [operations.md](operations.md): upgrades, rollbacks, incidents and service levels.
+- [threat-model.md](threat-model.md): what hfproxy defends against.
+- [prometheus-alerts.yml](prometheus-alerts.yml): example alert rules.

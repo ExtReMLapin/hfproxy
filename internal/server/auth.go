@@ -56,6 +56,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.renderLogin(w, data, http.StatusOK)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if err := r.ParseForm(); err != nil {
 		s.renderLogin(w, data, http.StatusBadRequest)
 		return
@@ -293,7 +294,9 @@ func (s *Server) authenticateLDAP(ctx context.Context, username, password string
 	if s.currentConfig().LDAPURL == "" || username == "" || password == "" {
 		return "", fmt.Errorf("LDAP authentication is not available")
 	}
-	conn, err := ldap.DialURL(s.currentConfig().LDAPURL)
+	conn, err := ldap.DialURL(s.currentConfig().LDAPURL,
+		ldap.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}),
+		ldap.DialWithTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12}))
 	if err != nil {
 		return "", fmt.Errorf("LDAP connection failed")
 	}
@@ -543,19 +546,5 @@ func constantEqualBytes(a, b []byte) bool {
 
 func usernameFromEmail(email string) string {
 	local, _, _ := strings.Cut(email, "@")
-	local = strings.ToLower(local)
-	var b strings.Builder
-	for _, r := range local {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
-			b.WriteRune(r)
-		}
-	}
-	value := strings.Trim(b.String(), "._-")
-	if len(value) > 40 {
-		value = value[:40]
-	}
-	if value == "" {
-		value = "user"
-	}
-	return value + "-" + randomSecret(4)
+	return usernameFromLogin(local)
 }

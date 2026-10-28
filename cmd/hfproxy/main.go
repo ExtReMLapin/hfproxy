@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -26,7 +28,7 @@ import (
 )
 
 var (
-	version = "0.0.3"
+	version = "dev"
 	commit  = "unknown"
 )
 
@@ -58,6 +60,8 @@ func run(args []string) error {
 		}
 		fmt.Println("Configuration is valid.")
 		return nil
+	case "healthcheck":
+		return healthcheck(args[1:])
 	case "serve":
 		return serve(args[1:])
 	case "migrate":
@@ -87,6 +91,7 @@ Usage:
   hfproxy cache purge [--repo ID] [--path QUERY] [--execute --yes]
   hfproxy cache verify
   hfproxy config validate
+  hfproxy healthcheck
   hfproxy version
 
 Secrets are read from HFPROXY_*_FILE or protected mounted files; never pass them as flags.
@@ -133,9 +138,13 @@ func serve(args []string) error {
 	if version < db.LatestMigration {
 		return fmt.Errorf("database is not migrated; run hfproxy migrate up")
 	}
+	environment := cfg
 	cfg, err = config.LoadPersisted(ctx, store.SQL, cfg)
 	if err != nil {
 		return err
+	}
+	if overridden := config.OverriddenFields(environment, cfg); len(overridden) > 0 {
+		logger(cfg).Warn("settings saved in the console override these environment values; change them in the console or reset the saved settings", "settings", overridden)
 	}
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -729,4 +738,40 @@ func humanBytes(n int64) string {
 		}
 	}
 	return "0 B"
+}
+
+// healthcheck probes the local /healthz endpoint and exits non-zero on failure.
+// It is meant for container health checks and reads only HFPROXY_LISTEN_ADDR.
+func healthcheck(args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("usage: hfproxy healthcheck")
+	}
+	return probeHealth(healthcheckURL(os.Getenv("HFPROXY_LISTEN_ADDR")))
+}
+
+func healthcheckURL(listenAddr string) string {
+	if listenAddr == "" {
+		listenAddr = "127.0.0.1:8080"
+	}
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		host, port = "127.0.0.1", "8080"
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/healthz"
+}
+
+func probeHealth(target string) error {
+	client := &http.Client{Timeout: 3 * time.Second}
+	response, err := client.Get(target)
+	if err != nil {
+		return fmt.Errorf("health check failed: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("health check failed: status %d", response.StatusCode)
+	}
+	return nil
 }

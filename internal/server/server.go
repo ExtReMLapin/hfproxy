@@ -89,7 +89,7 @@ type Principal struct {
 }
 
 // Version is embedded in upstream User-Agent headers and set by release builds.
-var Version = "0.0.3"
+var Version = "dev"
 
 func New(ctx context.Context, cfg config.Config, store *db.Store, objectStore *storage.S3, logger *slog.Logger) (*Server, error) {
 	state, err := makeRuntimeState(ctx, cfg, objectStore, nil)
@@ -266,7 +266,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
-	return s.securityHeaders(s.traceMiddleware(s.requestLog(s.metrics.middlewareDynamic(func() string {
+	return s.requestDeadlines(s.securityHeaders(s.traceMiddleware(s.requestLog(s.metrics.middlewareDynamic(func() string {
 		cfg := s.currentConfig()
 		if !cfg.MetricsEnabled {
 			return ""
@@ -275,7 +275,7 @@ func (s *Server) Handler() http.Handler {
 			return "/metrics"
 		}
 		return cfg.MetricsPath
-	}, dispatch))))
+	}, dispatch)))))
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -498,28 +498,70 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rid := r.Header.Get("X-Request-ID")
-		if len(rid) > 100 || strings.ContainsAny(rid, "\r\n") {
-			rid = ""
-		}
-		if rid == "" {
+		if !validRequestID(rid) {
 			rid = randomID()
 		}
 		w.Header().Set("X-Request-ID", rid)
 		recorder := &responseRecorder{ResponseWriter: w}
-		next.ServeHTTP(recorder, r.WithContext(context.WithValue(r.Context(), requestIDKey{}, rid)))
+		info := &requestInfo{ClientIP: s.loginClientIP(r)}
+		ctx := context.WithValue(context.WithValue(r.Context(), requestIDKey{}, rid), requestInfoKey{}, info)
+		next.ServeHTTP(recorder, r.WithContext(ctx))
 		status := recorder.status
 		if status == 0 {
 			status = http.StatusOK
 		}
-		s.logger.Info("http request", "request_id", rid, "method", r.Method, "route", safeRoute(r.URL.Path), "status", status, "duration_ms", time.Since(start).Milliseconds(), "bytes", recorder.bytes)
+		s.logger.Info("http request", "request_id", rid, "method", r.Method, "route", safeRoute(r.URL.Path), "status", status, "duration_ms", time.Since(start).Milliseconds(), "bytes", recorder.bytes,
+			"client_ip", info.ClientIP, "user_id", info.UserID, "user_agent", safeLogValue(r.UserAgent(), 200))
 	})
 }
 
 type requestIDKey struct{}
 
+// requestInfo carries who made a request, filled in as the request is handled,
+// so audit rows and the access log can name the caller.
+type requestInfo struct {
+	ClientIP string
+	UserID   string
+	TokenID  string
+}
+
+type requestInfoKey struct{}
+
+func requestInfoFrom(ctx context.Context) *requestInfo {
+	info, _ := ctx.Value(requestInfoKey{}).(*requestInfo)
+	return info
+}
+
 func requestID(ctx context.Context) string {
 	value, _ := ctx.Value(requestIDKey{}).(string)
 	return value
+}
+
+// validRequestID accepts the identifier a caller or proxy supplied only if it is
+// short and made of characters that are safe in logs and headers.
+func validRequestID(id string) bool {
+	if id == "" || len(id) > 100 {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' || r == ':') {
+			return false
+		}
+	}
+	return true
+}
+
+// safeLogValue bounds a caller-supplied value and drops control characters.
+func safeLogValue(value string, max int) string {
+	if len(value) > max {
+		value = value[:max]
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, value)
 }
 
 func safeRoute(path string) string {
@@ -586,6 +628,16 @@ func (s *Server) audit(ctx context.Context, actorID, action, targetType, targetI
 }
 
 func (s *Server) authenticate(r *http.Request) (*Principal, error) {
+	p, err := s.authenticateCredentials(r)
+	if err == nil && p != nil {
+		if info := requestInfoFrom(r.Context()); info != nil {
+			info.UserID, info.TokenID = p.ID, p.TokenID
+		}
+	}
+	return p, err
+}
+
+func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 	if p, ok := r.Context().Value(localPrincipalContextKey{}).(*Principal); ok && p != nil {
 		principal := *p
 		return &principal, nil

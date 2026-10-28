@@ -42,6 +42,7 @@ func newMetrics() *metrics {
 		"hfproxy_downloads_total": {"result"}, "hfproxy_download_bytes_total": {"source"}, "hfproxy_download_failures_total": {"reason"},
 		"hfproxy_storage_operations_total": {"operation", "result"}, "hfproxy_storage_errors_total": {"operation"}, "hfproxy_storage_bytes_transferred_total": {"operation"},
 		"hfproxy_retention_deleted_total": {"table"}, "hfproxy_cache_evictions_total": {},
+		"hfproxy_gc_runs_total": {"result"}, "hfproxy_gc_blobs_deleted_total": {},
 	} {
 		v := prometheus.NewCounterVec(prometheus.CounterOpts{Name: name, Help: name + " measured by hfproxy."}, labels)
 		m.registry.MustRegister(v)
@@ -54,7 +55,7 @@ func newMetrics() *metrics {
 		m.histograms[name] = v
 		m.histogramLabelNames[name] = labels
 	}
-	for _, name := range []string{"hfproxy_http_requests_in_flight", "hfproxy_downloads_in_flight", "hfproxy_cache_objects", "hfproxy_cache_size_bytes"} {
+	for _, name := range []string{"hfproxy_http_requests_in_flight", "hfproxy_downloads_in_flight", "hfproxy_cache_objects", "hfproxy_cache_size_bytes", "hfproxy_gc_last_run_timestamp_seconds"} {
 		g := prometheus.NewGauge(prometheus.GaugeOpts{Name: name, Help: name + " measured by hfproxy."})
 		m.registry.MustRegister(g)
 		m.gauges[name] = g

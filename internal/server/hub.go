@@ -300,7 +300,8 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer releaseSlot()
 	downloadID := db.NewID()
-	_, _ = s.db.SQL.ExecContext(r.Context(), `INSERT INTO downloads(id,repository_id,commit_sha,path,status,bytes) VALUES($1,$2,$3,$4,'downloading',0)`, downloadID, repoPK, commit, parsed.FilePath)
+	caller := callerOf(r.Context())
+	_, _ = s.db.SQL.ExecContext(r.Context(), `INSERT INTO downloads(id,repository_id,commit_sha,path,status,bytes,user_id,token_id,client_ip) VALUES($1,$2,$3,$4,'downloading',0,NULLIF($5,''),NULLIF($6,''),NULLIF($7,''))`, downloadID, repoPK, commit, parsed.FilePath, caller.UserID, caller.TokenID, caller.ClientIP)
 	objectStore := s.currentStorage()
 	if meta.Size > s.currentConfig().CacheMaxFileSize {
 		s.finishDownload(r.Context(), downloadID, 0, "size_limit")
@@ -1125,16 +1126,7 @@ func (s *Server) streamUncachedMiss(w http.ResponseWriter, r *http.Request, pars
 	}
 }
 
-func configLoopback(host string) bool {
-	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
-	if host == "localhost" {
-		return true
-	}
-	if ip, err := netip.ParseAddr(host); err == nil {
-		return ip.IsLoopback()
-	}
-	return false
-}
+func configLoopback(host string) bool { return config.IsLoopbackHost(host) }
 func newEgressDialer(allowLoopback bool, proxy *url.URL) func(context.Context, string, string) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -1524,10 +1516,20 @@ func safeUpstreamHeader(value string, max int) string {
 }
 
 func (s *Server) recordDownload(ctx context.Context, repoID, commit, file, status string, bytes int64, errorClass string) {
-	_, err := s.db.SQL.ExecContext(ctx, "INSERT INTO downloads(id,repository_id,commit_sha,path,status,completed_at,bytes,error_class) VALUES($1,$2,$3,$4,$5,now(),$6,$7)", db.NewID(), repoID, commit, file, status, bytes, errorClass)
+	caller := callerOf(ctx)
+	_, err := s.db.SQL.ExecContext(ctx, "INSERT INTO downloads(id,repository_id,commit_sha,path,status,completed_at,bytes,error_class,user_id,token_id,client_ip) VALUES($1,$2,$3,$4,$5,now(),$6,$7,NULLIF($8,''),NULLIF($9,''),NULLIF($10,''))", db.NewID(), repoID, commit, file, status, bytes, errorClass, caller.UserID, caller.TokenID, caller.ClientIP)
 	if err != nil {
 		s.logger.Warn("download event could not be recorded")
 	}
+}
+
+// callerOf returns who is making the request in ctx, or an empty value for
+// background work such as preloads.
+func callerOf(ctx context.Context) requestInfo {
+	if info := requestInfoFrom(ctx); info != nil {
+		return *info
+	}
+	return requestInfo{}
 }
 
 func (s *Server) finishDownload(ctx context.Context, id string, bytes int64, errorClass string) {

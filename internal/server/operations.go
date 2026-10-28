@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -243,6 +244,28 @@ func (s *Server) evictArtifact(ctx context.Context, artifactID, blobID string) (
 		}
 	}
 	return freed, tx.Commit()
+}
+
+var (
+	// apiReadTimeout bounds how long a client may take to send an API or
+	// login request, body included; apiWriteTimeout bounds the response.
+	apiReadTimeout  = 30 * time.Second
+	apiWriteTimeout = 5 * time.Minute
+)
+
+// requestDeadlines gives every request except file downloads a read and write
+// deadline, so a client dribbling a request body cannot hold a connection.
+// Downloads stream for as long as the transfer makes progress and are bound by
+// the idle timeouts on the upstream and storage sides instead.
+func (s *Server) requestDeadlines(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/resolve/") {
+			controller := http.NewResponseController(w)
+			_ = controller.SetReadDeadline(time.Now().Add(apiReadTimeout))
+			_ = controller.SetWriteDeadline(time.Now().Add(apiWriteTimeout))
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // metricsHandler serves the Prometheus endpoint on the dedicated listener.

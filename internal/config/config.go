@@ -157,7 +157,7 @@ func (c Config) CheckDeployment() error {
 	loopbackPublic := false
 	if c.PublicURL != "" {
 		if public, err := url.Parse(c.PublicURL); err == nil {
-			loopbackPublic = isLoopbackHost(public.Hostname())
+			loopbackPublic = IsLoopbackHost(public.Hostname())
 		}
 	}
 	for _, dev := range knownDevSecrets {
@@ -176,7 +176,7 @@ func listensOnLoopback(addr string) bool {
 	if h, _, err := net.SplitHostPort(addr); err == nil {
 		host = h
 	}
-	return host != "" && isLoopbackHost(host)
+	return host != "" && IsLoopbackHost(host)
 }
 
 func (c Config) Validate() error {
@@ -217,7 +217,7 @@ func (c Config) Validate() error {
 		if publicErr != nil || public.Host == "" || public.User != nil || public.RawQuery != "" || public.Fragment != "" || (public.Scheme != "https" && public.Scheme != "http") {
 			return fmt.Errorf("HFPROXY_PUBLIC_URL must be an HTTP(S) URL without credentials, query, or fragment")
 		}
-		if public.Scheme != "https" && !isLoopbackHost(public.Hostname()) {
+		if public.Scheme != "https" && !IsLoopbackHost(public.Hostname()) {
 			return fmt.Errorf("HFPROXY_PUBLIC_URL must use HTTPS outside loopback development")
 		}
 	}
@@ -225,7 +225,7 @@ func (c Config) Validate() error {
 	if err != nil || base.Host == "" || (base.Scheme != "https" && base.Scheme != "http") || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
 		return fmt.Errorf("HFPROXY_HF_BASE_URL must be an HTTP(S) URL without user information")
 	}
-	if base.Scheme != "https" && !isLoopbackHost(base.Hostname()) {
+	if base.Scheme != "https" && !IsLoopbackHost(base.Hostname()) {
 		return fmt.Errorf("HFPROXY_HF_BASE_URL must use HTTPS outside loopback development")
 	}
 	if c.HFProxyURL != "" {
@@ -270,11 +270,11 @@ func (c Config) Validate() error {
 			return fmt.Errorf("OIDC requires HFPROXY_OIDC_ISSUER, HFPROXY_OIDC_CLIENT_ID, HFPROXY_OIDC_CLIENT_SECRET, and HFPROXY_OIDC_REDIRECT_URL")
 		}
 		issuer, issuerErr := url.Parse(c.OIDCIssuer)
-		if issuerErr != nil || issuer.Host == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" || (issuer.Scheme != "https" && !(issuer.Scheme == "http" && isLoopbackHost(issuer.Hostname()))) {
+		if issuerErr != nil || issuer.Host == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" || (issuer.Scheme != "https" && !(issuer.Scheme == "http" && IsLoopbackHost(issuer.Hostname()))) {
 			return fmt.Errorf("HFPROXY_OIDC_ISSUER must use HTTPS outside loopback development")
 		}
 		redirect, parseErr := url.Parse(c.OIDCRedirectURL)
-		if parseErr != nil || redirect.Host == "" || (redirect.Scheme != "https" && !isLoopbackHost(redirect.Hostname())) {
+		if parseErr != nil || redirect.Host == "" || (redirect.Scheme != "https" && !IsLoopbackHost(redirect.Hostname())) {
 			return fmt.Errorf("HFPROXY_OIDC_REDIRECT_URL must use HTTPS outside loopback development")
 		}
 	}
@@ -460,7 +460,8 @@ func NormalizeAllowedHosts(values []string) ([]string, error) {
 	return result, nil
 }
 
-func isLoopbackHost(host string) bool {
+// IsLoopbackHost reports whether host is localhost or a loopback IP address.
+func IsLoopbackHost(host string) bool {
 	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	if host == "localhost" {
 		return true

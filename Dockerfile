@@ -9,7 +9,7 @@ COPY ui/ ./
 RUN npm run build
 
 FROM golang:${GO_VERSION}-alpine AS build
-ARG BUILD_VERSION=0.0.3
+ARG BUILD_VERSION=dev
 ARG BUILD_COMMIT=unknown
 
 RUN apk add --no-cache ca-certificates git
@@ -28,5 +28,6 @@ COPY --from=build /out/hfproxy /usr/local/bin/hfproxy
 USER 65532:65532
 ENV HFPROXY_LISTEN_ADDR=0.0.0.0:8080
 EXPOSE 8080
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 CMD ["/usr/local/bin/hfproxy", "healthcheck"]
 ENTRYPOINT ["/usr/local/bin/hfproxy"]
 CMD ["serve"]

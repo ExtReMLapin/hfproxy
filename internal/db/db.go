@@ -14,9 +14,22 @@ import (
 
 type Store struct{ SQL *sql.DB }
 
+type migration struct {
+	version int64
+	script  string
+}
+
+// migrations is the ordered schema history. Each entry must stay compatible
+// with the previous release of the code (add columns and tables first, drop or
+// rename only in a later release) so an image rollback after a migration keeps
+// working.
+var migrations = []migration{
+	{1, schemaV1}, {2, schemaV2}, {3, schemaV3}, {4, schemaV4}, {5, schemaV5}, {6, schemaV6}, {7, schemaV7},
+}
+
 // LatestMigration is the schema version this build expects. /readyz reports
 // not ready while the database is behind it.
-const LatestMigration int64 = 6
+var LatestMigration = migrations[len(migrations)-1].version
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
 	sqlDB, err := sql.Open("pgx", databaseURL)
@@ -57,41 +70,13 @@ func Migrate(ctx context.Context, sqlDB *sql.DB) error {
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
 		return fmt.Errorf("read migration version: %w", err)
 	}
-	if version < 1 {
-		if err := applyMigrationTx(ctx, tx, 1, schemaV1); err != nil {
-			return err
+	for _, m := range migrations {
+		if version < m.version {
+			if err := applyMigrationTx(ctx, tx, m.version, m.script); err != nil {
+				return err
+			}
+			version = m.version
 		}
-		version = 1
-	}
-	if version < 2 {
-		if err := applyMigrationTx(ctx, tx, 2, schemaV2); err != nil {
-			return err
-		}
-		version = 2
-	}
-	if version < 3 {
-		if err := applyMigrationTx(ctx, tx, 3, schemaV3); err != nil {
-			return err
-		}
-		version = 3
-	}
-	if version < 4 {
-		if err := applyMigrationTx(ctx, tx, 4, schemaV4); err != nil {
-			return err
-		}
-		version = 4
-	}
-	if version < 5 {
-		if err := applyMigrationTx(ctx, tx, 5, schemaV5); err != nil {
-			return err
-		}
-		version = 5
-	}
-	if version < 6 {
-		if err := applyMigrationTx(ctx, tx, 6, schemaV6); err != nil {
-			return err
-		}
-		version = 6
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migrations: %w", err)
@@ -100,10 +85,7 @@ func Migrate(ctx context.Context, sqlDB *sql.DB) error {
 }
 
 func applyMigrationTx(ctx context.Context, tx *sql.Tx, version int64, schema string) error {
-	for _, statement := range strings.Split(schema, ";") {
-		if strings.TrimSpace(statement) == "" {
-			continue
-		}
+	for _, statement := range splitStatements(schema) {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("apply schema migration %d: %w", version, err)
 		}
@@ -112,6 +94,97 @@ func applyMigrationTx(ctx context.Context, tx *sql.Tx, version int64, schema str
 		return fmt.Errorf("record migration %d: %w", version, err)
 	}
 	return nil
+}
+
+// splitStatements splits a migration script on semicolons that end a statement,
+// ignoring those inside single-quoted strings, double-quoted identifiers,
+// dollar-quoted bodies and comments.
+func splitStatements(script string) []string {
+	var statements []string
+	var current strings.Builder
+	flush := func() {
+		if strings.TrimSpace(current.String()) != "" {
+			statements = append(statements, current.String())
+		}
+		current.Reset()
+	}
+	for i := 0; i < len(script); {
+		c := script[i]
+		switch {
+		case c == '-' && strings.HasPrefix(script[i:], "--"):
+			end := strings.IndexByte(script[i:], '\n')
+			if end < 0 {
+				end = len(script) - i
+			}
+			current.WriteString(script[i : i+end])
+			i += end
+		case c == '/' && strings.HasPrefix(script[i:], "/*"):
+			end := strings.Index(script[i+2:], "*/")
+			if end < 0 {
+				end = len(script) - i - 2
+			} else {
+				end += 2
+			}
+			current.WriteString(script[i : i+2+end])
+			i += 2 + end
+		case c == '\'' || c == '"':
+			j := i + 1
+			for j < len(script) {
+				if script[j] == c {
+					if j+1 < len(script) && script[j+1] == c {
+						j += 2
+						continue
+					}
+					break
+				}
+				j++
+			}
+			if j < len(script) {
+				j++
+			}
+			current.WriteString(script[i:j])
+			i = j
+		case c == '$':
+			tag := dollarTag(script[i:])
+			if tag == "" {
+				current.WriteByte(c)
+				i++
+				break
+			}
+			end := strings.Index(script[i+len(tag):], tag)
+			if end < 0 {
+				current.WriteString(script[i:])
+				i = len(script)
+				break
+			}
+			stop := i + len(tag) + end + len(tag)
+			current.WriteString(script[i:stop])
+			i = stop
+		case c == ';':
+			flush()
+			i++
+		default:
+			current.WriteByte(c)
+			i++
+		}
+	}
+	flush()
+	return statements
+}
+
+// dollarTag returns the opening "$tag$" of a dollar-quoted string at the start
+// of s, or "" when s does not start one.
+func dollarTag(s string) string {
+	for j := 1; j < len(s); j++ {
+		switch r := s[j]; {
+		case r == '$':
+			return s[:j+1]
+		case r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || (j > 1 && r >= '0' && r <= '9'):
+		default:
+			return ""
+		}
+	}
+	return ""
 }
 
 func MigrationStatus(ctx context.Context, sqlDB *sql.DB) (int64, error) {
@@ -307,4 +380,10 @@ CREATE INDEX IF NOT EXISTS downloads_started_idx ON downloads(started_at);
 CREATE INDEX IF NOT EXISTS access_tokens_user_idx ON access_tokens(user_id);
 CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS group_members_user_idx ON group_members(user_id);
+`
+
+const schemaV7 = `
+ALTER TABLE downloads ADD COLUMN IF NOT EXISTS user_id TEXT;
+ALTER TABLE downloads ADD COLUMN IF NOT EXISTS token_id TEXT;
+ALTER TABLE downloads ADD COLUMN IF NOT EXISTS client_ip TEXT;
 `

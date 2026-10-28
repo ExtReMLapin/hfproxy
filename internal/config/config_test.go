@@ -123,3 +123,23 @@ func TestValidateRejectsInvalidOperationalLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestOverriddenFieldsNamesOnlyDifferingSettings(t *testing.T) {
+	environment := Config{HFBaseURL: "https://huggingface.co", HFToken: "env-secret", S3Bucket: "env-bucket", SessionSecret: strings.Repeat("s", 40), LogLevel: "info"}
+	saved := environment
+	saved.S3Bucket = "console-bucket"
+	saved.HFToken = "console-secret"
+	effective := managedFromConfig(saved).apply(environment)
+	got := OverriddenFields(environment, effective)
+	if strings.Join(got, ",") != "HFToken,S3Bucket" {
+		t.Fatalf("OverriddenFields = %v, want [HFToken S3Bucket]", got)
+	}
+	for _, name := range got {
+		if strings.Contains(name, "secret") {
+			t.Fatalf("field list leaks a value: %v", got)
+		}
+	}
+	if len(OverriddenFields(environment, environment)) != 0 {
+		t.Fatal("identical configurations must report no overrides")
+	}
+}

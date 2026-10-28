@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/nicolas/hfproxy/internal/config"
 	"github.com/nicolas/hfproxy/internal/db"
+	"github.com/nicolas/hfproxy/internal/storage"
 )
 
 func TestActiveContentIsForcedToDownload(t *testing.T) {
@@ -496,5 +498,186 @@ func TestCachedFileIsServedWhenTheHubIsDown(t *testing.T) {
 	unknown.Body.Close()
 	if unknown.StatusCode != http.StatusBadGateway && unknown.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("uncached file with the hub down = %d, want an upstream error", unknown.StatusCode)
+	}
+}
+
+func TestSlowAPIRequestsAreCutOff(t *testing.T) {
+	previous := apiReadTimeout
+	apiReadTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { apiReadTimeout = previous })
+	s := &Server{metrics: newMetrics(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s.runtime.Store(&runtimeState{config: config.Config{AuthMode: "local", SessionSecret: strings.Repeat("s", 40)}})
+	server := httptest.NewServer(s.Handler())
+	defer server.Close()
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	// Promise a body, send none of it.
+	if _, err := io.WriteString(conn, "POST /login HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 100\r\n\r\nuser="); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	start := time.Now()
+	buf := make([]byte, 512)
+	n, err := conn.Read(buf)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("the stalled request was held for %v (read %d bytes, err %v)", elapsed, n, err)
+	}
+}
+
+func TestDownloadRoutesKeepNoReadDeadline(t *testing.T) {
+	previous := apiReadTimeout
+	apiReadTimeout = time.Millisecond
+	t.Cleanup(func() { apiReadTimeout = previous })
+	var deadlineSet bool
+	s := &Server{}
+	handler := s.requestDeadlines(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deadlineSet = http.NewResponseController(w).SetReadDeadline(time.Time{}) == nil
+	}))
+	// A recorder cannot take deadlines, so this only checks the route split does not panic.
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/models/org/m/resolve/main/f.bin", nil))
+	_ = deadlineSet
+}
+
+func TestRequestIDsAreRestrictedToSafeCharacters(t *testing.T) {
+	for id, want := range map[string]bool{"abc-123_X.y:z": true, "": false, "has space": false, "semi;colon": false, "new\nline": false, strings.Repeat("a", 101): false, strings.Repeat("a", 100): true} {
+		if got := validRequestID(id); got != want {
+			t.Errorf("validRequestID(%q) = %v, want %v", id, got, want)
+		}
+	}
+	if got := safeLogValue("agent\r\nforged=1\x00", 200); got != "agentforged=1" {
+		t.Errorf("safeLogValue kept control characters: %q", got)
+	}
+	if got := safeLogValue(strings.Repeat("a", 500), 200); len(got) != 200 {
+		t.Errorf("safeLogValue length = %d, want 200", len(got))
+	}
+}
+
+func TestDownloadsRecordTheCaller(t *testing.T) {
+	content := []byte(strings.Repeat("audited-", 2048))
+	digest := auditSHA256(content)
+	env := ahubNewEnv(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "huggingface.co" {
+			w.Header().Set("X-Repo-Commit", ahubCommit)
+			w.Header().Set("X-Linked-Etag", `"`+digest+`"`)
+			w.Header().Set("X-Linked-Size", strconv.Itoa(len(content)))
+			w.Header().Set("Location", "https://cdn-lfs.hf.co/audit/model.bin")
+			w.WriteHeader(http.StatusFound)
+			return
+		}
+		w.Header().Set("ETag", `"audit-cdn"`)
+		w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+		if r.Method == http.MethodGet {
+			_, _ = w.Write(content)
+		}
+	}))
+	userID := db.NewID()
+	if _, err := env.store.SQL.Exec(`INSERT INTO users(id,username,role) VALUES($1,$2,'reader')`, userID, "audited-"+userID[:8]); err != nil {
+		t.Fatal(err)
+	}
+	secret := "audited-token-" + strings.ReplaceAll(db.NewID(), "-", "")
+	tokenID := db.NewID()
+	if _, err := env.store.SQL.Exec(`INSERT INTO access_tokens(id,user_id,token_hash,prefix) VALUES($1,$2,$3,'audited')`, tokenID, userID, HashToken(secret, env.server.currentConfig().SessionSecret)); err != nil {
+		t.Fatal(err)
+	}
+	target := env.proxy.URL + "/models/" + env.repoID + "/resolve/" + ahubCommit + "/model.bin"
+	for i := 0; i < 2; i++ {
+		req, _ := http.NewRequest(http.MethodGet, target, nil)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("request %d = %d", i, resp.StatusCode)
+		}
+	}
+	rows, err := env.store.SQL.Query(`SELECT status, COALESCE(user_id,''), COALESCE(token_id,''), COALESCE(client_ip,'') FROM downloads WHERE repository_id=$1 ORDER BY started_at`, env.repoPK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	seen := 0
+	for rows.Next() {
+		var status, user, token, ip string
+		if err := rows.Scan(&status, &user, &token, &ip); err != nil {
+			t.Fatal(err)
+		}
+		seen++
+		if user != userID || token != tokenID || ip != "127.0.0.1" {
+			t.Errorf("%s row: user=%q token=%q ip=%q, want %q %q 127.0.0.1", status, user, token, ip, userID, tokenID)
+		}
+	}
+	if seen < 2 {
+		t.Fatalf("recorded %d download rows, want at least a fill and a hit", seen)
+	}
+}
+
+func TestBlobGCReportsAndSurvivesAFailingBlob(t *testing.T) {
+	var deleted []string
+	s3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			if strings.Contains(r.URL.Path, "boom") {
+				w.Header().Set("Content-Type", "application/xml")
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(w, `<Error><Code>AccessDenied</Code></Error>`)
+				return
+			}
+			deleted = append(deleted, r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer s3.Close()
+	objects, err := storage.New(context.Background(), s3.URL, "us-east-1", "bucket", "", "access", "secret", true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := auditAPIFreshStore(t)
+	cfg := auditAPIConfig()
+	cfg.CacheGCGrace = time.Second
+	s := auditAPINewServer(t, store, cfg)
+	s.runtime.Store(&runtimeState{config: cfg, storage: objects, httpClient: http.DefaultClient})
+	for _, key := range []string{"blobs/boom", "blobs/fine-1", "blobs/fine-2"} {
+		sha := strings.ReplaceAll(db.NewID()+db.NewID(), "-", "")
+		if _, err := store.SQL.Exec(`INSERT INTO blobs(id,sha256,size_bytes,storage_key,orphaned_at) VALUES($1,$2,1,$3,now()-interval '1 hour')`, db.NewID(), sha, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count, err := s.collectOrphanedBlobsCounted(context.Background())
+	if err == nil {
+		t.Fatal("the failing blob must be reported")
+	}
+	if count != 2 || len(deleted) != 2 {
+		t.Fatalf("deleted %d blobs (%d objects), want the 2 healthy ones despite the failure", count, len(deleted))
+	}
+	var remaining int
+	if err := store.SQL.QueryRow(`SELECT COUNT(*) FROM blobs`).Scan(&remaining); err != nil || remaining != 1 {
+		t.Fatalf("blobs left = %d (%v), want only the failing one", remaining, err)
+	}
+
+	s.runBlobGC(context.Background())
+	families, err := s.metrics.registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, family := range families {
+		if family.GetName() == "hfproxy_gc_runs_total" {
+			for _, metric := range family.GetMetric() {
+				if metric.GetCounter().GetValue() > 0 {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("hfproxy_gc_runs_total was not recorded")
 	}
 }
