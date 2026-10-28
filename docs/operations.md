@@ -11,7 +11,9 @@
 2. Run `hfproxy migrate status`, then `hfproxy migrate up`, or start one instance with `HFPROXY_AUTO_MIGRATE=true`.
 3. Roll out the new image. A new build refuses to start until the schema is at its version, and `/readyz` stays unavailable until then.
 
-Migrations only add tables, columns and indexes while a release depends on the old shape, so the previous image keeps working after a migration. To roll back, redeploy the previous image; do not remove migration rows by hand.
+Migrations only add tables, columns and indexes while a release depends on the old shape, so the previous image still starts after a migration. To roll back, redeploy the previous image; do not remove migration rows by hand.
+
+One rollback limit: from 0.0.4 on, access tokens move to a derived key the first time they are used, sessions are created under it, and saved settings are rewritten in a keyed format when they are saved or rotated. An older release cannot verify those: its users would have to sign in again and create new tokens, and it cannot read re-saved settings. Back up the database before upgrading, and treat a rollback past 0.0.4 as a restore from that backup.
 
 ## Rotating the session secret
 
