@@ -118,13 +118,13 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 		if err != nil {
 			return nil, nil, fmt.Errorf("invalid upstream URL")
 		}
-		if u.Scheme != "https" && !(u.Scheme == "http" && configLoopback(u.Hostname())) {
+		if u.Scheme != "https" && !(u.Scheme == "http" && config.IsLoopbackHost(u.Hostname())) {
 			return nil, nil, fmt.Errorf("unsafe upstream redirect")
 		}
 		if u.User != nil || u.Host == "" {
 			return nil, nil, fmt.Errorf("unsafe upstream URL")
 		}
-		if port := u.Port(); port != "" && port != "443" && !(port == "80" && configLoopback(u.Hostname())) {
+		if port := u.Port(); port != "" && port != "443" && !(port == "80" && config.IsLoopbackHost(u.Hostname())) {
 			return nil, nil, fmt.Errorf("unsafe upstream port")
 		}
 		req, err := http.NewRequestWithContext(ctx, method, u.String(), nil)
@@ -253,10 +253,10 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 			return nil, first, fmt.Errorf("invalid upstream redirect")
 		}
 		host := strings.ToLower(next.Hostname())
-		if !s.allowedRedirectHost(host) || next.User != nil || next.Scheme != "https" && !(next.Scheme == "http" && configLoopback(next.Hostname())) {
+		if !s.allowedRedirectHost(host) || next.User != nil || next.Scheme != "https" && !(next.Scheme == "http" && config.IsLoopbackHost(next.Hostname())) {
 			return nil, first, fmt.Errorf("upstream redirect host is not allowed")
 		}
-		if port := next.Port(); port != "" && port != "443" && !(port == "80" && configLoopback(next.Hostname())) {
+		if port := next.Port(); port != "" && port != "443" && !(port == "80" && config.IsLoopbackHost(next.Hostname())) {
 			return nil, first, fmt.Errorf("unsafe upstream redirect port")
 		}
 		target = next.String()
@@ -368,7 +368,6 @@ func (b *countingBody) Close() error {
 	return err
 }
 
-func configLoopback(host string) bool { return config.IsLoopbackHost(host) }
 func newEgressDialer(allowLoopback bool, proxy *url.URL) func(context.Context, string, string) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -451,7 +450,7 @@ func newHFHTTPClient(cfg config.Config) *http.Client {
 		// was explicitly configured for Hugging Face.
 		transport.Proxy = nil
 	}
-	transport.DialContext = newEgressDialer(configLoopback(base.Hostname()), proxy)
+	transport.DialContext = newEgressDialer(config.IsLoopbackHost(base.Hostname()), proxy)
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	transport.ResponseHeaderTimeout = cfg.HFTimeout
 	return &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

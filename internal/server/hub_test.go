@@ -16,7 +16,7 @@ import (
 	"github.com/nicolas/hfproxy/internal/config"
 )
 
-func TestIssue105CachePublishContextOutlivesClientContext(t *testing.T) {
+func TestCachePublishContextOutlivesClientContext(t *testing.T) {
 	clientCtx, cancelClient := context.WithCancel(context.Background())
 	publishCtx, cancelPublish := cachePublishContext(clientCtx)
 	defer cancelPublish()
@@ -272,7 +272,7 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestIssue104CacheHitHeadersPreserveLFSIdentity(t *testing.T) {
+func TestCacheHitHeadersPreserveLFSIdentity(t *testing.T) {
 	digest := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	const size = int64(1234)
 	rec := httptest.NewRecorder()
@@ -300,7 +300,7 @@ func TestParseByteRange(t *testing.T) {
 		{name: "open end", value: "bytes=5-", start: 5, end: 9, partial: true, valid: true},
 		{name: "suffix", value: "bytes=-3", start: 7, end: 9, partial: true, valid: true},
 		{name: "clamp end", value: "bytes=8-99", start: 8, end: 9, partial: true, valid: true},
-		{name: "multiple ranges rejected", value: "bytes=0-1,4-5", valid: false},
+		{name: "multiple ranges ignored", value: "bytes=0-1,4-5", valid: true},
 		{name: "start beyond object", value: "bytes=10-", valid: false},
 		{name: "reversed range", value: "bytes=8-3", valid: false},
 		{name: "zero suffix", value: "bytes=-0", valid: false},
@@ -429,7 +429,7 @@ func TestEgressIPPolicyRejectsSpecialAndEmbeddedPrivateIPs(t *testing.T) {
 	}
 }
 
-func TestIssue76NAT64UnwrapsAndRechecksEmbeddedIPv4(t *testing.T) {
+func TestNAT64UnwrapsAndRechecksEmbeddedIPv4(t *testing.T) {
 	for _, raw := range []string{"64:ff9b:1::a00:1", "64:ff9b:1::a9fe:a9fe", "64:ff9b:1::7f00:1"} {
 		if egressIPAllowed(netip.MustParseAddr(raw), false) {
 			t.Errorf("local-use NAT64 address %s wraps a blocked IPv4 destination", raw)

@@ -70,7 +70,7 @@ func TestAuditOrphanedBlobGCDeletesAfterGrace(t *testing.T) {
 	}
 }
 
-func TestAuditIssue111GCCollectsWithZeroGrace(t *testing.T) {
+func TestGCCollectsWithZeroGrace(t *testing.T) {
 	env := newAuditStorageEnv(t, http.NotFoundHandler(), auditStorageOptions{mutate: func(cfg *config.Config) {
 		cfg.CacheGCGrace = 0
 	}})

@@ -1,0 +1,79 @@
+# Example alert rules for hfproxy. Adjust job labels, thresholds and the cache
+# size limit to your deployment.
+groups:
+  - name: hfproxy
+    rules:
+      - alert: HfproxyDown
+        expr: up{job="hfproxy"} == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: hfproxy is not being scraped
+      - alert: HfproxyServerErrors
+        expr: |
+          sum(rate(hfproxy_http_requests_total{status_code=~"5.."}[5m]))
+            / sum(rate(hfproxy_http_requests_total[5m])) > 0.05
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: More than 5% of requests fail with a 5xx
+      - alert: HfproxyUpstreamErrors
+        expr: sum(rate(hfproxy_upstream_errors_total[10m])) > 0.1
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: Hugging Face requests are failing; cached files are served, new files are not
+      - alert: HfproxyUpstreamCircuitOpen
+        expr: sum by (host) (increase(hfproxy_upstream_breaker_opened_total[15m])) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: The circuit for a Hugging Face host opened; requests to it fail fast or are answered from the cache
+      - alert: HfproxyUpstreamRetries
+        expr: sum(rate(hfproxy_upstream_retries_total[10m])) > 0.1
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: Hugging Face needs frequent retries (rate limiting or instability)
+      - alert: HfproxyStorageErrors
+        expr: sum(rate(hfproxy_storage_errors_total[10m])) > 0
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: Object storage operations are failing
+      - alert: HfproxyGarbageCollectionFailing
+        expr: increase(hfproxy_gc_runs_total{result="error"}[3h]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: Orphaned blob collection is failing; storage will keep growing
+      - alert: HfproxyGarbageCollectionStalled
+        expr: hfproxy_gc_last_run_timestamp_seconds > 0 and time() - hfproxy_gc_last_run_timestamp_seconds > 3 * 3600
+        labels: {severity: warning}
+        annotations:
+          summary: Orphaned blob collection has not run for three hours
+      - alert: HfproxyCacheNearQuota
+        # Replace the number with 90% of HFPROXY_CACHE_MAX_TOTAL_SIZE, in bytes.
+        expr: hfproxy_cache_size_bytes > 900e9
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: The cache is close to its configured size limit
+      - alert: HfproxyStagingSpaceLow
+        # Replace the number with a little more than your largest file.
+        expr: hfproxy_staging_free_bytes < 20e9
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: The staging volume is nearly full; large downloads will be refused with 507
+      - alert: HfproxyPinnedContentNearQuota
+        # Replace the number with 80% of HFPROXY_CACHE_MAX_TOTAL_SIZE, in bytes.
+        expr: hfproxy_cache_pinned_bytes > 800e9
+        for: 1h
+        labels: {severity: warning}
+        annotations:
+          summary: Pinned files take most of the cache quota, so little room is left for eviction to work with
+      - alert: HfproxyHeavyEviction
+        expr: sum(rate(hfproxy_cache_evictions_total[1h])) > 1
+        for: 2h
+        labels: {severity: info}
+        annotations:
+          summary: The cache keeps evicting files; the quota may be too small for the working set

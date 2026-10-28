@@ -74,6 +74,11 @@ jobs:
           awk -v t="$total" 'BEGIN { exit (t >= 50.0) ? 0 : 1 }' || { echo "Coverage ${total}% is below the 50% minimum."; exit 1; }
       - name: Build
         run: go build -trimpath ./cmd/hfproxy
+      - name: The build is reproducible
+        run: |
+          go build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/a" ./cmd/hfproxy
+          go build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/b" ./cmd/hfproxy
+          cmp "$RUNNER_TEMP/a" "$RUNNER_TEMP/b"
   vulncheck:
     runs-on: ubuntu-latest
     steps:
@@ -141,6 +146,29 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+      - name: The chart's alert rules match the documented ones
+        run: diff docs/prometheus-alerts.yml deploy/helm/hfproxy/files/prometheus-alerts.yml
+      - name: Lint and render the chart
+        run: |
+          set -eu
+          helm() { go run helm.sh/helm/v3/cmd/helm@v3.17.3 "$@"; }
+          values="--set secrets.existingSecret=hfproxy --set config.PUBLIC_URL=https://hub.example.com --set config.S3_ENDPOINT=https://s3.example.com --set config.S3_REGION=r --set config.S3_BUCKET=b"
+          helm lint deploy/helm/hfproxy $values
+          helm template hfproxy deploy/helm/hfproxy $values --set ingress.enabled=true --set ingress.host=hub.example.com --set ingress.tlsSecretName=tls --set replicaCount=2 --set metrics.serviceMonitor.enabled=true --set metrics.prometheusRule.enabled=true --set staging.type=pvc > /dev/null
+          if helm template hfproxy deploy/helm/hfproxy > /dev/null 2>&1; then echo "the chart must refuse to render without secrets.existingSecret"; exit 1; fi
   ui:
     runs-on: ubuntu-latest
     defaults:

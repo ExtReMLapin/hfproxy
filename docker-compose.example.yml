@@ -4,7 +4,7 @@
 #   postgres://hfproxy:MOT_DE_PASSE@db.example.internal:5432/hfproxy?sslmode=verify-full
 services:
   hfproxy:
-    image: ghcr.io/your-org/hfproxy:v0.0.3
+    image: ghcr.io/hfproxy/hfproxy:0.0.4
     environment:
       HFPROXY_LISTEN_ADDR: 0.0.0.0:8080
       HFPROXY_PUBLIC_URL: ${HFPROXY_PUBLIC_URL:?Set the public HTTPS URL}
@@ -46,7 +46,7 @@ services:
     user: "65532:65532"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "/usr/local/bin/hfproxy", "healthcheck"]
       interval: 30s
       timeout: 5s
       retries: 3

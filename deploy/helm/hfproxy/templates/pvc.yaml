@@ -1,0 +1,15 @@
+{{- if eq .Values.staging.type "pvc" }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "hfproxy.fullname" . }}-staging
+  labels: {{- include "hfproxy.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.staging.storageClassName }}
+  storageClassName: {{ .Values.staging.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.staging.size }}
+{{- end }}
