@@ -565,7 +565,7 @@ func (s *Server) apiActiveDownloads(w http.ResponseWriter, r *http.Request) {
 		AND ($1='admin' OR r.access_policy='public'
 			OR (r.access_policy='allowlist' AND (
 			EXISTS(SELECT 1 FROM repo_grants g WHERE g.repository_id=r.id AND g.subject_type='user' AND g.subject_id=$2)
-			OR EXISTS(SELECT 1 FROM repo_grants g JOIN group_members m ON m.group_id=g.subject_id WHERE g.repository_id=r.id AND g.subject_type='group' AND m.user_id=$2)))
+			OR EXISTS(SELECT 1 FROM repo_grants g JOIN group_members m ON m.group_id=g.subject_id WHERE g.repository_id=r.id AND g.subject_type='group' AND m.user_id=$2))))
 		ORDER BY d.started_at DESC LIMIT 50`, p.Role, p.ID)
 	if err != nil {
 		writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to read active downloads.")
