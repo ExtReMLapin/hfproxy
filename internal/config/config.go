@@ -65,6 +65,12 @@ type Config struct {
 	OTLPEndpoint           string
 	CacheInventoryRefresh  time.Duration
 
+	// LockedSettings lists the console-editable settings (by their JSON name,
+	// for example "s3_bucket") pinned to the environment: saved values are
+	// ignored for them and the console refuses to change them
+	// (HFPROXY_LOCKED_SETTINGS, "all" locks every one).
+	LockedSettings []string
+
 	// Environment-only settings: they are not editable from the console and
 	// are never overridden by saved settings.
 	StagingDir string
@@ -152,6 +158,10 @@ func Load() (Config, error) {
 	}
 	c.OTLPEndpoint = value("OTLP_ENDPOINT", "")
 	c.CacheInventoryRefresh = duration("CACHE_INVENTORY_REFRESH", 5*time.Minute)
+	c.LockedSettings = splitSecrets(value("LOCKED_SETTINGS", ""))
+	if err := ValidateLockedSettings(c.LockedSettings); err != nil {
+		return Config{}, err
+	}
 	c.StagingDir = value("STAGING_DIR", "")
 	c.StagingMinFreeBytes = int64(number("STAGING_MIN_FREE_BYTES", 0))
 	c.CacheFillConcurrency = number("CACHE_FILL_CONCURRENCY", 4)

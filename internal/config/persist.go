@@ -76,6 +76,7 @@ func LoadPersisted(ctx context.Context, sqlDB *sql.DB, base Config) (Config, err
 	if err := json.Unmarshal(plaintext, &saved); err != nil {
 		return Config{}, fmt.Errorf("saved settings are invalid")
 	}
+	saved.pinToEnvironment(base)
 	return saved.apply(base), nil
 }
 
@@ -256,4 +257,94 @@ func redactedValue(name string, value any) string {
 		return "(unset)"
 	}
 	return text
+}
+
+// LockAll is the value of HFPROXY_LOCKED_SETTINGS that locks every setting.
+const LockAll = "all"
+
+// ManagedSettingNames lists the JSON names of the settings editable from the
+// console, in declaration order.
+func ManagedSettingNames() []string {
+	t := reflect.TypeOf(managedSettings{})
+	names := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		names = append(names, strings.Split(t.Field(i).Tag.Get("json"), ",")[0])
+	}
+	return names
+}
+
+// ValidateLockedSettings rejects names that are not console-editable settings,
+// so a typo cannot silently leave a setting unlocked.
+func ValidateLockedSettings(locked []string) error {
+	known := map[string]bool{LockAll: true}
+	for _, name := range ManagedSettingNames() {
+		known[name] = true
+	}
+	for _, name := range locked {
+		if !known[name] {
+			return fmt.Errorf("HFPROXY_LOCKED_SETTINGS contains %q, which is not a console setting", name)
+		}
+	}
+	return nil
+}
+
+// LockedSet returns the names to treat as locked, expanding "all".
+func LockedSet(locked []string) map[string]bool {
+	set := map[string]bool{}
+	for _, name := range locked {
+		if name == LockAll {
+			for _, every := range ManagedSettingNames() {
+				set[every] = true
+			}
+			continue
+		}
+		set[name] = true
+	}
+	return set
+}
+
+// pinToEnvironment replaces the saved value of every locked setting with the
+// one from the environment, so editing the Helm values or the compose file
+// always wins for those.
+func (s *managedSettings) pinToEnvironment(base Config) {
+	locked := LockedSet(base.LockedSettings)
+	if len(locked) == 0 {
+		return
+	}
+	fromEnvironment := reflect.ValueOf(managedFromConfig(base))
+	saved := reflect.ValueOf(s).Elem()
+	t := fromEnvironment.Type()
+	for i := 0; i < t.NumField(); i++ {
+		if locked[strings.Split(t.Field(i).Tag.Get("json"), ",")[0]] {
+			saved.Field(i).Set(fromEnvironment.Field(i))
+		}
+	}
+}
+
+// ChangedLocked returns the locked settings whose value differs between two
+// configurations.
+func ChangedLocked(locked []string, before, after Config) []string {
+	set := LockedSet(locked)
+	a, b := reflect.ValueOf(managedFromConfig(before)), reflect.ValueOf(managedFromConfig(after))
+	t := a.Type()
+	var changed []string
+	for i := 0; i < t.NumField(); i++ {
+		name := strings.Split(t.Field(i).Tag.Get("json"), ",")[0]
+		if set[name] && !reflect.DeepEqual(a.Field(i).Interface(), b.Field(i).Interface()) {
+			changed = append(changed, name)
+		}
+	}
+	return changed
+}
+
+// LockedNames returns the locked settings, sorted, with "all" expanded.
+func LockedNames(locked []string) []string {
+	set := LockedSet(locked)
+	names := make([]string, 0, len(set))
+	for _, name := range ManagedSettingNames() {
+		if set[name] {
+			names = append(names, name)
+		}
+	}
+	return names
 }

@@ -148,7 +148,13 @@ func showConfig(out io.Writer) error {
 	for _, entry := range config.DescribeSources(environment, effective) {
 		fmt.Fprintf(w, "%s\t%s\t%s\n", entry.Name, entry.Source, entry.Value)
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if locked := config.LockedNames(environment.LockedSettings); len(locked) > 0 {
+		fmt.Fprintf(out, "\nLocked to the environment (console edits refused): %s\n", strings.Join(locked, ", "))
+	}
+	return nil
 }
 
 func serve(args []string) error {
@@ -185,6 +191,9 @@ func serve(args []string) error {
 	}
 	if overridden := config.OverriddenFields(environment, cfg); len(overridden) > 0 {
 		logger(cfg).Warn("settings saved in the console override these environment values; change them in the console or reset the saved settings", "settings", overridden)
+	}
+	if locked := config.LockedNames(cfg.LockedSettings); len(locked) > 0 {
+		logger(cfg).Info("settings locked to the environment; the console cannot change them", "settings", locked)
 	}
 	if err := cfg.Validate(); err != nil {
 		return err

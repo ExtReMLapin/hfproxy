@@ -36,6 +36,30 @@ export class SettingsPageComponent implements OnInit {
     { id: 'observability', label: 'Observability', icon: 'layers' },
   ];
 
+  /** Draft fields that edit a setting under a different name. */
+  private static readonly lockAliases: Record<string, string[]> = {
+    hf_allowed_hosts_text: ['hf_allowed_hosts'],
+    hf_proxy_url: ['hf_proxy_url'],
+    clear_hf_proxy: ['hf_proxy_url'],
+    hf_token: ['hf_token'],
+    clear_hf_token: ['hf_token'],
+    s3_access_key: ['s3_access_key'],
+    s3_secret_key: ['s3_secret_key'],
+    clear_s3_credentials: ['s3_access_key', 's3_secret_key'],
+    oidc_client_secret: ['oidc_client_secret'],
+    clear_oidc_client_secret: ['oidc_client_secret'],
+    ldap_bind_password: ['ldap_bind_password'],
+    clear_ldap_bind_password: ['ldap_bind_password'],
+  };
+
+  /** True when the environment pins this field, so the console cannot change it. */
+  protected isLocked(field: string): boolean {
+    const locked = this.draft?.locked ?? [];
+    if (locked.includes('all')) return true;
+    const names = SettingsPageComponent.lockAliases[field] ?? [field];
+    return names.some((name) => locked.includes(name));
+  }
+
   ngOnInit(): void {
     void this.load();
   }
@@ -64,6 +88,7 @@ export class SettingsPageComponent implements OnInit {
         .filter(Boolean),
     };
     delete payload['hf_allowed_hosts_text'];
+    delete payload['locked'];
     delete payload['hf_proxy_set'];
     delete payload['hf_token_set'];
     delete payload['s3_access_key_set'];

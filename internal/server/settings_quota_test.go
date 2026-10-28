@@ -127,3 +127,36 @@ func TestLoweringTheLimitEvictsWithoutWaitingForTheNextTick(t *testing.T) {
 	}
 	t.Fatalf("the new limit was not enforced within 5 seconds (artifacts left: %q); eviction waited for the periodic timer", remainingArtifacts(t, store))
 }
+
+func TestLockedSettingsCannotBeChangedFromTheConsole(t *testing.T) {
+	store := auditAPIFreshStore(t)
+	cfg := auditAPIConfig()
+	cfg.LockedSettings = []string{"cache_max_total_size"}
+	s := auditAPINewServer(t, store, cfg)
+	admin := settingsAdmin(t, store)
+
+	view := settingsPayload(t, s, admin)
+	locked, _ := view["locked"].([]any)
+	if len(locked) != 1 {
+		t.Fatalf("the view must list the locked settings, got %v", view["locked"])
+	}
+
+	// Sending the locked values back unchanged, as the console does, still works.
+	view["cache_ref_ttl"] = "2m"
+	if status, out := putSettings(t, s, admin, view); status != http.StatusOK {
+		t.Fatalf("PUT of an unlocked change = %d %v", status, out)
+	}
+
+	changing := settingsPayload(t, s, admin)
+	changing["cache_max_total_size"] = float64(7 << 30)
+	status, out := putSettings(t, s, admin, changing)
+	if status != http.StatusConflict {
+		t.Fatalf("PUT changing a locked setting = %d, want 409", status)
+	}
+	if detail, _ := out["detail"].(string); !strings.Contains(detail, "cache_max_total_size") {
+		t.Fatalf("the error must name the locked setting, got %q", detail)
+	}
+	if got := s.currentConfig().CacheMaxTotalSize; got != 0 {
+		t.Fatalf("a refused change was applied: %d", got)
+	}
+}

@@ -56,6 +56,8 @@ type settingsResponse struct {
 	TracingSamplingRatio   float64  `json:"tracing_sampling_ratio"`
 	OTLPEndpoint           string   `json:"otlp_endpoint"`
 	CacheInventoryRefresh  string   `json:"cache_inventory_refresh"`
+	// Locked lists the settings pinned to the environment (read-only here).
+	Locked []string `json:"locked"`
 }
 
 type settingsInput struct {
@@ -106,6 +108,8 @@ type settingsInput struct {
 	TracingSamplingRatio   float64  `json:"tracing_sampling_ratio"`
 	OTLPEndpoint           string   `json:"otlp_endpoint"`
 	CacheInventoryRefresh  string   `json:"cache_inventory_refresh"`
+	// Locked is part of what the console reads back; it is ignored on input.
+	Locked []string `json:"locked"`
 }
 
 func settingsView(cfg config.Config) settingsResponse {
@@ -119,6 +123,7 @@ func settingsView(cfg config.Config) settingsResponse {
 		OIDCAutoProvision: cfg.OIDCAutoProvision, LDAPURL: cfg.LDAPURL, LDAPStartTLS: cfg.LDAPStartTLS, LDAPBindDN: cfg.LDAPBindDN,
 		LDAPBindPasswordSet: cfg.LDAPBindPassword != "", LDAPBaseDN: cfg.LDAPBaseDN, LDAPUserFilter: cfg.LDAPUserFilter, LDAPAutoProvision: cfg.LDAPAutoProvision,
 		MetricsEnabled: cfg.MetricsEnabled, MetricsPath: cfg.MetricsPath, TracingEnabled: cfg.TracingEnabled, TracingServiceName: cfg.TracingServiceName, TracingSamplingRatio: cfg.TracingSamplingRatio, OTLPEndpoint: cfg.OTLPEndpoint, CacheInventoryRefresh: cfg.CacheInventoryRefresh.String(),
+		Locked: config.LockedNames(cfg.LockedSettings),
 	}
 }
 
@@ -135,9 +140,14 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &input) {
 			return
 		}
-		cfg, err := input.apply(s.currentConfig())
+		current := s.currentConfig()
+		cfg, err := input.apply(current)
 		if err != nil {
 			writeProblem(w, r, http.StatusBadRequest, "Invalid settings", err.Error())
+			return
+		}
+		if changed := config.ChangedLocked(current.LockedSettings, current, cfg); len(changed) > 0 {
+			writeProblem(w, r, http.StatusConflict, "Settings locked by the environment", "These settings are set through HFPROXY_* variables and cannot be changed here: "+strings.Join(changed, ", ")+".")
 			return
 		}
 		if err := s.applyConfig(r.Context(), cfg, p.ID); err != nil {

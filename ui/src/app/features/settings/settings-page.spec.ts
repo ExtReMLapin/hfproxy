@@ -47,6 +47,7 @@ const settings: ManagedSettings = {
   tracing_sampling_ratio: 0.1,
   otlp_endpoint: '',
   cache_inventory_refresh: '5m0s',
+  locked: [],
 } as ManagedSettings;
 
 async function flushMicrotasks(): Promise<void> {
@@ -126,5 +127,28 @@ describe('Settings page', () => {
     expect(field!.min).toBe('0');
     expect(field!.value).toBe('5368709120');
     expect(fixture.nativeElement.textContent).toContain('Pinned files are never removed');
+  });
+
+  it('knows which fields the environment locks and never sends the list back', async () => {
+    const page = TestBed.runInInjectionContext(() => new SettingsPageComponent());
+    const internals = page as unknown as SettingsPageInternals & { isLocked(field: string): boolean };
+    page.ngOnInit();
+    http.expectOne('/api/v1/settings').flush({ ...settings, locked: ['cache_max_total_size', 's3_access_key'] });
+    await flushMicrotasks();
+
+    expect(internals.isLocked('cache_max_total_size')).toBe(true);
+    expect(internals.isLocked('s3_access_key')).toBe(true);
+    expect(internals.isLocked('cache_ref_ttl')).toBe(false);
+    expect(internals.isLocked('clear_s3_credentials')).toBe(true); // clears the locked access key
+    expect(internals.isLocked('s3_secret_key')).toBe(false);
+
+    const saving = internals.save();
+    await flushMicrotasks();
+    const put = http.expectOne((request) => request.method === 'PUT' && request.url === '/api/v1/settings');
+    expect((put.request.body as Record<string, unknown>)['locked']).toBeUndefined();
+    put.flush({ ...settings, locked: [] });
+    await flushMicrotasks();
+    http.match('/api/v1/auth/providers').forEach((request) => request.flush({ local: true, oidc: false, ldap: false }));
+    await saving;
   });
 });

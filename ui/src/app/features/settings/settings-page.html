@@ -41,6 +41,16 @@
       </nav>
 
       <div class="min-w-0">
+        @if (draft && draft.locked.length) {
+          <p
+            class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800"
+            role="status"
+          >
+            {{ draft.locked.length }} setting(s) are locked to the environment and cannot be edited
+            here: {{ draft.locked.join(', ') }}. Change the HFPROXY_* variables of the deployment
+            instead.
+          </p>
+        }
         @switch (section()) {
           @case ('connections') {
             <section
@@ -81,20 +91,20 @@
                   >Hub base URL<input
                     class="control"
                     name="hfBase"
-                    [(ngModel)]="settings.hf_base_url"
+                    [(ngModel)]="settings.hf_base_url" [disabled]="isLocked('hf_base_url')"
                     placeholder="https://huggingface.co" /></label
                 ><label class="field"
                   >Request timeout<input
                     class="control"
                     name="hfTimeout"
-                    [(ngModel)]="settings.hf_timeout"
+                    [(ngModel)]="settings.hf_timeout" [disabled]="isLocked('hf_timeout')"
                     placeholder="2m"
                   /><span class="hint">Go duration, for example 30s or 2m.</span></label
                 ><label class="field md:col-span-2"
                   >Allowed redirect hosts<input
                     class="control"
                     name="hfHosts"
-                    [(ngModel)]="settings.hf_allowed_hosts_text"
+                    [(ngModel)]="settings.hf_allowed_hosts_text" [disabled]="isLocked('hf_allowed_hosts_text')"
                     placeholder="huggingface.co, *.hf.co"
                   /><span class="hint"
                     >Comma separated. Keep this list narrow to protect browser redirects.</span
@@ -103,7 +113,7 @@
                   >Hub read token<input
                     class="control"
                     name="hfToken"
-                    [(ngModel)]="settings.hf_token"
+                    [(ngModel)]="settings.hf_token" [disabled]="isLocked('hf_token')"
                     type="password"
                     autocomplete="new-password"
                     placeholder="Leave blank to keep the saved token"
@@ -114,7 +124,7 @@
                     <input
                       class="control pr-11"
                       name="hfProxy"
-                      [(ngModel)]="settings.hf_proxy_url"
+                      [(ngModel)]="settings.hf_proxy_url" [disabled]="isLocked('hf_proxy_url')"
                       [type]="proxyURLVisible ? 'text' : 'password'"
                       autocomplete="new-password"
                       placeholder="http://proxy.example:3128 or socks5://proxy.example:1080"
@@ -141,7 +151,7 @@
                   ><input
                     type="checkbox"
                     name="clearHFProxy"
-                    [(ngModel)]="settings.clear_hf_proxy"
+                    [(ngModel)]="settings.clear_hf_proxy" [disabled]="isLocked('clear_hf_proxy')"
                   /><span>Clear the saved Hugging Face proxy</span></label
                 >
               }
@@ -150,7 +160,7 @@
                   ><input
                     type="checkbox"
                     name="clearHF"
-                    [(ngModel)]="settings.clear_hf_token"
+                    [(ngModel)]="settings.clear_hf_token" [disabled]="isLocked('clear_hf_token')"
                   /><span>Clear the saved Hugging Face token</span></label
                 >
               }
@@ -199,32 +209,32 @@
                   >Endpoint URL<input
                     class="control"
                     name="s3Endpoint"
-                    [(ngModel)]="settings.s3_endpoint"
+                    [(ngModel)]="settings.s3_endpoint" [disabled]="isLocked('s3_endpoint')"
                     placeholder="https://s3.example.com"
                   /><span class="hint">Leave empty to use the standard cloud endpoint.</span></label
                 ><label class="field"
                   >Region<input
                     class="control"
                     name="s3Region"
-                    [(ngModel)]="settings.s3_region"
+                    [(ngModel)]="settings.s3_region" [disabled]="isLocked('s3_region')"
                     placeholder="us-east-1" /></label
                 ><label class="field"
                   >Bucket<input
                     class="control"
                     name="s3Bucket"
-                    [(ngModel)]="settings.s3_bucket"
+                    [(ngModel)]="settings.s3_bucket" [disabled]="isLocked('s3_bucket')"
                     required /></label
                 ><label class="field sm:col-span-2"
                   >Key prefix<input
                     class="control"
                     name="s3Prefix"
-                    [(ngModel)]="settings.s3_prefix"
+                    [(ngModel)]="settings.s3_prefix" [disabled]="isLocked('s3_prefix')"
                     placeholder="hfproxy" /></label
                 ><label class="field"
                   >Access key<input
                     class="control"
                     name="s3Access"
-                    [(ngModel)]="settings.s3_access_key"
+                    [(ngModel)]="settings.s3_access_key" [disabled]="isLocked('s3_access_key')"
                     type="password"
                     autocomplete="new-password"
                     placeholder="Leave blank to keep current key" /></label
@@ -232,7 +242,7 @@
                   >Secret key<input
                     class="control"
                     name="s3Secret"
-                    [(ngModel)]="settings.s3_secret_key"
+                    [(ngModel)]="settings.s3_secret_key" [disabled]="isLocked('s3_secret_key')"
                     type="password"
                     autocomplete="new-password"
                     placeholder="Leave blank to keep current key"
@@ -243,7 +253,7 @@
                   ><input
                     type="checkbox"
                     name="pathStyle"
-                    [(ngModel)]="settings.s3_force_path_style"
+                    [(ngModel)]="settings.s3_force_path_style" [disabled]="isLocked('s3_force_path_style')"
                   /><span
                     >Use path-style URLs
                     <span class="font-normal text-slate-400"
@@ -254,7 +264,7 @@
                   ><input
                     type="checkbox"
                     name="s3Encryption"
-                    [(ngModel)]="settings.s3_server_side_encryption"
+                    [(ngModel)]="settings.s3_server_side_encryption" [disabled]="isLocked('s3_server_side_encryption')"
                   /><span>Request AES256 server-side encryption</span></label
                 >
                 @if (settings.s3_secret_key_set) {
@@ -262,7 +272,7 @@
                     ><input
                       type="checkbox"
                       name="clearS3"
-                      [(ngModel)]="settings.clear_s3_credentials"
+                      [(ngModel)]="settings.clear_s3_credentials" [disabled]="isLocked('clear_s3_credentials')"
                     /><span>Clear saved S3 credentials</span></label
                   >
                 }
@@ -303,7 +313,7 @@
                   >Primary sign-in mode<select
                     class="control"
                     name="authMode"
-                    [(ngModel)]="settings.auth_mode"
+                    [(ngModel)]="settings.auth_mode" [disabled]="isLocked('auth_mode')"
                   >
                     <option value="local">Local accounts</option>
                     <option value="oidc">OIDC single sign-on</option>
@@ -312,7 +322,7 @@
                   >Public URL<input
                     class="control"
                     name="publicUrl"
-                    [(ngModel)]="settings.public_url"
+                    [(ngModel)]="settings.public_url" [disabled]="isLocked('public_url')"
                     placeholder="https://hfproxy.example.com"
                   /><span class="hint"
                     >Used when creating external authentication callbacks.</span
@@ -321,13 +331,13 @@
                   >Idle session lifetime<input
                     class="control"
                     name="idleTTL"
-                    [(ngModel)]="settings.session_idle_ttl"
+                    [(ngModel)]="settings.session_idle_ttl" [disabled]="isLocked('session_idle_ttl')"
                     placeholder="8h" /></label
                 ><label class="field"
                   >Absolute session lifetime<input
                     class="control"
                     name="absoluteTTL"
-                    [(ngModel)]="settings.session_absolute_ttl"
+                    [(ngModel)]="settings.session_absolute_ttl" [disabled]="isLocked('session_absolute_ttl')"
                     placeholder="24h"
                 /></label>
               </div>
@@ -335,7 +345,7 @@
                 ><input
                   type="checkbox"
                   name="anonRead"
-                  [(ngModel)]="settings.anonymous_public_read"
+                  [(ngModel)]="settings.anonymous_public_read" [disabled]="isLocked('anonymous_public_read')"
                 /><span>Allow unauthenticated reads for repositories marked public</span></label
               >
               <div class="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500">
@@ -372,18 +382,18 @@
                   >Issuer URL<input
                     class="control"
                     name="oidcIssuer"
-                    [(ngModel)]="settings.oidc_issuer"
+                    [(ngModel)]="settings.oidc_issuer" [disabled]="isLocked('oidc_issuer')"
                     placeholder="https://identity.example.com/issuer" /></label
                 ><label class="field"
                   >Client ID<input
                     class="control"
                     name="oidcClientID"
-                    [(ngModel)]="settings.oidc_client_id" /></label
+                    [(ngModel)]="settings.oidc_client_id" [disabled]="isLocked('oidc_client_id')" /></label
                 ><label class="field"
                   >Client secret<input
                     class="control"
                     name="oidcSecret"
-                    [(ngModel)]="settings.oidc_client_secret"
+                    [(ngModel)]="settings.oidc_client_secret" [disabled]="isLocked('oidc_client_secret')"
                     type="password"
                     autocomplete="new-password"
                     placeholder="Leave blank to keep saved secret" /></label
@@ -391,7 +401,7 @@
                   >Callback URL<input
                     class="control"
                     name="oidcCallback"
-                    [(ngModel)]="settings.oidc_redirect_url"
+                    [(ngModel)]="settings.oidc_redirect_url" [disabled]="isLocked('oidc_redirect_url')"
                     placeholder="https://hfproxy.example.com/auth/callback"
                 /></label>
               </div>
@@ -400,7 +410,7 @@
                   ><input
                     type="checkbox"
                     name="clearOIDC"
-                    [(ngModel)]="settings.clear_oidc_client_secret"
+                    [(ngModel)]="settings.clear_oidc_client_secret" [disabled]="isLocked('clear_oidc_client_secret')"
                   /><span>Clear saved client secret</span></label
                 >
               }
@@ -408,7 +418,7 @@
                 ><input
                   type="checkbox"
                   name="oidcProvision"
-                  [(ngModel)]="settings.oidc_auto_provision"
+                  [(ngModel)]="settings.oidc_auto_provision" [disabled]="isLocked('oidc_auto_provision')"
                 /><span>Provision verified OIDC identities as reader accounts</span></label
               >
               <p class="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500">
@@ -445,19 +455,19 @@
                   >LDAP URL<input
                     class="control"
                     name="ldapURL"
-                    [(ngModel)]="settings.ldap_url"
+                    [(ngModel)]="settings.ldap_url" [disabled]="isLocked('ldap_url')"
                     placeholder="ldaps://directory.example.com:636" /></label
                 ><label class="field sm:col-span-2"
                   >Bind DN <span class="font-normal text-slate-400">(optional)</span
                   ><input
                     class="control"
                     name="ldapBindDN"
-                    [(ngModel)]="settings.ldap_bind_dn" /></label
+                    [(ngModel)]="settings.ldap_bind_dn" [disabled]="isLocked('ldap_bind_dn')" /></label
                 ><label class="field sm:col-span-2"
                   >Bind password<input
                     class="control"
                     name="ldapPassword"
-                    [(ngModel)]="settings.ldap_bind_password"
+                    [(ngModel)]="settings.ldap_bind_password" [disabled]="isLocked('ldap_bind_password')"
                     type="password"
                     autocomplete="new-password"
                     placeholder="Leave blank to keep saved password" /></label
@@ -465,13 +475,13 @@
                   >Search base DN<input
                     class="control"
                     name="ldapBase"
-                    [(ngModel)]="settings.ldap_base_dn"
+                    [(ngModel)]="settings.ldap_base_dn" [disabled]="isLocked('ldap_base_dn')"
                     placeholder="ou=users,dc=example,dc=com" /></label
                 ><label class="field sm:col-span-2"
                   >User search filter<input
                     class="control font-mono text-xs"
                     name="ldapFilter"
-                    [(ngModel)]="settings.ldap_user_filter"
+                    [(ngModel)]="settings.ldap_user_filter" [disabled]="isLocked('ldap_user_filter')"
                     placeholder="(uid={username})"
                 /></label>
               </div>
@@ -480,13 +490,13 @@
                   ><input
                     type="checkbox"
                     name="ldapTLS"
-                    [(ngModel)]="settings.ldap_starttls"
+                    [(ngModel)]="settings.ldap_starttls" [disabled]="isLocked('ldap_starttls')"
                   /><span>Use StartTLS when using ldap://</span></label
                 ><label class="toggle-row"
                   ><input
                     type="checkbox"
                     name="ldapProvision"
-                    [(ngModel)]="settings.ldap_auto_provision"
+                    [(ngModel)]="settings.ldap_auto_provision" [disabled]="isLocked('ldap_auto_provision')"
                   /><span>Provision matching directory users as reader accounts</span></label
                 >
                 @if (settings.ldap_bind_password_set) {
@@ -494,7 +504,7 @@
                     ><input
                       type="checkbox"
                       name="clearLDAP"
-                      [(ngModel)]="settings.clear_ldap_bind_password"
+                      [(ngModel)]="settings.clear_ldap_bind_password" [disabled]="isLocked('clear_ldap_bind_password')"
                     /><span>Clear saved bind password</span></label
                   >
                 }
@@ -523,7 +533,7 @@
                     name="maxSize"
                     type="number"
                     min="1"
-                    [(ngModel)]="settings.cache_max_file_size" /></label
+                    [(ngModel)]="settings.cache_max_file_size" [disabled]="isLocked('cache_max_file_size')" /></label
                 ><label class="field"
                   >Total cache size limit <span class="font-normal text-slate-400">(bytes, 0 = no limit)</span
                   ><input
@@ -531,7 +541,7 @@
                     name="maxTotalSize"
                     type="number"
                     min="0"
-                    [(ngModel)]="settings.cache_max_total_size" /><span
+                    [(ngModel)]="settings.cache_max_total_size" [disabled]="isLocked('cache_max_total_size')" /><span
                     class="mt-1 block text-[11px] font-normal leading-4 text-slate-500"
                     >When the cache grows past this, the least recently used files are removed.
                     Pinned files are never removed. For example, 107374182400 is 100 GiB.</span
@@ -540,19 +550,19 @@
                   >Reference TTL<input
                     class="control"
                     name="refTTL"
-                    [(ngModel)]="settings.cache_ref_ttl"
+                    [(ngModel)]="settings.cache_ref_ttl" [disabled]="isLocked('cache_ref_ttl')"
                     placeholder="24h" /></label
                 ><label class="field"
                   >Negative cache TTL<input
                     class="control"
                     name="negativeTTL"
-                    [(ngModel)]="settings.cache_negative_ttl"
+                    [(ngModel)]="settings.cache_negative_ttl" [disabled]="isLocked('cache_negative_ttl')"
                     placeholder="30s" /></label
                 ><label class="field"
                   >Blob garbage collection grace<input
                     class="control"
                     name="gcGrace"
-                    [(ngModel)]="settings.cache_gc_grace"
+                    [(ngModel)]="settings.cache_gc_grace" [disabled]="isLocked('cache_gc_grace')"
                     placeholder="1h"
                 /></label>
               </div>
@@ -574,20 +584,20 @@
               <div class="mt-6 space-y-5">
                 <div class="rounded-xl border border-slate-200 p-4">
                   <label class="flex items-center gap-3 text-sm font-semibold text-slate-800">
-                    <input name="metricsEnabled" type="checkbox" [(ngModel)]="settings.metrics_enabled" /> Enable Prometheus metrics
+                    <input name="metricsEnabled" type="checkbox" [(ngModel)]="settings.metrics_enabled" [disabled]="isLocked('metrics_enabled')" /> Enable Prometheus metrics
                   </label>
-                  <label class="field mt-4">Metrics path<input class="control" name="metricsPath" [(ngModel)]="settings.metrics_path" placeholder="/metrics" /></label>
-                  <label class="field mt-4">Cache inventory refresh<input class="control" name="inventoryRefresh" [(ngModel)]="settings.cache_inventory_refresh" placeholder="5m" /><span class="hint">Reads authoritative database metadata asynchronously; this interval avoids queries during Prometheus scrapes.</span></label>
+                  <label class="field mt-4">Metrics path<input class="control" name="metricsPath" [(ngModel)]="settings.metrics_path" [disabled]="isLocked('metrics_path')" placeholder="/metrics" /></label>
+                  <label class="field mt-4">Cache inventory refresh<input class="control" name="inventoryRefresh" [(ngModel)]="settings.cache_inventory_refresh" [disabled]="isLocked('cache_inventory_refresh')" placeholder="5m" /><span class="hint">Reads authoritative database metadata asynchronously; this interval avoids queries during Prometheus scrapes.</span></label>
                   <p class="hint mt-2">Scrape from a private ServiceMonitor or PodMonitor. The endpoint is excluded from HTTP request metrics.</p>
                 </div>
                 <div class="rounded-xl border border-slate-200 p-4">
                   <label class="flex items-center gap-3 text-sm font-semibold text-slate-800">
-                    <input name="tracingEnabled" type="checkbox" [(ngModel)]="settings.tracing_enabled" /> Enable distributed tracing
+                    <input name="tracingEnabled" type="checkbox" [(ngModel)]="settings.tracing_enabled" [disabled]="isLocked('tracing_enabled')" /> Enable distributed tracing
                   </label>
                   <div class="mt-4 grid gap-4 sm:grid-cols-2">
-                    <label class="field">Service name<input class="control" name="traceService" [(ngModel)]="settings.tracing_service_name" placeholder="hfproxy" /></label>
-                    <label class="field">Sampling ratio<input class="control" name="traceSample" type="number" min="0" max="1" step="0.01" [(ngModel)]="settings.tracing_sampling_ratio" /><span class="hint">Use 0.1 to sample about one in ten traces.</span></label>
-                    <label class="field sm:col-span-2">OTLP HTTP endpoint<input class="control" name="otlpEndpoint" [(ngModel)]="settings.otlp_endpoint" placeholder="http://otel-collector:4318/v1/traces" /><span class="hint">Use an internal collector endpoint. A base endpoint receives the standard /v1/traces path.</span></label>
+                    <label class="field">Service name<input class="control" name="traceService" [(ngModel)]="settings.tracing_service_name" [disabled]="isLocked('tracing_service_name')" placeholder="hfproxy" /></label>
+                    <label class="field">Sampling ratio<input class="control" name="traceSample" type="number" min="0" max="1" step="0.01" [(ngModel)]="settings.tracing_sampling_ratio" [disabled]="isLocked('tracing_sampling_ratio')" /><span class="hint">Use 0.1 to sample about one in ten traces.</span></label>
+                    <label class="field sm:col-span-2">OTLP HTTP endpoint<input class="control" name="otlpEndpoint" [(ngModel)]="settings.otlp_endpoint" [disabled]="isLocked('otlp_endpoint')" placeholder="http://otel-collector:4318/v1/traces" /><span class="hint">Use an internal collector endpoint. A base endpoint receives the standard /v1/traces path.</span></label>
                   </div>
                 </div>
               </div>

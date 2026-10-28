@@ -44,3 +44,30 @@ func TestCheckDeploymentRejectsDevCredentials(t *testing.T) {
 		}
 	}
 }
+
+func TestLockedSettingsPinToEnvironmentAndRejectChanges(t *testing.T) {
+	if err := ValidateLockedSettings([]string{"s3_bucket", "all"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateLockedSettings([]string{"s3_buckett"}); err == nil {
+		t.Fatal("a misspelled setting name must be rejected")
+	}
+	environment := Config{S3Bucket: "env-bucket", S3Region: "env-region", LockedSettings: []string{"s3_bucket"}}
+	saved := managedFromConfig(Config{S3Bucket: "console-bucket", S3Region: "console-region"})
+	saved.pinToEnvironment(environment)
+	effective := saved.apply(environment)
+	if effective.S3Bucket != "env-bucket" {
+		t.Fatalf("locked bucket = %q, want the environment value", effective.S3Bucket)
+	}
+	if effective.S3Region != "console-region" {
+		t.Fatalf("unlocked region = %q, want the console value", effective.S3Region)
+	}
+	changed := environment
+	changed.S3Bucket, changed.S3Region = "other", "other"
+	if got := ChangedLocked(environment.LockedSettings, environment, changed); len(got) != 1 || got[0] != "s3_bucket" {
+		t.Fatalf("ChangedLocked = %v, want [s3_bucket]", got)
+	}
+	if got := LockedNames([]string{"all"}); len(got) != len(ManagedSettingNames()) {
+		t.Fatalf("all expands to %d names, want %d", len(got), len(ManagedSettingNames()))
+	}
+}
