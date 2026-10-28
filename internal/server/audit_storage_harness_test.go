@@ -44,12 +44,14 @@ type auditStorageEnv struct {
 	objects  *storage.S3
 	repoPK   string
 	repoID   string
+	repoType string
 	hub      *httptest.Server
 	s3Target string
 }
 
 type auditStorageOptions struct {
 	s3Endpoint string // override (e.g. an intercepting proxy in front of the real S3)
+	repoType   string
 	mutate     func(*config.Config)
 }
 
@@ -138,15 +140,23 @@ func newAuditStorageEnv(t *testing.T, hub http.Handler, opts auditStorageOptions
 
 	repoPK := db.NewID()
 	repoID := "audit/storage-" + auditRandomHex(6)
-	if _, err := store.SQL.ExecContext(ctx, `INSERT INTO repositories(id,repo_type,repo_id,access_policy) VALUES($1,'models',$2,'public')`, repoPK, repoID); err != nil {
+	repoType := opts.repoType
+	if repoType == "" {
+		repoType = "models"
+	}
+	if _, err := store.SQL.ExecContext(ctx, `INSERT INTO repositories(id,repo_type,repo_id,access_policy) VALUES($1,$2,$3,'public')`, repoPK, repoType, repoID); err != nil {
 		t.Fatalf("insert repository: %v", err)
 	}
-	return &auditStorageEnv{server: s, store: store, objects: objects, repoPK: repoPK, repoID: repoID, hub: hubServer}
+	return &auditStorageEnv{server: s, store: store, objects: objects, repoPK: repoPK, repoID: repoID, repoType: repoType, hub: hubServer}
 }
 
 // get performs an anonymous GET through the real handler chain entry point for resolve.
 func (e *auditStorageEnv) get(ctx context.Context, file string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodGet, "/"+e.repoID+"/resolve/"+auditStorageCommit+"/"+file, nil).WithContext(ctx)
+	prefix := ""
+	if e.repoType != "models" {
+		prefix = "/" + e.repoType
+	}
+	req := httptest.NewRequest(http.MethodGet, prefix+"/"+e.repoID+"/resolve/"+auditStorageCommit+"/"+file, nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
 	e.server.resolveFile(rec, req)
 	return rec
@@ -166,6 +176,7 @@ func (e *auditStorageEnv) artifactCount(t *testing.T, file string) int {
 // CDN URL serves the bytes (with Range support).
 type auditHubFile struct {
 	name       string
+	repoType   string
 	advertised []byte // bytes whose sha256/size are advertised as the LFS oid
 	served     []byte // bytes actually served by the CDN (normally == advertised)
 	onHead     func()
@@ -175,7 +186,11 @@ type auditHubFile struct {
 func (f *auditHubFile) handler(repoID string) http.Handler {
 	mux := http.NewServeMux()
 	oid := auditSHA256(f.advertised)
-	mux.HandleFunc("/"+repoID+"/resolve/"+auditStorageCommit+"/"+f.name, func(w http.ResponseWriter, r *http.Request) {
+	prefix := ""
+	if f.repoType != "" && f.repoType != "models" {
+		prefix = "/" + f.repoType
+	}
+	mux.HandleFunc(prefix+"/"+repoID+"/resolve/"+auditStorageCommit+"/"+f.name, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodHead && f.onHead != nil {
 			f.onHead()
 		}

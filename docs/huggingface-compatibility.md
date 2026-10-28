@@ -12,7 +12,9 @@ PostgreSQL and S3 are marked as integration tests and enabled with
 | --- | --- | --- | --- | --- | --- |
 | Download a file | `/{repo_id}/resolve/{revision}/{path}` | models | GET, HEAD | Supported | PostgreSQL cache + S3 blob; branch/tag/SHA revisions |
 | Download a typed repository file | `/{type}/{repo_id}/resolve/{revision}/{path}` | models, datasets, spaces | GET, HEAD | Supported | Nested paths; `type` is limited to these three values |
+| Dataset Parquet/shard file | `/datasets/{repo_id}/resolve/{revision}/{path}` | datasets | GET, HEAD | Supported | Parquet and shard files are cached as opaque, integrity-checked blobs |
 | `snapshot_download` protocol | Repository metadata/tree followed by resolve routes | models | GET, HEAD | Supported | Supports branch, tag, and commit revisions; filtering is performed client-side |
+| Dataset `snapshot_download` protocol | Dataset metadata/tree followed by typed resolve routes | datasets | GET, HEAD | Supported | Supports snapshots, nested shard paths, and branch/tag/commit revisions |
 | Transformers `from_pretrained` protocol | Repository metadata followed by resolve routes | models | GET, HEAD | Supported | Config, tokenizer, processor, and weight files use the same read path |
 | Resume a download | Same route with `Range` | All types above | GET | Supported with conditions | Single ranges; `206`/`416`; multipart ranges rejected; persisted resume for known sizes |
 | Conditional requests | Same route with `If-None-Match`, `If-Range` | All types above | GET, HEAD | Supported | ETag preserved; `304`, `206`, and `416` include the relevant validators/range headers |
