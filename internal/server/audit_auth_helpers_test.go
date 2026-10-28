@@ -57,7 +57,7 @@ func newAuditAuthServer(t *testing.T) *Server {
 	if err := db.Migrate(ctx, store.SQL); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if _, err := store.SQL.ExecContext(ctx, `TRUNCATE users, external_identities, groups, group_members, access_tokens, repositories, repo_grants, revisions, blobs, artifacts, downloads, audit_events, sessions CASCADE`); err != nil {
+	if _, err := store.SQL.ExecContext(ctx, `TRUNCATE users, external_identities, groups, group_members, access_tokens, repositories, repo_grants, revisions, blobs, artifacts, downloads, audit_events, sessions, login_attempts CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	s := newAuditAuthServerNoDB(auditAuthConfig())

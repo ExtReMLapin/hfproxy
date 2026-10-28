@@ -106,6 +106,7 @@ func (s *Server) runRetention(ctx context.Context) {
 		args  []any
 	}{
 		{"sessions", `DELETE FROM sessions WHERE token_hash IN (SELECT token_hash FROM sessions WHERE expires_at < now() LIMIT $1)`, nil},
+		{"login_attempts", `DELETE FROM login_attempts WHERE key IN (SELECT key FROM login_attempts WHERE window_start < now()-interval '1 hour' LIMIT $1)`, nil},
 	}
 	if cfg.RetentionDownloads > 0 {
 		jobs = append(jobs, struct {

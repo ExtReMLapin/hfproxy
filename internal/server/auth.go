@@ -105,6 +105,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		err = authErr
 	}
 	if err != nil || userID == "" {
+		s.recordLoginFailure(r.Context(), username)
 		s.audit(r.Context(), "", "auth.login_failed", "user", username, map[string]any{"provider": provider})
 		data.Error = "Identifiant ou mot de passe incorrect."
 		s.renderLogin(w, data, http.StatusUnauthorized)
@@ -425,7 +426,23 @@ var dummyPasswordHash = func() string {
 	return hash
 }()
 
+// allowLoginAttempt applies the shared (PostgreSQL) login limits. Without a
+// database, or if the shared counters cannot be read, it falls back to
+// per-process counters rather than leaving the endpoint unprotected.
 func (s *Server) allowLoginAttempt(r *http.Request, username string) (int, bool) {
+	if s.db != nil && s.db.SQL != nil {
+		retryAfter, allowed, err := s.allowLoginAttemptShared(r.Context(), s.loginClientIP(r), username)
+		if err == nil {
+			return retryAfter, allowed
+		}
+		if s.logger != nil {
+			s.logger.Warn("shared login limits unavailable; using local counters", "class", fmt.Sprintf("%T", err))
+		}
+	}
+	return s.allowLoginAttemptLocal(r, username)
+}
+
+func (s *Server) allowLoginAttemptLocal(r *http.Request, username string) (int, bool) {
 	host := s.loginClientIP(r)
 	keys := []string{"ip:" + host, "user:" + strings.ToLower(strings.TrimSpace(username))}
 	now := time.Now()

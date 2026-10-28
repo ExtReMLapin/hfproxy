@@ -24,7 +24,7 @@ type migration struct {
 // rename only in a later release) so an image rollback after a migration keeps
 // working.
 var migrations = []migration{
-	{1, schemaV1}, {2, schemaV2}, {3, schemaV3}, {4, schemaV4}, {5, schemaV5}, {6, schemaV6}, {7, schemaV7},
+	{1, schemaV1}, {2, schemaV2}, {3, schemaV3}, {4, schemaV4}, {5, schemaV5}, {6, schemaV6}, {7, schemaV7}, {8, schemaV8},
 }
 
 // LatestMigration is the schema version this build expects. /readyz reports
@@ -386,4 +386,13 @@ const schemaV7 = `
 ALTER TABLE downloads ADD COLUMN IF NOT EXISTS user_id TEXT;
 ALTER TABLE downloads ADD COLUMN IF NOT EXISTS token_id TEXT;
 ALTER TABLE downloads ADD COLUMN IF NOT EXISTS client_ip TEXT;
+`
+
+const schemaV8 = `
+CREATE TABLE IF NOT EXISTS login_attempts (
+    key TEXT PRIMARY KEY,
+    window_start TIMESTAMPTZ NOT NULL,
+    attempts INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS login_attempts_window_idx ON login_attempts(window_start);
 `
