@@ -1092,7 +1092,7 @@ func (s *Server) serveArtifact(w http.ResponseWriter, r *http.Request, a artifac
 		}
 	}
 	if r.Header.Get("Range") != "" && rangeOK == false {
-		w.Header().Set("X-Cache", cacheResult)
+		setHeaders()
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", a.Size))
 		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
 		return
@@ -1136,10 +1136,14 @@ func parseByteRange(value string, size int64) (int64, int64, bool, bool) {
 	if value == "" {
 		return 0, 0, false, true
 	}
-	if !strings.HasPrefix(value, "bytes=") || strings.Contains(value, ",") {
-		// Unsupported units and multi-range requests are ignored when the
-		// server does not implement multipart/byteranges.
+	if !strings.HasPrefix(value, "bytes=") {
+		// Unsupported range units are ignored, as allowed by HTTP semantics.
 		return 0, 0, false, true
+	}
+	if strings.Contains(value, ",") {
+		// Multipart ranges are intentionally rejected because the proxy does
+		// not implement multipart/byteranges responses.
+		return 0, 0, false, false
 	}
 	parts := strings.SplitN(strings.TrimPrefix(value, "bytes="), "-", 2)
 	if len(parts) != 2 || size <= 0 {

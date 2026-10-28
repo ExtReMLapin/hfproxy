@@ -204,7 +204,7 @@ func TestParseByteRange(t *testing.T) {
 		{name: "open end", value: "bytes=5-", start: 5, end: 9, partial: true, valid: true},
 		{name: "suffix", value: "bytes=-3", start: 7, end: 9, partial: true, valid: true},
 		{name: "clamp end", value: "bytes=8-99", start: 8, end: 9, partial: true, valid: true},
-		{name: "multiple ranges ignored", value: "bytes=0-1,4-5", valid: true},
+		{name: "multiple ranges rejected", value: "bytes=0-1,4-5", valid: false},
 		{name: "start beyond object", value: "bytes=10-", valid: false},
 		{name: "reversed range", value: "bytes=8-3", valid: false},
 		{name: "zero suffix", value: "bytes=-0", valid: false},

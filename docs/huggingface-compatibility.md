@@ -14,8 +14,8 @@ PostgreSQL and S3 are marked as integration tests and enabled with
 | Download a typed repository file | `/{type}/{repo_id}/resolve/{revision}/{path}` | models, datasets, spaces | GET, HEAD | Supported | Nested paths; `type` is limited to these three values |
 | `snapshot_download` protocol | Repository metadata/tree followed by resolve routes | models | GET, HEAD | Supported | Supports branch, tag, and commit revisions; filtering is performed client-side |
 | Transformers `from_pretrained` protocol | Repository metadata followed by resolve routes | models | GET, HEAD | Supported | Config, tokenizer, processor, and weight files use the same read path |
-| Resume a download | Same route with `Range` | All types above | GET | Supported with conditions | Single ranges; multipart ranges rejected; persisted resume for known sizes |
-| Conditional requests | Same route with `If-None-Match`, `If-Range` | All types above | GET, HEAD | Supported | LFS ETag preserved; `304` and `206` as applicable |
+| Resume a download | Same route with `Range` | All types above | GET | Supported with conditions | Single ranges; `206`/`416`; multipart ranges rejected; persisted resume for known sizes |
+| Conditional requests | Same route with `If-None-Match`, `If-Range` | All types above | GET, HEAD | Supported | ETag preserved; `304`, `206`, and `416` include the relevant validators/range headers |
 | Repository metadata | `/api/{type}/{repo_id}` | models, datasets, spaces | GET, HEAD | Supported | Hub response relayed; limited to 2 MiB |
 | Resolve a revision | `/api/{type}/{repo_id}/revision/{revision}` | models, datasets, spaces | GET, HEAD | Supported | Converts mutable references into immutable commits |
 | Private or gated repository access | Same metadata and resolve routes | models | GET, HEAD | Supported | Local repository policy plus configured upstream read token |
@@ -43,6 +43,9 @@ used by `huggingface_hub` for models: `/{repo_id}/resolve/...`.
   policy and when the corresponding option is enabled.
 - Blobs are addressed by SHA-256; the LFS digest advertised by the Hub is
   verified before publication to S3.
+- Interrupted downloads retain only complete 64 MiB blocks in S3; a retry
+  resumes from the last committed block and revalidates the upstream ETag and
+  `Content-Range` before appending data.
 - Mutable references are resolved and retained for `CACHE_REF_TTL`; a valid
   commit is treated as immutable.
 - CDN redirects are restricted to allowed HF hosts and query parameters are
