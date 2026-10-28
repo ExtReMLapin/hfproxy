@@ -51,12 +51,19 @@ func TestTracingDisabledAndEnabled(t *testing.T) {
 }
 
 func TestTraceResourceUsesConfiguredServiceNameOnly(t *testing.T) {
-	exporter:=tracetest.NewInMemoryExporter()
-	wrapped:=&serviceResourceExporter{SpanExporter:exporter,resource:resource.NewSchemaless(attribute.String("service.name","hfproxy-admin-configured"))}
-	provider:=trace.NewTracerProvider(trace.WithSyncer(wrapped),trace.WithSampler(trace.AlwaysSample()))
-	_,span:=provider.Tracer("test").Start(context.Background(),"operation");span.End()
-	spans:=exporter.GetSpans();if len(spans)!=1{t.Fatalf("exported spans = %d",len(spans))}
-	attrs:=spans[0].Resource.Attributes();if len(attrs)!=1||attrs[0].Key!=attribute.Key("service.name")||attrs[0].Value.AsString()!="hfproxy-admin-configured"{t.Fatalf("span resource = %#v",attrs)}
+	exporter := tracetest.NewInMemoryExporter()
+	wrapped := &serviceResourceExporter{SpanExporter: exporter, resource: resource.NewSchemaless(attribute.String("service.name", "hfproxy-admin-configured"))}
+	provider := trace.NewTracerProvider(trace.WithSyncer(wrapped), trace.WithSampler(trace.AlwaysSample()))
+	_, span := provider.Tracer("test").Start(context.Background(), "operation")
+	span.End()
+	spans := exporter.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("exported spans = %d", len(spans))
+	}
+	attrs := spans[0].Resource.Attributes()
+	if len(attrs) != 1 || attrs[0].Key != attribute.Key("service.name") || attrs[0].Value.AsString() != "hfproxy-admin-configured" {
+		t.Fatalf("span resource = %#v", attrs)
+	}
 	_ = provider.Shutdown(context.Background())
 }
 

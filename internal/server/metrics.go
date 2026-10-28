@@ -82,7 +82,9 @@ func newMetrics() *metrics {
 	for _, result := range []string{"success", "failed", "cancelled", "partial"} {
 		m.counter("hfproxy_downloads_total", []string{"result=" + result}).Add(0)
 	}
-	for _,reason:=range []string{"http_error","client_disconnect","cancelled"}{m.counter("hfproxy_download_failures_total",[]string{"reason="+reason}).Add(0)}
+	for _, reason := range []string{"http_error", "client_disconnect", "cancelled"} {
+		m.counter("hfproxy_download_failures_total", []string{"reason=" + reason}).Add(0)
+	}
 	for _, source := range []string{"cache", "upstream"} {
 		m.counter("hfproxy_download_bytes_total", []string{"source=" + source}).Add(0)
 	}

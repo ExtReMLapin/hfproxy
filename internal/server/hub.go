@@ -133,7 +133,9 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 	requestURL := upstreamResolvePath(parsed)
 	negativeKey := repoPK + "|" + parsed.Revision + "|" + parsed.FilePath
 	if status, headers, ok := s.negativeLookup(negativeKey); ok {
-		if s.metrics != nil { s.metrics.cacheDecision(r.Context(), "bypass") }
+		if s.metrics != nil {
+			s.metrics.cacheDecision(r.Context(), "bypass")
+		}
 		s.hubStatus(w, r, status, headers)
 		return
 	}

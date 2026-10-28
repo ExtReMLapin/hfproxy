@@ -178,8 +178,11 @@ func shutdownTracing() {
 func (s *Server) traceMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg := s.currentConfig()
-		metricsPath:=cfg.MetricsPath;if metricsPath==""{metricsPath="/metrics"}
-		if !cfg.TracingEnabled || (cfg.MetricsEnabled&&r.URL.Path==metricsPath) {
+		metricsPath := cfg.MetricsPath
+		if metricsPath == "" {
+			metricsPath = "/metrics"
+		}
+		if !cfg.TracingEnabled || (cfg.MetricsEnabled && r.URL.Path == metricsPath) {
 			next.ServeHTTP(w, r)
 			return
 		}

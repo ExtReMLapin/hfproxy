@@ -50,12 +50,17 @@ func TestMetricsMiddlewareCountsNormalizedRouteAndStreams(t *testing.T) {
 }
 
 func TestCancelledDownloadClosesInFlightGauge(t *testing.T) {
-	m:=newMetrics();ctx,cancel:=context.WithCancel(context.Background())
-	h:=m.middleware("/metrics",http.HandlerFunc(func(w http.ResponseWriter,_ *http.Request){cancel();w.WriteHeader(http.StatusOK)}))
-	req:=httptest.NewRequest(http.MethodGet,"/models/org/repo/resolve/main/file.bin",nil).WithContext(ctx)
-	h.ServeHTTP(httptest.NewRecorder(),req)
-	out:=httptest.NewRecorder();m.handler().ServeHTTP(out,httptest.NewRequest(http.MethodGet,"/metrics",nil));body:=out.Body.String()
-	if !strings.Contains(body,`hfproxy_downloads_total{result="cancelled"} 1`)||!strings.Contains(body,"hfproxy_downloads_in_flight 0"){t.Fatalf("cancelled session/gauge =\n%s",body)}
+	m := newMetrics()
+	ctx, cancel := context.WithCancel(context.Background())
+	h := m.middleware("/metrics", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { cancel(); w.WriteHeader(http.StatusOK) }))
+	req := httptest.NewRequest(http.MethodGet, "/models/org/repo/resolve/main/file.bin", nil).WithContext(ctx)
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	out := httptest.NewRecorder()
+	m.handler().ServeHTTP(out, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := out.Body.String()
+	if !strings.Contains(body, `hfproxy_downloads_total{result="cancelled"} 1`) || !strings.Contains(body, "hfproxy_downloads_in_flight 0") {
+		t.Fatalf("cancelled session/gauge =\n%s", body)
+	}
 }
 
 func TestMetricsEndpointIsExcludedFromRequestMetrics(t *testing.T) {

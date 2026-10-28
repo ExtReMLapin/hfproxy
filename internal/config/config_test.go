@@ -24,10 +24,14 @@ func TestParsePrefixes(t *testing.T) {
 }
 
 func TestObservabilityValidation(t *testing.T) {
-	c:=Config{MetricsPath:"/healthz"}
-	if err:=c.Validate();err==nil||!strings.Contains(err.Error(),"METRICS_PATH"){t.Fatalf("reserved metrics path error = %v",err)}
-	c=Config{MetricsPath:"/metrics",TracingSamplingRatio:math.NaN()}
-	if err:=c.Validate();err==nil||!strings.Contains(err.Error(),"SAMPLING_RATIO"){t.Fatalf("NaN sampling ratio error = %v",err)}
+	c := Config{MetricsPath: "/healthz"}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "METRICS_PATH") {
+		t.Fatalf("reserved metrics path error = %v", err)
+	}
+	c = Config{MetricsPath: "/metrics", TracingSamplingRatio: math.NaN()}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "SAMPLING_RATIO") {
+		t.Fatalf("NaN sampling ratio error = %v", err)
+	}
 }
 
 func TestNormalizeAllowedHosts(t *testing.T) {

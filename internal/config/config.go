@@ -130,13 +130,13 @@ func Load() (Config, error) {
 }
 
 func (c Config) Validate() error {
-	if c.MetricsPath != "" && (c.MetricsPath[0] != '/' || c.MetricsPath == "/" || strings.Count(c.MetricsPath,"/") != 1 || strings.ContainsAny(c.MetricsPath, "?#")) {
+	if c.MetricsPath != "" && (c.MetricsPath[0] != '/' || c.MetricsPath == "/" || strings.Count(c.MetricsPath, "/") != 1 || strings.ContainsAny(c.MetricsPath, "?#")) {
 		return fmt.Errorf("HFPROXY_METRICS_PATH must be a non-root top-level URL path")
 	}
 	if c.MetricsPath == "/healthz" || c.MetricsPath == "/readyz" || c.MetricsPath == "/login" || c.MetricsPath == "/logout" {
 		return fmt.Errorf("HFPROXY_METRICS_PATH must not replace a health or authentication endpoint")
 	}
-	if (c.TracingEnabled && c.TracingServiceName == "") || math.IsNaN(c.TracingSamplingRatio) || math.IsInf(c.TracingSamplingRatio,0) || c.TracingSamplingRatio < 0 || c.TracingSamplingRatio > 1 {
+	if (c.TracingEnabled && c.TracingServiceName == "") || math.IsNaN(c.TracingSamplingRatio) || math.IsInf(c.TracingSamplingRatio, 0) || c.TracingSamplingRatio < 0 || c.TracingSamplingRatio > 1 {
 		return fmt.Errorf("HFPROXY_TRACING_SERVICE_NAME must be non-empty and HFPROXY_TRACING_SAMPLING_RATIO must be between 0 and 1")
 	}
 	if c.OTLPEndpoint != "" {

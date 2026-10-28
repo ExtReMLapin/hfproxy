@@ -240,7 +240,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/", s.apiV1)
 	mux.HandleFunc("/api/", s.hubAPI)
 	mux.HandleFunc("/", s.dashboardOrResolve)
-	dispatch := http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){cfg:=s.currentConfig();metricsPath:=cfg.MetricsPath;if metricsPath==""{metricsPath="/metrics"};if cfg.MetricsEnabled&&r.URL.Path==metricsPath{s.metrics.handler().ServeHTTP(w,r);return};mux.ServeHTTP(w,r)})
+	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg := s.currentConfig()
+		metricsPath := cfg.MetricsPath
+		if metricsPath == "" {
+			metricsPath = "/metrics"
+		}
+		if cfg.MetricsEnabled && r.URL.Path == metricsPath {
+			s.metrics.handler().ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 	return s.securityHeaders(s.traceMiddleware(s.requestLog(s.metrics.middlewareDynamic(func() string {
 		cfg := s.currentConfig()
 		if !cfg.MetricsEnabled {
