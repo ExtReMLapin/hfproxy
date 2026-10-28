@@ -53,10 +53,10 @@ async function flushMicrotasks(): Promise<void> {
   for (let i = 0; i < 10; i++) await Promise.resolve();
 }
 
-type SettingsPageInternals = {
+interface SettingsPageInternals {
   draft: (ManagedSettings & Record<string, unknown>) | null;
   save(): Promise<void>;
-};
+}
 
 describe('Settings page', () => {
   let http: HttpTestingController;
