@@ -172,6 +172,102 @@ func TestFetchHubPrivateTokenIsNotSentToCDN(t *testing.T) {
 	}
 }
 
+func TestAllowedRedirectHostRejectsUntrustedDestinations(t *testing.T) {
+	s := &Server{}
+	s.runtime.Store(&runtimeState{config: config.Config{
+		HFBaseURL:      "https://huggingface.co",
+		HFAllowedHosts: []string{"huggingface.co", "*.hf.co"},
+	}})
+	for _, tt := range []struct {
+		host string
+		want bool
+	}{
+		{host: "huggingface.co", want: true},
+		{host: "cdn-lfs.hf.co", want: true},
+		{host: "cdn-lfs.hf.co.", want: true},
+		{host: "hf.co.evil.example", want: false},
+		{host: "127.0.0.1", want: false},
+		{host: "169.254.169.254", want: false},
+	} {
+		t.Run(tt.host, func(t *testing.T) {
+			if got := s.allowedRedirectHost(tt.host); got != tt.want {
+				t.Fatalf("allowedRedirectHost(%q) = %v, want %v", tt.host, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFetchHubRedirectPolicyPreservesSignedURLAndRejectsUnsafeTargets(t *testing.T) {
+	unsafeLocations := []string{
+		"http://attacker.example/model",
+		"https://attacker.example/model",
+		"https://attacker.example:8443/model",
+		"https://user:pass@cdn-lfs.hf.co/model",
+		"https://127.0.0.1/model",
+	}
+	for _, location := range unsafeLocations {
+		t.Run(location, func(t *testing.T) {
+			client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": []string{location}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+			})}
+			s := &Server{}
+			s.runtime.Store(&runtimeState{config: config.Config{
+				HFBaseURL:      "https://huggingface.co",
+				HFAllowedHosts: []string{"huggingface.co", "*.hf.co"},
+				HFTimeout:      time.Second,
+			}, httpClient: client})
+			if _, _, err := s.fetchHub(context.Background(), http.MethodHead, "/org/repo/resolve/main/file.bin", nil, nil); err == nil {
+				t.Fatalf("fetchHub accepted unsafe redirect %q", location)
+			}
+		})
+	}
+
+	var seenQuery string
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host == "huggingface.co" {
+			return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": []string{"https://cdn-lfs.hf.co/object?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=60&X-Amz-Signature=abc"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+		}
+		seenQuery = r.URL.RawQuery
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("ok"))}, nil
+	})}
+	s := &Server{}
+	s.runtime.Store(&runtimeState{config: config.Config{
+		HFBaseURL:      "https://huggingface.co",
+		HFToken:        "hub-token",
+		HFAllowedHosts: []string{"huggingface.co", "*.hf.co"},
+		HFTimeout:      time.Second,
+	}, httpClient: client})
+	response, _, err := s.fetchHub(context.Background(), http.MethodGet, "/org/repo/resolve/main/file.bin", nil, nil)
+	if err != nil {
+		t.Fatalf("fetchHub signed redirect: %v", err)
+	}
+	response.Body.Close()
+	if seenQuery != "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=60&X-Amz-Signature=abc" {
+		t.Fatalf("signed redirect query = %q", seenQuery)
+	}
+}
+
+func TestFetchHubRedirectLimitIsEnforced(t *testing.T) {
+	requests := 0
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		location := fmt.Sprintf("https://cdn-%d.hf.co/object", requests)
+		return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": []string{location}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})}
+	s := &Server{}
+	s.runtime.Store(&runtimeState{config: config.Config{
+		HFBaseURL:      "https://huggingface.co",
+		HFAllowedHosts: []string{"huggingface.co", "*.hf.co"},
+		HFTimeout:      time.Second,
+	}, httpClient: client})
+	if _, _, err := s.fetchHub(context.Background(), http.MethodGet, "/org/repo/resolve/main/file.bin", nil, nil); err == nil {
+		t.Fatal("fetchHub accepted more than the configured redirect limit")
+	}
+	if requests != 6 {
+		t.Fatalf("redirect requests = %d, want 6 (five followed redirects plus the rejected sixth)", requests)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

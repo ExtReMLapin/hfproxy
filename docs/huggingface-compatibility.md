@@ -58,6 +58,12 @@ runtime.
   commit is treated as immutable.
 - CDN redirects are restricted to allowed HF hosts and query parameters are
   filtered per route.
+- Upstream signed CDN URLs are followed internally, never returned as client
+  redirects; destination host, scheme, port, userinfo, and redirect count are
+  validated on every hop.
+- CDN signature cryptography and provider-specific expiration clocks remain
+  enforced by the upstream CDN; hfproxy does not mint, extend, or expose those
+  signed URLs to clients.
 - Administration operations are separated under `/api/v1` and protected by
   session/bearer token, role, and CSRF checks as applicable.
 
