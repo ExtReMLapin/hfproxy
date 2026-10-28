@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestDescribeSourcesMarksOverridesAndHidesSecrets(t *testing.T) {
 	environment := Config{S3Bucket: "env-bucket", S3SecretKey: "topsecret", DatabaseURL: "postgres://user:pw@db/app", LogLevel: "info"}
@@ -70,4 +73,27 @@ func TestLockedSettingsPinToEnvironmentAndRejectChanges(t *testing.T) {
 	if got := LockedNames([]string{"all"}); len(got) != len(ManagedSettingNames()) {
 		t.Fatalf("all expands to %d names, want %d", len(got), len(ManagedSettingNames()))
 	}
+}
+
+func TestLDAPGroupSyncNeedsABaseAndAFilterWithDN(t *testing.T) {
+	cfg := Config{LDAPURL: "ldaps://directory.example", LDAPBaseDN: "dc=x", LDAPUserFilter: "(uid={username})", LDAPGroupSync: true, LDAPGroupBaseDN: "ou=groups,dc=x", LDAPGroupFilter: "(member={dn})"}
+	if err := validateLDAPOnly(cfg); err != nil {
+		t.Fatalf("valid group sync rejected: %v", err)
+	}
+	cfg.LDAPGroupFilter = "(member=nobody)"
+	if err := validateLDAPOnly(cfg); err == nil {
+		t.Fatal("a group filter without {dn} must be rejected")
+	}
+}
+
+// validateLDAPOnly runs Validate on a configuration that is otherwise valid.
+func validateLDAPOnly(ldap Config) error {
+	base := Config{
+		LogLevel: "info", HFBaseURL: "https://huggingface.co", HFTimeout: time.Second, CacheMaxFileSize: 1, CacheRefTTL: time.Second,
+		AuthMode: "local", SessionSecret: "0123456789abcdef0123456789abcdef", SessionIdleTTL: time.Hour, SessionAbsoluteTTL: time.Hour, MetricsPath: "/metrics",
+		TracingServiceName: "hfproxy", TracingSamplingRatio: 0.1,
+	}
+	base.LDAPURL, base.LDAPStartTLS, base.LDAPBaseDN, base.LDAPUserFilter = ldap.LDAPURL, ldap.LDAPStartTLS, ldap.LDAPBaseDN, ldap.LDAPUserFilter
+	base.LDAPGroupSync, base.LDAPGroupBaseDN, base.LDAPGroupFilter = ldap.LDAPGroupSync, ldap.LDAPGroupBaseDN, ldap.LDAPGroupFilter
+	return base.Validate()
 }
