@@ -1465,7 +1465,8 @@ func isForeignKeyViolation(err error) bool {
 }
 
 func encodeListCursor(parts ...string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(strings.Join(parts, "|")))
+	encoded, _ := json.Marshal(parts)
+	return base64.RawURLEncoding.EncodeToString(encoded)
 }
 
 func decodeListCursor(value string, count int) ([]string, bool) {
@@ -1473,7 +1474,11 @@ func decodeListCursor(value string, count int) ([]string, bool) {
 	if err != nil {
 		return nil, false
 	}
-	parts := strings.Split(string(decoded), "|")
+	var parts []string
+	if err := json.Unmarshal(decoded, &parts); err != nil {
+		// Accept cursors emitted by older versions during rolling upgrades.
+		parts = strings.Split(string(decoded), "|")
+	}
 	if len(parts) != count {
 		return nil, false
 	}
