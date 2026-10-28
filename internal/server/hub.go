@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"mime"
 	"net"
 	"net/http"
@@ -111,17 +112,24 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resolvedCommit := ""
+	staleCommit := ""
 	if validCommit(parsed.Revision) {
 		resolvedCommit = parsed.Revision
 	} else {
 		_ = s.db.SQL.QueryRowContext(r.Context(), `SELECT commit_sha FROM revisions WHERE repository_id=$1 AND requested_ref=$2 AND resolved_at>now()-($3 * interval '1 second')`, repoPK, parsed.Revision, s.currentConfig().CacheRefTTL.Seconds()).Scan(&resolvedCommit)
 		if !validCommit(resolvedCommit) {
 			resolvedCommit = ""
+			// Remember the last known commit, however old, so the cache can answer
+			// if the Hub cannot confirm the ref.
+			_ = s.db.SQL.QueryRowContext(r.Context(), `SELECT commit_sha FROM revisions WHERE repository_id=$1 AND requested_ref=$2`, repoPK, parsed.Revision).Scan(&staleCommit)
+			if !validCommit(staleCommit) {
+				staleCommit = ""
+			}
 		}
 	}
 	if resolvedCommit != "" {
 		if cached, lookupErr := s.findArtifact(r.Context(), s.db.SQL, repoPK, resolvedCommit, parsed.FilePath); lookupErr == nil {
-			_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE artifacts SET last_accessed_at=now() WHERE id=$1`, cached.ID)
+			_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE artifacts SET last_accessed_at=now() WHERE id=$1 AND last_accessed_at < now()-interval '1 minute'`, cached.ID)
 			s.recordDownload(r.Context(), repoPK, resolvedCommit, parsed.FilePath, "hit", cached.Size, "")
 			s.serveOrAcknowledgePreload(w, r, cached, "HIT")
 			return
@@ -141,10 +149,18 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 	}
 	upstream, firstHeaders, err := s.fetchHub(r.Context(), http.MethodHead, requestURL, safeResolveQuery(r.URL.Query()), nil)
 	if err != nil {
+		if s.serveStale(w, r, repoPK, staleCommit, parsed) {
+			return
+		}
 		s.hubFailure(w, r, err)
 		return
 	}
 	defer upstream.Body.Close()
+	if upstream.StatusCode == http.StatusTooManyRequests || upstream.StatusCode >= 500 {
+		if s.serveStale(w, r, repoPK, staleCommit, parsed) {
+			return
+		}
+	}
 	if upstream.StatusCode < 200 || upstream.StatusCode >= 300 {
 		if upstream.StatusCode == http.StatusNotFound || upstream.StatusCode == http.StatusGone {
 			s.negativeStore(negativeKey, upstream.StatusCode, upstream.Header)
@@ -201,7 +217,7 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cacheErr == nil {
-		_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE artifacts SET last_accessed_at=now() WHERE id=$1`, cached.ID)
+		_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE artifacts SET last_accessed_at=now() WHERE id=$1 AND last_accessed_at < now()-interval '1 minute'`, cached.ID)
 		s.recordDownload(r.Context(), repoPK, commit, parsed.FilePath, "hit", cached.Size, "")
 		s.serveOrAcknowledgePreload(w, r, cached, "HIT")
 		return
@@ -274,6 +290,15 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.finishCacheMiss(missKey)
+	releaseSlot, slotErr := s.acquireFillSlot(r.Context())
+	if slotErr != nil {
+		if errors.Is(slotErr, errFillBusy) {
+			w.Header().Set("Retry-After", "5")
+			writeProblem(w, r, http.StatusServiceUnavailable, "Cache fill capacity exhausted", "Too many files are being fetched right now; retry shortly.")
+		}
+		return
+	}
+	defer releaseSlot()
 	downloadID := db.NewID()
 	_, _ = s.db.SQL.ExecContext(r.Context(), `INSERT INTO downloads(id,repository_id,commit_sha,path,status,bytes) VALUES($1,$2,$3,$4,'downloading',0)`, downloadID, repoPK, commit, parsed.FilePath)
 	objectStore := s.currentStorage()
@@ -281,6 +306,16 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 		s.finishDownload(r.Context(), downloadID, 0, "size_limit")
 		writeProblem(w, r, 413, "File too large", "The upstream file exceeds the configured cache file limit.")
 		return
+	}
+	if sizeKnown && meta.Size > 0 {
+		releaseStaging, stagingErr := s.reserveStaging(meta.Size)
+		if stagingErr != nil {
+			s.finishDownload(r.Context(), downloadID, 0, "staging_space")
+			w.Header().Set("Retry-After", "30")
+			writeProblem(w, r, http.StatusInsufficientStorage, "Insufficient staging space", "The proxy does not have enough free disk space to stage this file right now.")
+			return
+		}
+		defer releaseStaging()
 	}
 	var tmp *os.File
 	var body *http.Response
@@ -297,7 +332,7 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 		}
 		defer unlockResume()
 		if cached, lookupErr := s.findArtifact(r.Context(), s.db.SQL, repoPK, commit, parsed.FilePath); lookupErr == nil {
-			_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE artifacts SET last_accessed_at=now() WHERE id=$1`, cached.ID)
+			_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE artifacts SET last_accessed_at=now() WHERE id=$1 AND last_accessed_at < now()-interval '1 minute'`, cached.ID)
 			s.recordDownload(r.Context(), repoPK, commit, parsed.FilePath, "hit", cached.Size, "")
 			s.serveOrAcknowledgePreload(w, r, cached, "HIT")
 			return
@@ -371,7 +406,7 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, r, 413, "File too large", "The upstream file exceeds the configured cache file limit.")
 			return
 		}
-		tmp, err = os.CreateTemp("", "hfproxy-staging-*")
+		tmp, err = s.createStagingFile("hfproxy-staging-*")
 		if err != nil {
 			s.finishDownload(r.Context(), downloadID, 0, "staging")
 			writeProblem(w, r, 500, "Cache error", "Unable to stage the upstream file.")
@@ -535,6 +570,23 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.serveOrAcknowledgePreload(w, r, cached, "MISS")
+}
+
+// serveStale answers from the cache when the Hub cannot confirm a branch or tag
+// that was resolved before. It only applies when the last known commit has the
+// file cached, and never to preload fetches, which exist to refresh the cache.
+func (s *Server) serveStale(w http.ResponseWriter, r *http.Request, repoPK, commit string, parsed resolvePath) bool {
+	if commit == "" || isPreloadFetch(r.Context()) {
+		return false
+	}
+	cached, err := s.findArtifact(r.Context(), s.db.SQL, repoPK, commit, parsed.FilePath)
+	if err != nil {
+		return false
+	}
+	s.logger.Warn("serving cached file while the Hub is unavailable", "request_id", requestID(r.Context()))
+	s.recordDownload(r.Context(), repoPK, commit, parsed.FilePath, "hit", cached.Size, "")
+	s.serveOrAcknowledgePreload(w, r, cached, "STALE")
+	return true
 }
 
 func parseResolvePath(escaped string) (resolvePath, error) {
@@ -849,6 +901,23 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 		req = req.WithContext(spanCtx)
 		attemptStarted := time.Now()
 		resp, err := s.currentHTTPClient().Do(req)
+		for attempt := 0; attempt < maxUpstreamRetries && retryableUpstream(ctx, resp, err); attempt++ {
+			wait := upstreamRetryDelay(attempt, resp)
+			if resp != nil {
+				resp.Body.Close()
+			}
+			if s.metrics != nil {
+				s.metrics.add("hfproxy_upstream_retries_total", []string{"operation=" + operation}, 1)
+			}
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+			}
+			if ctx.Err() != nil {
+				break
+			}
+			resp, err = s.currentHTTPClient().Do(req)
+		}
 		if err != nil {
 			span.SetAttributes(attribute.String("error.type", upstreamErrorReason(ctx, err)))
 			span.SetStatus(codes.Error, "upstream request failed")
@@ -922,6 +991,44 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 		target = next.String()
 	}
 	return nil, first, fmt.Errorf("upstream redirect limit exceeded")
+}
+
+const maxUpstreamRetries = 2
+
+// upstreamRetryBase is the first retry delay; it doubles for each retry.
+var upstreamRetryBase = 250 * time.Millisecond
+
+// retryableUpstream reports whether a failed attempt is worth repeating. Every
+// request fetchHub makes is a body-less GET or HEAD, so repeating is safe.
+func retryableUpstream(ctx context.Context, resp *http.Response, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if err != nil {
+		return upstreamErrorReason(ctx, err) != "cancelled"
+	}
+	switch resp.StatusCode {
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+// upstreamRetryDelay doubles the base delay per attempt, adds jitter, and
+// honors a short Retry-After from the Hub.
+func upstreamRetryDelay(attempt int, resp *http.Response) time.Duration {
+	delay := upstreamRetryBase << attempt
+	if resp != nil {
+		if seconds, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && seconds > 0 {
+			if hinted := time.Duration(seconds) * time.Second; hinted > delay {
+				delay = hinted
+			}
+		}
+	}
+	if delay > 5*time.Second {
+		delay = 5 * time.Second
+	}
+	return delay + time.Duration(rand.Int64N(int64(delay)/4+1))
 }
 
 func upstreamOperation(method, path string) string {
@@ -1198,6 +1305,11 @@ func (s *Server) setArtifactHeaders(w http.ResponseWriter, a artifact, upstream 
 			w.Header().Set(key, value)
 		}
 	}
+	if activeContentType(a.ContentType) || activeContentType(mime.TypeByExtension(path.Ext(a.Path))) {
+		// Never let a browser render a repository's HTML, SVG, XML or script
+		// inline from the proxy's origin.
+		w.Header().Set("Content-Disposition", attachmentDisposition(a.Path))
+	}
 	if w.Header().Get("X-Linked-ETag") == "" {
 		if digest := lfsSHA256(a.ETag); digest != "" {
 			w.Header().Set("X-Linked-ETag", `"`+digest+`"`)
@@ -1206,6 +1318,30 @@ func (s *Server) setArtifactHeaders(w http.ResponseWriter, a artifact, upstream 
 	if w.Header().Get("X-Linked-Size") == "" && w.Header().Get("X-Linked-ETag") != "" {
 		w.Header().Set("X-Linked-Size", strconv.FormatInt(a.Size, 10))
 	}
+}
+
+func activeContentType(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		mediaType = strings.ToLower(strings.TrimSpace(contentType))
+	}
+	switch mediaType {
+	case "text/html", "application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml",
+		"text/javascript", "application/javascript", "application/x-javascript", "text/xsl", "text/css":
+		return true
+	}
+	return false
+}
+
+func attachmentDisposition(filePath string) string {
+	name := path.Base(filePath)
+	if name == "." || name == "/" || name == "" {
+		return "attachment"
+	}
+	if disposition := mime.FormatMediaType("attachment", map[string]string{"filename": name}); disposition != "" {
+		return disposition
+	}
+	return "attachment"
 }
 
 func (s *Server) serveArtifact(w http.ResponseWriter, r *http.Request, a artifact, cacheResult string) {

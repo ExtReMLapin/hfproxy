@@ -256,7 +256,7 @@ func (s *Server) saveFullDownloadResponse(ctx context.Context, objectStore *stor
 }
 
 func (s *Server) saveDownloadChunk(ctx context.Context, objectStore *storage.S3, downloadID string, resume *downloadResume, body io.Reader, offset, length int64, stream io.Writer) error {
-	tmp, err := os.CreateTemp("", "hfproxy-part-*")
+	tmp, err := s.createStagingFile("hfproxy-part-*")
 	if err != nil {
 		return fmt.Errorf("create resumable download block: %w", err)
 	}
@@ -312,7 +312,7 @@ func (s *Server) streamCompletedResume(ctx context.Context, objectStore *storage
 }
 
 func (s *Server) assembleDownloadResume(ctx context.Context, objectStore *storage.S3, resume *downloadResume) (*os.File, string, error) {
-	tmp, err := os.CreateTemp("", "hfproxy-staging-*")
+	tmp, err := s.createStagingFile("hfproxy-staging-*")
 	if err != nil {
 		return nil, "", fmt.Errorf("create staged download: %w", err)
 	}

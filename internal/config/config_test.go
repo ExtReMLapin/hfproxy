@@ -71,3 +71,55 @@ func TestValidateEnvironmentOverridesRejectsInvalidValues(t *testing.T) {
 		t.Fatal("invalid cache size was accepted")
 	}
 }
+
+func TestCheckDeploymentRejectsUnsafeSharedSetups(t *testing.T) {
+	const devSecret = "dev-only-session-secret-change-before-deployment-32-bytes"
+	cases := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{"dev secret on loopback public URL", Config{SessionSecret: devSecret, PublicURL: "http://localhost:8080", ListenAddr: "0.0.0.0:8080"}, ""},
+		{"dev secret on public host", Config{SessionSecret: devSecret, PublicURL: "https://hf.example.com", ListenAddr: "0.0.0.0:8080"}, "development value"},
+		{"dev secret without public URL", Config{SessionSecret: devSecret, ListenAddr: "127.0.0.1:8080"}, "development value"},
+		{"missing public URL on all interfaces", Config{SessionSecret: strings.Repeat("s", 40), ListenAddr: "0.0.0.0:8080"}, "PUBLIC_URL is required"},
+		{"missing public URL on loopback", Config{SessionSecret: strings.Repeat("s", 40), ListenAddr: "127.0.0.1:8080"}, ""},
+		{"complete production setup", Config{SessionSecret: strings.Repeat("s", 40), PublicURL: "https://hf.example.com", ListenAddr: "0.0.0.0:8080"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.CheckDeployment()
+			if tc.wantErr == "" && err != nil {
+				t.Fatalf("CheckDeployment() = %v, want nil", err)
+			}
+			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("CheckDeployment() = %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalidOperationalLimits(t *testing.T) {
+	base := func() Config {
+		return Config{
+			LogLevel: "info", DatabaseURL: "postgres://x", HFBaseURL: "https://huggingface.co", HFTimeout: 1, CacheMaxFileSize: 1,
+			CacheRefTTL: 1, AuthMode: "local", SessionSecret: strings.Repeat("s", 40), SessionIdleTTL: 1, SessionAbsoluteTTL: 1,
+		}
+	}
+	if err := base().Validate(); err != nil {
+		t.Fatalf("baseline config invalid: %v", err)
+	}
+	for name, mutate := range map[string]func(*Config){
+		"negative total quota":     func(c *Config) { c.CacheMaxTotalSize = -1 },
+		"negative concurrency":     func(c *Config) { c.CacheFillConcurrency = -1 },
+		"negative download period": func(c *Config) { c.RetentionDownloads = -1 },
+		"negative audit period":    func(c *Config) { c.RetentionAudit = -1 },
+		"metrics address":          func(c *Config) { c.MetricsAddr = "no-port" },
+	} {
+		c := base()
+		mutate(&c)
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s: Validate() accepted the value", name)
+		}
+	}
+}

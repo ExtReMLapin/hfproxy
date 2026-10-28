@@ -41,6 +41,7 @@ func newMetrics() *metrics {
 		"hfproxy_upstream_requests_total": {"operation", "status_class"}, "hfproxy_upstream_errors_total": {"reason"}, "hfproxy_upstream_bytes_received_total": {"operation"}, "hfproxy_upstream_retries_total": {"operation"},
 		"hfproxy_downloads_total": {"result"}, "hfproxy_download_bytes_total": {"source"}, "hfproxy_download_failures_total": {"reason"},
 		"hfproxy_storage_operations_total": {"operation", "result"}, "hfproxy_storage_errors_total": {"operation"}, "hfproxy_storage_bytes_transferred_total": {"operation"},
+		"hfproxy_retention_deleted_total": {"table"}, "hfproxy_cache_evictions_total": {},
 	} {
 		v := prometheus.NewCounterVec(prometheus.CounterOpts{Name: name, Help: name + " measured by hfproxy."}, labels)
 		m.registry.MustRegister(v)

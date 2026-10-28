@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"math"
+	"net"
 	"net/netip"
 	"net/url"
 	"os"
@@ -59,6 +60,15 @@ type Config struct {
 	TracingSamplingRatio   float64
 	OTLPEndpoint           string
 	CacheInventoryRefresh  time.Duration
+
+	// Environment-only settings: they are not editable from the console and
+	// are never overridden by saved settings.
+	StagingDir           string
+	CacheFillConcurrency int
+	CacheMaxTotalSize    int64
+	RetentionDownloads   time.Duration
+	RetentionAudit       time.Duration
+	MetricsAddr          string
 }
 
 func Load() (Config, error) {
@@ -123,10 +133,50 @@ func Load() (Config, error) {
 	}
 	c.OTLPEndpoint = value("OTLP_ENDPOINT", "")
 	c.CacheInventoryRefresh = duration("CACHE_INVENTORY_REFRESH", 5*time.Minute)
+	c.StagingDir = value("STAGING_DIR", "")
+	c.CacheFillConcurrency = number("CACHE_FILL_CONCURRENCY", 4)
+	c.CacheMaxTotalSize = int64(number("CACHE_MAX_TOTAL_SIZE", 0))
+	c.RetentionDownloads = duration("RETENTION_DOWNLOADS", 90*24*time.Hour)
+	c.RetentionAudit = duration("RETENTION_AUDIT", 365*24*time.Hour)
+	c.MetricsAddr = value("METRICS_ADDR", "")
 	if err := c.Validate(); err != nil {
 		return Config{}, err
 	}
 	return c, nil
+}
+
+// knownDevSecrets are the placeholder session secrets shipped in examples.
+var knownDevSecrets = []string{
+	"dev-only-session-secret-change-before-deployment-32-bytes",
+}
+
+// CheckDeployment rejects settings that are acceptable on a developer machine
+// but unsafe on a shared deployment. It is applied when the server starts, not
+// by Validate, so tools such as `config validate` and tests stay usable.
+func (c Config) CheckDeployment() error {
+	loopbackPublic := false
+	if c.PublicURL != "" {
+		if public, err := url.Parse(c.PublicURL); err == nil {
+			loopbackPublic = isLoopbackHost(public.Hostname())
+		}
+	}
+	for _, dev := range knownDevSecrets {
+		if c.SessionSecret == dev && !loopbackPublic {
+			return fmt.Errorf("HFPROXY_SESSION_SECRET is the published development value; generate a unique secret")
+		}
+	}
+	if c.PublicURL == "" && !listensOnLoopback(c.ListenAddr) {
+		return fmt.Errorf("HFPROXY_PUBLIC_URL is required when listening on a non-loopback address (it enables Secure cookies and HSTS)")
+	}
+	return nil
+}
+
+func listensOnLoopback(addr string) bool {
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	return host != "" && isLoopbackHost(host)
 }
 
 func (c Config) Validate() error {
@@ -147,6 +197,14 @@ func (c Config) Validate() error {
 	}
 	if c.TracingEnabled && c.OTLPEndpoint == "" {
 		return fmt.Errorf("HFPROXY_OTLP_ENDPOINT is required when tracing is enabled")
+	}
+	if c.CacheFillConcurrency < 0 || c.CacheMaxTotalSize < 0 || c.RetentionDownloads < 0 || c.RetentionAudit < 0 {
+		return fmt.Errorf("HFPROXY_CACHE_FILL_CONCURRENCY, HFPROXY_CACHE_MAX_TOTAL_SIZE and the retention periods must not be negative")
+	}
+	if c.MetricsAddr != "" {
+		if _, _, err := net.SplitHostPort(c.MetricsAddr); err != nil {
+			return fmt.Errorf("HFPROXY_METRICS_ADDR must be host:port")
+		}
 	}
 	if c.CacheInventoryRefresh < 0 {
 		return fmt.Errorf("HFPROXY_CACHE_INVENTORY_REFRESH must not be negative")
@@ -302,7 +360,7 @@ func validateEnvironmentOverrides() error {
 			}
 		}
 	}
-	for _, key := range []string{"HF_TIMEOUT", "SESSION_IDLE_TTL", "SESSION_ABSOLUTE_TTL", "CACHE_REF_TTL", "CACHE_NEGATIVE_TTL", "CACHE_GC_GRACE"} {
+	for _, key := range []string{"HF_TIMEOUT", "SESSION_IDLE_TTL", "SESSION_ABSOLUTE_TTL", "CACHE_REF_TTL", "CACHE_NEGATIVE_TTL", "CACHE_GC_GRACE", "RETENTION_DOWNLOADS", "RETENTION_AUDIT"} {
 		name := "HFPROXY_" + key
 		if value, ok := os.LookupEnv(name); ok && value != "" {
 			if _, err := time.ParseDuration(value); err != nil {
@@ -310,9 +368,12 @@ func validateEnvironmentOverrides() error {
 			}
 		}
 	}
-	if value, ok := os.LookupEnv("HFPROXY_CACHE_MAX_FILE_SIZE"); ok && value != "" {
-		if _, err := strconv.Atoi(value); err != nil {
-			return fmt.Errorf("HFPROXY_CACHE_MAX_FILE_SIZE must be an integer")
+	for _, key := range []string{"CACHE_MAX_FILE_SIZE", "CACHE_MAX_TOTAL_SIZE", "CACHE_FILL_CONCURRENCY"} {
+		name := "HFPROXY_" + key
+		if value, ok := os.LookupEnv(name); ok && value != "" {
+			if _, err := strconv.Atoi(value); err != nil {
+				return fmt.Errorf("%s must be an integer", name)
+			}
 		}
 	}
 	return nil

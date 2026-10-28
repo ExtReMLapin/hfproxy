@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -57,6 +58,8 @@ type Server struct {
 	misses               map[string]*cacheMiss
 	metrics              *metrics
 	inventoryRefreshWake chan struct{}
+	fillSlots            chan struct{}
+	stagingReserved      atomic.Int64
 }
 
 type loginBucket struct {
@@ -104,6 +107,17 @@ func New(ctx context.Context, cfg config.Config, store *db.Store, objectStore *s
 	if objectStore != nil {
 		objectStore.SetObserver(s.metrics)
 	}
+	slots := cfg.CacheFillConcurrency
+	if slots <= 0 {
+		slots = defaultFillConcurrency
+	}
+	s.fillSlots = make(chan struct{}, slots)
+	if cfg.StagingDir != "" {
+		if err := os.MkdirAll(cfg.StagingDir, 0o700); err != nil {
+			return nil, fmt.Errorf("prepare staging directory: %w", err)
+		}
+	}
+	s.startMaintenance(ctx)
 	s.startDownloadResumeCleanup(ctx)
 	s.startOrphanedBlobGC(ctx)
 	s.startCacheInventoryMetrics(ctx)
@@ -246,7 +260,7 @@ func (s *Server) Handler() http.Handler {
 		if metricsPath == "" {
 			metricsPath = "/metrics"
 		}
-		if cfg.MetricsEnabled && r.URL.Path == metricsPath {
+		if cfg.MetricsEnabled && metricsOnMainListener(cfg.MetricsAddr) && r.URL.Path == metricsPath {
 			s.metrics.handler().ServeHTTP(w, r)
 			return
 		}
@@ -271,11 +285,21 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() { errCh <- server.ListenAndServe() }()
 	s.logger.Info("http server started", "address", s.currentConfig().ListenAddr)
+	var metricsServer *http.Server
+	if addr := s.currentConfig().MetricsAddr; addr != "" {
+		metricsServer = &http.Server{Addr: addr, Handler: s.metricsHandler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second}
+		go func() { errCh <- metricsServer.ListenAndServe() }()
+		s.logger.Info("metrics server started", "address", addr)
+	}
 	select {
 	case err := <-errCh:
+		if metricsServer != nil {
+			_ = metricsServer.Close()
+		}
+		_ = server.Close()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
@@ -283,6 +307,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		if metricsServer != nil {
+			_ = metricsServer.Shutdown(shutdownCtx)
+		}
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			_ = server.Close()
 			return err
@@ -324,7 +351,7 @@ func (s *Server) dashboardOrResolve(w http.ResponseWriter, r *http.Request) {
 	if metricsPath == "" {
 		metricsPath = "/metrics"
 	}
-	if cfg.MetricsEnabled && r.URL.Path == metricsPath {
+	if cfg.MetricsEnabled && metricsOnMainListener(cfg.MetricsAddr) && r.URL.Path == metricsPath {
 		s.metrics.handler().ServeHTTP(w, r)
 		return
 	}
@@ -507,6 +534,9 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
+		if state := s.runtime.Load(); state != nil && strings.HasPrefix(state.config.PublicURL, "https://") {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'")
 		next.ServeHTTP(w, r)
 	})
@@ -582,7 +612,7 @@ func (s *Server) authenticate(r *http.Request) (*Principal, error) {
 		}
 		p.Authenticated = true
 		p.Scopes = scopes
-		_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET last_used_at=now() WHERE id=$1`, p.TokenID)
+		_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET last_used_at=now() WHERE id=$1 AND (last_used_at IS NULL OR last_used_at < now()-interval '1 minute')`, p.TokenID)
 		return &p, nil
 	}
 	cookie, err := r.Cookie("hfproxy_session")
@@ -603,7 +633,7 @@ func (s *Server) authenticate(r *http.Request) (*Principal, error) {
 		return nil, errUnauthenticated
 	}
 	p.Authenticated = true
-	_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE sessions SET last_seen_at=now(), expires_at=LEAST(created_at + $2::interval, now() + $1::interval) WHERE token_hash=$3`,
+	_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE sessions SET last_seen_at=now(), expires_at=LEAST(created_at + $2::interval, now() + $1::interval) WHERE token_hash=$3 AND last_seen_at < now()-interval '1 minute'`,
 		s.currentConfig().SessionIdleTTL.String(), s.currentConfig().SessionAbsoluteTTL.String(), digest)
 	return &p, nil
 }
@@ -619,6 +649,13 @@ func (s *Server) currentPrincipal(r *http.Request) *Principal {
 }
 
 func (s *Server) createSession(ctx context.Context, userID string, w http.ResponseWriter, r *http.Request) (string, error) {
+	// A login always starts a fresh session: drop the one the browser still
+	// holds so a pre-login session identifier can never survive authentication.
+	if r != nil {
+		if old, err := r.Cookie("hfproxy_session"); err == nil && old.Value != "" {
+			_, _ = s.db.SQL.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash=$1`, HashToken(old.Value, s.currentConfig().SessionSecret))
+		}
+	}
 	token := randomSecret(32)
 	csrf := randomSecret(32)
 	tokenHash := HashToken(token, s.currentConfig().SessionSecret)
@@ -678,6 +715,10 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (*Principa
 		writeProblem(w, r, http.StatusForbidden, "Forbidden", "Administrator role required.")
 		return nil, false
 	}
+	if !tokenAllowsAdministration(p) {
+		writeProblem(w, r, http.StatusForbidden, "Forbidden", "This token is read-only and cannot use the administration API.")
+		return nil, false
+	}
 	return p, true
 }
 
@@ -692,7 +733,18 @@ func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request) (*Princ
 		writeProblem(w, r, http.StatusForbidden, "Forbidden", "Operator or administrator role required.")
 		return nil, false
 	}
+	if !tokenAllowsAdministration(p) {
+		writeProblem(w, r, http.StatusForbidden, "Forbidden", "This token is read-only and cannot use the administration API.")
+		return nil, false
+	}
 	return p, true
+}
+
+// tokenAllowsAdministration keeps read-scoped tokens out of the administration
+// API even when their owner is an administrator. Browser sessions carry no
+// token and are governed by role alone.
+func tokenAllowsAdministration(p *Principal) bool {
+	return p.TokenID == "" || hasScope(p, "write") || hasScope(p, "admin")
 }
 
 var errUnauthenticated = errors.New("unauthenticated")

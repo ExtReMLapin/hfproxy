@@ -130,7 +130,7 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
-	if version < 5 {
+	if version < db.LatestMigration {
 		return fmt.Errorf("database is not migrated; run hfproxy migrate up")
 	}
 	cfg, err = config.LoadPersisted(ctx, store.SQL, cfg)
@@ -138,6 +138,9 @@ func serve(args []string) error {
 		return err
 	}
 	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if err := cfg.CheckDeployment(); err != nil {
 		return err
 	}
 	objects, err := storage.New(ctx, cfg.S3Endpoint, cfg.S3Region, cfg.S3Bucket, cfg.S3Prefix, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3ForcePathStyle, cfg.S3ServerSideEncryption)
