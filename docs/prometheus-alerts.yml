@@ -23,6 +23,11 @@ groups:
         labels: {severity: warning}
         annotations:
           summary: Hugging Face requests are failing; cached files are served, new files are not
+      - alert: HfproxyUpstreamCircuitOpen
+        expr: sum by (host) (increase(hfproxy_upstream_breaker_opened_total[15m])) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: The circuit for a Hugging Face host opened; requests to it fail fast or are answered from the cache
       - alert: HfproxyUpstreamRetries
         expr: sum(rate(hfproxy_upstream_retries_total[10m])) > 0.1
         for: 15m

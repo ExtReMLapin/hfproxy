@@ -73,6 +73,17 @@ type Config struct {
 	RetentionDownloads   time.Duration
 	RetentionAudit       time.Duration
 	MetricsAddr          string
+
+	// UpstreamBreakerThreshold is how many consecutive failures of one
+	// upstream host open its circuit (0 disables it); UpstreamBreakerCooldown
+	// is how long it stays open before a single probe is allowed.
+	UpstreamBreakerThreshold int
+	UpstreamBreakerCooldown  time.Duration
+	// APICacheMaxBytes bounds the in-memory cache of Hub metadata responses
+	// (0 disables it); APICacheMaxStale is how long an expired entry may still
+	// be served when the Hub is failing.
+	APICacheMaxBytes int64
+	APICacheMaxStale time.Duration
 }
 
 func Load() (Config, error) {
@@ -144,6 +155,10 @@ func Load() (Config, error) {
 	c.RetentionDownloads = duration("RETENTION_DOWNLOADS", 90*24*time.Hour)
 	c.RetentionAudit = duration("RETENTION_AUDIT", 365*24*time.Hour)
 	c.MetricsAddr = value("METRICS_ADDR", "")
+	c.UpstreamBreakerThreshold = number("UPSTREAM_BREAKER_THRESHOLD", 5)
+	c.UpstreamBreakerCooldown = duration("UPSTREAM_BREAKER_COOLDOWN", 30*time.Second)
+	c.APICacheMaxBytes = int64(number("API_CACHE_MAX_BYTES", 32<<20))
+	c.APICacheMaxStale = duration("API_CACHE_MAX_STALE", 24*time.Hour)
 	if err := c.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -212,6 +227,12 @@ func (c Config) Validate() error {
 	}
 	if c.CacheFillConcurrency < 0 || c.CacheMaxTotalSize < 0 || c.RetentionDownloads < 0 || c.RetentionAudit < 0 {
 		return fmt.Errorf("HFPROXY_CACHE_FILL_CONCURRENCY, HFPROXY_CACHE_MAX_TOTAL_SIZE and the retention periods must not be negative")
+	}
+	if c.UpstreamBreakerThreshold < 0 || c.UpstreamBreakerCooldown < 0 || c.APICacheMaxBytes < 0 || c.APICacheMaxStale < 0 {
+		return fmt.Errorf("the upstream breaker and API cache settings must not be negative")
+	}
+	if c.UpstreamBreakerThreshold > 0 && c.UpstreamBreakerCooldown == 0 {
+		return fmt.Errorf("HFPROXY_UPSTREAM_BREAKER_COOLDOWN must be positive when the breaker is enabled")
 	}
 	if c.MetricsAddr != "" {
 		if _, _, err := net.SplitHostPort(c.MetricsAddr); err != nil {
@@ -380,7 +401,7 @@ func validateEnvironmentOverrides() error {
 			}
 		}
 	}
-	for _, key := range []string{"HF_TIMEOUT", "SESSION_IDLE_TTL", "SESSION_ABSOLUTE_TTL", "CACHE_REF_TTL", "CACHE_NEGATIVE_TTL", "CACHE_GC_GRACE", "RETENTION_DOWNLOADS", "RETENTION_AUDIT"} {
+	for _, key := range []string{"HF_TIMEOUT", "SESSION_IDLE_TTL", "SESSION_ABSOLUTE_TTL", "CACHE_REF_TTL", "CACHE_NEGATIVE_TTL", "CACHE_GC_GRACE", "RETENTION_DOWNLOADS", "RETENTION_AUDIT", "UPSTREAM_BREAKER_COOLDOWN", "API_CACHE_MAX_STALE"} {
 		name := "HFPROXY_" + key
 		if value, ok := os.LookupEnv(name); ok && value != "" {
 			if _, err := time.ParseDuration(value); err != nil {
@@ -388,7 +409,7 @@ func validateEnvironmentOverrides() error {
 			}
 		}
 	}
-	for _, key := range []string{"CACHE_MAX_FILE_SIZE", "CACHE_MAX_TOTAL_SIZE", "CACHE_FILL_CONCURRENCY"} {
+	for _, key := range []string{"CACHE_MAX_FILE_SIZE", "CACHE_MAX_TOTAL_SIZE", "CACHE_FILL_CONCURRENCY", "UPSTREAM_BREAKER_THRESHOLD", "API_CACHE_MAX_BYTES"} {
 		name := "HFPROXY_" + key
 		if value, ok := os.LookupEnv(name); ok && value != "" {
 			if _, err := strconv.Atoi(value); err != nil {

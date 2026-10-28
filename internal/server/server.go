@@ -62,6 +62,12 @@ type Server struct {
 	inventoryRefreshWake chan struct{}
 	fillSlots            chan struct{}
 	stagingReserved      atomic.Int64
+	breakerMu            sync.Mutex
+	breakers             map[string]*circuitBreaker
+	apiCacheOnce         sync.Once
+	apiCache             *apiCache
+	apiFlightMu          sync.Mutex
+	apiFlights           map[string]*apiFlight
 }
 
 type loginBucket struct {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 func (s *Server) hubAPI(w http.ResponseWriter, r *http.Request) {
@@ -38,6 +39,12 @@ func (s *Server) hubAPI(w http.ResponseWriter, r *http.Request) {
 		s.accessProblem(w, r, err)
 		return
 	}
+	if r.Method == http.MethodGet {
+		if cache := s.metadataCache(); cache != nil {
+			s.serveMetadataCached(w, r, cache, upstreamPath, query)
+			return
+		}
+	}
 	resp, _, err := s.fetchHub(r.Context(), r.Method, upstreamPath, query, nil)
 	if err != nil {
 		s.hubFailure(w, r, err)
@@ -58,6 +65,111 @@ func (s *Server) hubAPI(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, http.StatusBadGateway, "Upstream response too large", "Hub metadata responses are limited to 2 MiB.")
 		return
 	}
+	w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(body)
+}
+
+const maxMetadataBody = 2 << 20
+
+// serveMetadataCached answers a Hub metadata GET from memory when it can.
+//
+// The caller has already checked that the client may read the repository, so
+// the cache never widens access. A fresh entry is served as is; an expired one
+// is revalidated with its ETag; and when the Hub is failing, an expired entry
+// younger than APICacheMaxStale is served marked X-Cache: STALE rather than
+// returning an error. Concurrent requests for the same key share one Hub fetch.
+func (s *Server) serveMetadataCached(w http.ResponseWriter, r *http.Request, cache *apiCache, upstreamPath string, query url.Values) {
+	cfg := s.currentConfig()
+	// The Hub URL is part of the key so changing it in the console cannot serve
+	// answers that came from the previous one.
+	key := cfg.HFBaseURL + "|" + upstreamPath + "?" + query.Encode()
+	count := func(result string) {
+		if s.metrics != nil {
+			s.metrics.add("hfproxy_api_cache_requests_total", []string{"result=" + result}, 1)
+		}
+	}
+	serve := func(entry apiCacheEntry, label string) {
+		count(strings.ToLower(label))
+		copyHubHeaders(w, entry.header, r, cfg.PublicURL)
+		w.Header().Set("X-Cache", label)
+		w.Header().Set("Content-Length", fmt.Sprint(len(entry.body)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(entry.body)
+	}
+	fresh := func(entry apiCacheEntry) bool { return time.Since(entry.storedAt) <= cfg.CacheRefTTL }
+
+	entry, cached := cache.get(key)
+	if cached && fresh(entry) {
+		serve(entry, "HIT")
+		return
+	}
+	usable := cached && cfg.APICacheMaxStale > 0 && time.Since(entry.storedAt) <= cfg.APICacheMaxStale
+
+	flight, leader := s.joinAPIFlight(key)
+	if leader {
+		defer s.finishAPIFlight(key, flight)
+	} else {
+		select {
+		case <-flight.done:
+		case <-r.Context().Done():
+			return
+		}
+		if shared, ok := cache.get(key); ok && fresh(shared) {
+			serve(shared, "HIT")
+			return
+		}
+	}
+
+	var conditional http.Header
+	if usable && entry.etag != "" {
+		conditional = http.Header{"If-None-Match": {entry.etag}}
+	}
+	resp, _, err := s.fetchHub(r.Context(), http.MethodGet, upstreamPath, query, conditional)
+	if err != nil {
+		if usable {
+			serve(entry, "STALE")
+			return
+		}
+		count("error")
+		s.hubFailure(w, r, err)
+		return
+	}
+	defer resp.Body.Close()
+	if usable && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500) {
+		serve(entry, "STALE")
+		return
+	}
+	if resp.StatusCode == http.StatusNotModified && cached {
+		cache.refresh(key, time.Now())
+		serve(entry, "REVALIDATED")
+		return
+	}
+	copyHubHeaders(w, resp.Header, r, cfg.PublicURL)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+			cache.delete(key) // the repository or revision is gone, or access was withdrawn
+		}
+		count("bypass")
+		s.hubStatus(w, r, resp.StatusCode, resp.Header)
+		return
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxMetadataBody+1))
+	if readErr != nil || len(body) > maxMetadataBody {
+		writeProblem(w, r, http.StatusBadGateway, "Upstream response too large", "Hub metadata responses are limited to 2 MiB.")
+		return
+	}
+	if resp.StatusCode == http.StatusOK {
+		header := resp.Header.Clone()
+		for _, name := range []string{"X-Request-Id", "Set-Cookie", "Content-Length"} {
+			header.Del(name)
+		}
+		fresh := apiCacheEntry{key: key, header: header, body: body, etag: resp.Header.Get("ETag"), storedAt: time.Now()}
+		cache.put(fresh)
+		serve(fresh, "MISS")
+		return
+	}
+	count("bypass")
 	w.Header().Set("Content-Length", fmt.Sprint(len(body)))
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(body)

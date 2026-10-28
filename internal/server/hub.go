@@ -897,6 +897,15 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 			req.Header.Set("Authorization", "Bearer "+s.currentConfig().HFToken)
 		}
 		operation := upstreamOperation(method, requestPath)
+		cfg := s.currentConfig()
+		upstreamHost := strings.ToLower(u.Hostname())
+		breaker := s.upstreamBreaker(upstreamHost)
+		if !breaker.Allow(time.Now(), cfg.UpstreamBreakerThreshold) {
+			if s.metrics != nil {
+				s.metrics.add("hfproxy_upstream_breaker_rejected_total", []string{"host=" + upstreamHost}, 1)
+			}
+			return nil, nil, errUpstreamCircuitOpen
+		}
 		spanCtx, span := otel.Tracer("github.com/nicolas/hfproxy/internal/server").Start(ctx, "upstream.request", trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attribute.String("hfproxy.operation", operation)))
 		otel.GetTextMapPropagator().Inject(spanCtx, propagation.HeaderCarrier(req.Header))
 		req = req.WithContext(spanCtx)
@@ -918,6 +927,19 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 				break
 			}
 			resp, err = s.currentHTTPClient().Do(req)
+		}
+		switch {
+		case ctx.Err() != nil:
+			breaker.Abort()
+		case retryableUpstream(ctx, resp, err):
+			if breaker.Failure(time.Now(), cfg.UpstreamBreakerThreshold, cfg.UpstreamBreakerCooldown) {
+				s.logger.Warn("upstream circuit opened", "host", upstreamHost, "cooldown", cfg.UpstreamBreakerCooldown.String())
+				if s.metrics != nil {
+					s.metrics.add("hfproxy_upstream_breaker_opened_total", []string{"host=" + upstreamHost}, 1)
+				}
+			}
+		default:
+			breaker.Success()
 		}
 		if err != nil {
 			span.SetAttributes(attribute.String("error.type", upstreamErrorReason(ctx, err)))
@@ -966,7 +988,7 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 		if first == nil {
 			first = resp.Header.Clone()
 		}
-		if resp.StatusCode < 300 || resp.StatusCode > 399 {
+		if !isRedirectStatus(resp.StatusCode) {
 			resp.Body = newIdleBody(resp.Body, s.currentConfig().HFTimeout)
 			return resp, first, nil
 		}
@@ -992,6 +1014,16 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 		target = next.String()
 	}
 	return nil, first, fmt.Errorf("upstream redirect limit exceeded")
+}
+
+// isRedirectStatus reports whether a response asks the client to go elsewhere.
+// The other 3xx statuses, notably 304 Not Modified, are final answers.
+func isRedirectStatus(status int) bool {
+	switch status {
+	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		return true
+	}
+	return false
 }
 
 const maxUpstreamRetries = 2

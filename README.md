@@ -111,6 +111,7 @@ Environment variables use the `HFPROXY_` prefix. Common settings for local Compo
 | Cache limits | CACHE_MAX_FILE_SIZE, CACHE_REF_TTL, CACHE_NEGATIVE_TTL, CACHE_GC_GRACE |
 | Capacity and retention | CACHE_MAX_TOTAL_SIZE, CACHE_FILL_CONCURRENCY, STAGING_DIR, RETENTION_DOWNLOADS, RETENTION_AUDIT |
 | Metrics | METRICS_ENABLED, METRICS_PATH, METRICS_ADDR |
+| Hub resilience | UPSTREAM_BREAKER_THRESHOLD, UPSTREAM_BREAKER_COOLDOWN, API_CACHE_MAX_BYTES, API_CACHE_MAX_STALE |
 
 PostgreSQL is required. The S3 bucket must exist, remain private, and allow the service identity to read, write, and delete objects. Standard AWS credentials (IAM role, AWS environment variables, or a mounted profile) work when the S3 access key variables are unset. Use `S3_FORCE_PATH_STYLE=true` with the local Garage endpoint. Garage does not implement S3-managed AES256 encryption, so the Compose setup disables the `S3_SERVER_SIDE_ENCRYPTION` request header; use encrypted disks for at-rest encryption. Other S3 services can keep that option enabled if they support it.
 
@@ -125,6 +126,11 @@ Capacity and retention settings are read from the environment only:
 - `METRICS_ADDR` (for example `127.0.0.1:9090`): serve metrics on a dedicated listener instead of the public port.
 
 If the Hub is unreachable or answers 429/5xx and a branch or tag was resolved before, hfproxy serves the cached file for the last known commit with `X-Cache: STALE`. Transient Hub errors are retried twice with backoff.
+
+Two more protections keep an unhealthy Hub from dragging the proxy down. Both read the environment only:
+
+- **Circuit breaker.** After `UPSTREAM_BREAKER_THRESHOLD` consecutive failures (default `5`; network errors, timeouts, 429, 502, 503 and 504, never 404 or other client errors) the circuit for that Hub host opens for `UPSTREAM_BREAKER_COOLDOWN` (default `30s`). Requests then fail at once, or are answered from the cache, instead of each waiting through timeouts and retries. After the cooldown one request probes the host and the circuit closes if it succeeds. `0` disables it.
+- **Metadata cache.** Responses to `/api/{models,datasets,spaces}/...` (repository info, revisions, trees, commits) are kept in memory, up to `API_CACHE_MAX_BYTES` (default 32 MiB, `0` disables). An entry is served as is for `CACHE_REF_TTL`, then revalidated with its ETag; if the Hub is failing, an entry up to `API_CACHE_MAX_STALE` old (default `24h`) is served with `X-Cache: STALE`. Simultaneous identical requests share one Hub request. Access to the repository is always checked first, and `HEAD` requests are not cached.
 
 See [docs/production.md](docs/production.md) before exposing hfproxy to other users.
 

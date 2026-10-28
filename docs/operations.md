@@ -41,7 +41,8 @@ Tokens created before this key separation existed (hashed straight from the secr
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
 | `/readyz` 503 | PostgreSQL or the bucket is unreachable, or the schema is behind | Check the database, credentials and bucket; run `hfproxy migrate status` |
-| Clients get 502 with `Upstream unavailable` | Hub outage or rate limiting | Cached files still serve; check `hfproxy_upstream_errors_total`; wait or use `HFPROXY_HF_PROXY_URL` |
+| Clients get 502 with `Upstream unavailable` | Hub outage or rate limiting | Cached files and cached metadata (`X-Cache: STALE`) still serve; check `hfproxy_upstream_errors_total` and `hfproxy_upstream_breaker_opened_total`; wait or use `HFPROXY_HF_PROXY_URL` |
+| Log line "upstream circuit opened" | Five consecutive Hub failures | Expected during an outage: requests fail fast for the cooldown, then one probe retries. If it repeats while the Hub is healthy, check your egress path and proxy |
 | Clients get 503 `Cache fill capacity exhausted` | More simultaneous fills than `HFPROXY_CACHE_FILL_CONCURRENCY` | Retry; raise the limit if disk and bandwidth allow |
 | Clients get 507 | Staging volume too small for the file | Enlarge `HFPROXY_STAGING_DIR` or lower concurrency |
 | Storage errors in logs, `hfproxy_storage_errors_total` rising | Object storage outage or bad credentials | Restore storage access; cached reads fail until then |
