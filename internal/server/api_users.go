@@ -1,13 +1,10 @@
 package server
 
 import (
-	"database/sql"
 	"errors"
 	"net/http"
 	"net/mail"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/nicolas/hfproxy/internal/db"
 )
@@ -52,9 +49,8 @@ func (s *Server) apiUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		id := db.NewID()
-		_, err = s.db.SQL.ExecContext(r.Context(), `INSERT INTO users(id,username,email,display_name,password_hash,role) VALUES($1,$2,$3,$4,$5,$6)`, id, input.Username, input.Email, input.DisplayName, hash, input.Role)
-		if err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "unique") || strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+		if err := s.db.CreateUser(r.Context(), id, input.Username, input.Email, input.DisplayName, hash, input.Role); err != nil {
+			if errors.Is(err, db.ErrExists) {
 				writeProblem(w, r, http.StatusConflict, "Username already exists", "Choose a different username.")
 				return
 			}
@@ -70,30 +66,23 @@ func (s *Server) apiUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := pageLimit(r.URL.Query().Get("limit"))
-	args := []any{limit + 1}
-	where := ""
+	var after *[2]string
 	if cursor := r.URL.Query().Get("cursor"); cursor != "" {
 		parts, ok := decodeListCursor(cursor, 2)
 		if !ok {
 			writeProblem(w, r, http.StatusBadRequest, "Invalid cursor", "The user cursor is invalid.")
 			return
 		}
-		where = "WHERE (username,id) > ($1,$2)"
-		args = []any{parts[0], parts[1], limit + 1}
+		after = &[2]string{parts[0], parts[1]}
 	}
-	rows, err := s.db.SQL.QueryContext(r.Context(), `SELECT id,username,email,display_name,role,status,created_at FROM users `+where+` ORDER BY username,id LIMIT $`+strconv.Itoa(len(args)), args...)
+	users, err := s.db.ListUsers(r.Context(), after, limit+1)
 	if err != nil {
 		writeProblem(w, r, 500, "Database error", "Unable to list users.")
 		return
 	}
-	defer rows.Close()
-	items := []map[string]any{}
-	for rows.Next() {
-		var id, user, email, name, role, status string
-		var created time.Time
-		if rows.Scan(&id, &user, &email, &name, &role, &status, &created) == nil {
-			items = append(items, map[string]any{"id": id, "username": user, "email": email, "display_name": name, "role": role, "status": status, "created_at": created})
-		}
+	items := make([]map[string]any, 0, len(users))
+	for _, u := range users {
+		items = append(items, map[string]any{"id": u.ID, "username": u.Username, "email": u.Email, "display_name": u.DisplayName, "role": u.Role, "status": u.Status, "created_at": u.CreatedAt})
 	}
 	next := ""
 	if len(items) > limit {
@@ -145,63 +134,22 @@ func (s *Server) apiUserPatch(w http.ResponseWriter, r *http.Request, id string)
 		writeProblem(w, r, 400, "Empty update", "Set role or status.")
 		return
 	}
-	tx, err := s.db.SQL.BeginTx(r.Context(), nil)
-	if err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to update user.")
-		return
-	}
-	defer tx.Rollback()
-	// Serialize changes that could remove an active administrator before
-	// locking the target row. Locking only that row lets concurrent requests
-	// each observe the other administrator and both demote successfully.
-	if _, err := tx.ExecContext(r.Context(), `SELECT pg_advisory_xact_lock(7242)`); err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to validate administrator safety.")
-		return
-	}
-	var currentRole, currentStatus string
-	if err := tx.QueryRowContext(r.Context(), `SELECT role,status FROM users WHERE id=$1 FOR UPDATE`, id).Scan(&currentRole, &currentStatus); errors.Is(err, sql.ErrNoRows) {
-		writeProblem(w, r, 404, "User not found", "The user does not exist.")
-		return
-	} else if err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to update user.")
-		return
-	}
-	if currentRole == "admin" && currentStatus == "active" && (input.Role == "reader" || input.Role == "operator" || input.Status == "disabled") {
-		var activeAdmins int
-		if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM users WHERE role='admin' AND status='active'`).Scan(&activeAdmins); err != nil {
-			writeProblem(w, r, 500, "Database error", "Unable to validate administrator safety.")
-			return
-		}
-		if activeAdmins <= 1 {
+	if err := s.db.UpdateUser(r.Context(), id, input.Role, input.Status); err != nil {
+		var stage *db.StageError
+		switch {
+		case errors.Is(err, db.ErrNotFound):
+			writeProblem(w, r, 404, "User not found", "The user does not exist.")
+		case errors.Is(err, db.ErrLastAdmin):
 			writeProblem(w, r, http.StatusConflict, "Last administrator", "At least one active administrator must remain.")
-			return
-		}
-	}
-	result, err := tx.ExecContext(r.Context(), `UPDATE users SET role=COALESCE(NULLIF($2,''),role),status=COALESCE(NULLIF($3,''),status),updated_at=now() WHERE id=$1`, id, input.Role, input.Status)
-	if err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to update user.")
-		return
-	}
-	n, _ := result.RowsAffected()
-	if n == 0 {
-		writeProblem(w, r, 404, "User not found", "The user does not exist.")
-		return
-	}
-	if input.Status == "disabled" {
-		// Disabling must cut off existing access; if that cannot be done the whole
-		// change is rolled back rather than leaving a "disabled" user with live
-		// sessions and tokens.
-		if _, err := tx.ExecContext(r.Context(), `DELETE FROM sessions WHERE user_id=$1`, id); err != nil {
+		case errors.As(err, &stage) && (stage.Stage == "lock" || stage.Stage == "count_admins"):
+			writeProblem(w, r, 500, "Database error", "Unable to validate administrator safety.")
+		case errors.As(err, &stage) && stage.Stage == "end_sessions":
 			writeProblem(w, r, 500, "Database error", "Unable to end the user's sessions.")
-			return
-		}
-		if _, err := tx.ExecContext(r.Context(), `UPDATE access_tokens SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, id); err != nil {
+		case errors.As(err, &stage) && stage.Stage == "revoke_tokens":
 			writeProblem(w, r, 500, "Database error", "Unable to revoke the user's tokens.")
-			return
+		default:
+			writeProblem(w, r, 500, "Database error", "Unable to update user.")
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to update user.")
 		return
 	}
 	s.authLookups().purge()

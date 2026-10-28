@@ -1,7 +1,7 @@
 package server
 
 import (
-	"database/sql"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -42,12 +42,12 @@ func (s *Server) apiPersonalTokens(w http.ResponseWriter, r *http.Request, suffi
 			methodNotAllowedWith(w, "DELETE")
 			return
 		}
-		result, err := s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET revoked_at=now() WHERE id=$1 AND user_id=$2 AND revoked_at IS NULL`, id, p.ID)
+		revoked, err := s.db.RevokeToken(r.Context(), p.ID, id)
 		if err != nil {
 			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to revoke this token.")
 			return
 		}
-		if n, err := result.RowsAffected(); err != nil || n == 0 {
+		if !revoked {
 			writeProblem(w, r, http.StatusNotFound, "Not found", "This access token does not exist.")
 			return
 		}
@@ -58,24 +58,14 @@ func (s *Server) apiPersonalTokens(w http.ResponseWriter, r *http.Request, suffi
 	}
 	switch r.Method {
 	case http.MethodGet:
-		rows, err := s.db.SQL.QueryContext(r.Context(), `SELECT id,name,prefix,scopes,created_at,expires_at,last_used_at FROM access_tokens WHERE user_id=$1 AND revoked_at IS NULL ORDER BY created_at DESC,id DESC`, p.ID)
+		tokens, err := s.db.ListTokens(r.Context(), p.ID)
 		if err != nil {
 			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to load your tokens.")
 			return
 		}
-		defer rows.Close()
-		items := []personalToken{}
-		for rows.Next() {
-			var item personalToken
-			if err := rows.Scan(&item.ID, &item.Name, &item.Prefix, &item.Scopes, &item.CreatedAt, &item.ExpiresAt, &item.LastUsedAt); err != nil {
-				writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to load your tokens.")
-				return
-			}
-			items = append(items, item)
-		}
-		if err := rows.Err(); err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to load your tokens.")
-			return
+		items := make([]personalToken, 0, len(tokens))
+		for _, t := range tokens {
+			items = append(items, personalToken{ID: t.ID, Name: t.Name, Prefix: t.Prefix, Scopes: t.Scopes, CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt, LastUsedAt: t.LastUsedAt})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
 	case http.MethodPost:
@@ -91,44 +81,23 @@ func (s *Server) apiPersonalTokens(w http.ResponseWriter, r *http.Request, suffi
 			writeProblem(w, r, http.StatusBadRequest, "Invalid token", "Provide a name of 1–100 characters and an expiration of 1–365 days.")
 			return
 		}
-		tx, err := s.db.SQL.BeginTx(r.Context(), nil)
-		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to create a token.")
-			return
-		}
-		defer tx.Rollback()
-		// Serialize issuance per user so concurrent requests cannot bypass the limit.
-		var id string
-		if err := tx.QueryRowContext(r.Context(), `SELECT id FROM users WHERE id=$1 AND status='active' FOR UPDATE`, p.ID).Scan(&id); err != nil {
-			if err == sql.ErrNoRows {
-				writeProblem(w, r, http.StatusUnauthorized, "Authentication required", "Sign in to create a token.")
-			} else {
-				writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to create a token.")
-			}
-			return
-		}
-		var count int
-		if err := tx.QueryRowContext(r.Context(), `SELECT count(*) FROM access_tokens WHERE user_id=$1 AND revoked_at IS NULL`, p.ID).Scan(&count); err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to create a token.")
-			return
-		}
-		if count >= 100 {
-			writeProblem(w, r, http.StatusConflict, "Token limit reached", "Revoke an existing token before creating another (maximum 100).")
-			return
-		}
 		secret := "hfpx_" + randomSecret(32)
 		expires := time.Now().UTC().Add(time.Duration(input.ExpiresInDays) * 24 * time.Hour)
 		item := personalToken{ID: db.NewID(), Name: input.Name, Prefix: secret[:16], Scopes: []string{"read"}, ExpiresAt: &expires}
 		ring := s.keyRing()
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO access_tokens(id,user_id,token_hash,prefix,name,scopes,expires_at,key_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING created_at`, item.ID, p.ID, ring.Hash(secret), item.Prefix, item.Name, item.Scopes, expires, ring.KeyID()).Scan(&item.CreatedAt)
-		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to create a token.")
+		stored := db.AccessToken{ID: item.ID, Name: item.Name, Prefix: item.Prefix, Scopes: item.Scopes, ExpiresAt: item.ExpiresAt}
+		if err := s.db.CreateToken(r.Context(), p.ID, &stored, ring.Hash(secret), ring.KeyID(), 100); err != nil {
+			switch {
+			case errors.Is(err, db.ErrInactiveUser):
+				writeProblem(w, r, http.StatusUnauthorized, "Authentication required", "Sign in to create a token.")
+			case errors.Is(err, db.ErrTokenLimit):
+				writeProblem(w, r, http.StatusConflict, "Token limit reached", "Revoke an existing token before creating another (maximum 100).")
+			default:
+				writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to create a token.")
+			}
 			return
 		}
-		if err := tx.Commit(); err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to create a token.")
-			return
-		}
+		item.CreatedAt = stored.CreatedAt
 		s.audit(r.Context(), p.ID, "token.created", "access_token", item.ID, map[string]any{"name": item.Name, "scopes": item.Scopes})
 		writeJSON(w, http.StatusCreated, struct {
 			personalToken

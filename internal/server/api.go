@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/nicolas/hfproxy/internal/db"
 )
 
 func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {
@@ -171,22 +170,12 @@ func (s *Server) apiStats(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, http.StatusUnauthorized, "Authentication required", "Sign in to view cache statistics.")
 		return
 	}
-	var repos, artifacts, totalBytes, hits, misses int64
-	visibility := `($1='admin' OR r.access_policy='public' OR (r.access_policy='allowlist' AND (EXISTS(SELECT 1 FROM repo_grants g WHERE g.repository_id=r.id AND g.subject_type='user' AND g.subject_id=$2) OR EXISTS(SELECT 1 FROM repo_grants g JOIN group_members m ON m.group_id=g.subject_id WHERE g.repository_id=r.id AND g.subject_type='group' AND m.user_id=$2))))`
-	if err := s.db.SQL.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM repositories r WHERE r.deleted_at IS NULL AND `+visibility, p.Role, p.ID).Scan(&repos); err != nil {
+	stats, err := s.db.CacheStats(r.Context(), p.Role, p.ID)
+	if err != nil {
 		writeProblem(w, r, 500, "Database error", "Unable to read statistics.")
 		return
 	}
-	if err := s.db.SQL.QueryRowContext(r.Context(), `SELECT COUNT(*),COALESCE(SUM(b.size_bytes),0) FROM artifacts a JOIN repositories r ON r.id=a.repository_id JOIN blobs b ON b.id=a.blob_id WHERE r.deleted_at IS NULL AND `+visibility, p.Role, p.ID).Scan(&artifacts, &totalBytes); err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to read statistics.")
-		return
-	}
-	if err := s.db.SQL.QueryRowContext(r.Context(), `SELECT COUNT(*) FILTER(WHERE d.status='hit'),COUNT(*) FILTER(WHERE d.status='miss') FROM downloads d JOIN repositories r ON r.id=d.repository_id WHERE r.deleted_at IS NULL AND `+visibility, p.Role, p.ID).Scan(&hits, &misses); err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to read statistics.")
-		return
-	}
-	var active int64
-	_ = s.db.SQL.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM downloads d JOIN repositories r ON r.id=d.repository_id WHERE d.status='downloading' AND r.deleted_at IS NULL AND `+visibility, p.Role, p.ID).Scan(&active)
+	repos, artifacts, totalBytes, hits, misses, active := stats.Repositories, stats.Artifacts, stats.Bytes, stats.Hits, stats.Misses, stats.Active
 	writeJSON(w, http.StatusOK, map[string]any{"repositories": repos, "artifacts": artifacts, "cache_bytes": totalBytes, "cache_size": formatBytes(totalBytes), "cache_hits": hits, "cache_misses": misses, "hit_ratio": func() float64 {
 		if hits+misses == 0 {
 			return 0
@@ -201,33 +190,14 @@ func (s *Server) apiActiveDownloads(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, http.StatusUnauthorized, "Authentication required", "Sign in to view active downloads.")
 		return
 	}
-	rows, err := s.db.SQL.QueryContext(r.Context(), `SELECT d.id,r.repo_type,r.repo_id,d.path,d.bytes,d.started_at
-		FROM downloads d JOIN repositories r ON r.id=d.repository_id
-		WHERE d.status='downloading' AND r.deleted_at IS NULL
-		AND ($1='admin' OR r.access_policy='public'
-			OR (r.access_policy='allowlist' AND (
-			EXISTS(SELECT 1 FROM repo_grants g WHERE g.repository_id=r.id AND g.subject_type='user' AND g.subject_id=$2)
-			OR EXISTS(SELECT 1 FROM repo_grants g JOIN group_members m ON m.group_id=g.subject_id WHERE g.repository_id=r.id AND g.subject_type='group' AND m.user_id=$2))))
-		ORDER BY d.started_at DESC LIMIT 50`, p.Role, p.ID)
+	downloads, err := s.db.ActiveDownloads(r.Context(), p.Role, p.ID)
 	if err != nil {
 		writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to read active downloads.")
 		return
 	}
-	defer rows.Close()
-	items := []map[string]any{}
-	for rows.Next() {
-		var id, repoType, repoID, path string
-		var bytes int64
-		var started time.Time
-		if err := rows.Scan(&id, &repoType, &repoID, &path, &bytes, &started); err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to read active downloads.")
-			return
-		}
-		items = append(items, map[string]any{"id": id, "repo_type": repoType, "repo_id": repoID, "path": path, "bytes": bytes, "started_at": started})
-	}
-	if err := rows.Err(); err != nil {
-		writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to read active downloads.")
-		return
+	items := make([]map[string]any, 0, len(downloads))
+	for _, d := range downloads {
+		items = append(items, map[string]any{"id": d.ID, "repo_type": d.RepoType, "repo_id": d.RepoID, "path": d.Path, "bytes": d.Bytes, "started_at": d.StartedAt})
 	}
 	preloads, err := s.preloadSnapshots(r.Context(), p)
 	if err != nil {
@@ -251,24 +221,14 @@ func (s *Server) apiCacheEntries(w http.ResponseWriter, r *http.Request) {
 	}
 	repoFilter := r.URL.Query().Get("repo_id")
 	pathFilter := r.URL.Query().Get("path")
-	query := `SELECT a.id,r.repo_type,r.repo_id,a.commit_sha,a.path,b.size_bytes,b.sha256,a.etag,a.cached_at,a.last_accessed_at
-		FROM artifacts a JOIN repositories r ON r.id=a.repository_id JOIN blobs b ON b.id=a.blob_id
-		WHERE r.deleted_at IS NULL AND ($1='admin' OR r.access_policy='public' OR (r.access_policy='allowlist' AND (EXISTS(SELECT 1 FROM repo_grants g WHERE g.repository_id=r.id AND g.subject_type='user' AND g.subject_id=$2) OR EXISTS(SELECT 1 FROM repo_grants g JOIN group_members m ON m.group_id=g.subject_id WHERE g.repository_id=r.id AND g.subject_type='group' AND m.user_id=$2))))
-		AND ($3='' OR r.repo_id=$3) AND ($4='' OR strpos(lower(a.path),lower($4))>0) ORDER BY a.cached_at DESC LIMIT $5`
-	rows, err := s.db.SQL.QueryContext(r.Context(), query, p.Role, p.ID, repoFilter, pathFilter, limit)
+	entries, err := s.db.SearchCache(r.Context(), p.Role, p.ID, repoFilter, pathFilter, limit)
 	if err != nil {
 		writeProblem(w, r, 500, "Database error", "Unable to search cache.")
 		return
 	}
-	defer rows.Close()
-	items := []map[string]any{}
-	for rows.Next() {
-		var id, t, repo, commit, path, sha, etag string
-		var size int64
-		var cached, accessed time.Time
-		if rows.Scan(&id, &t, &repo, &commit, &path, &size, &sha, &etag, &cached, &accessed) == nil {
-			items = append(items, map[string]any{"id": id, "repo_type": t, "repo_id": repo, "commit_sha": commit, "path": path, "size_bytes": size, "sha256": sha, "etag": etag, "cached_at": cached, "last_accessed_at": accessed})
-		}
+	items := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		items = append(items, map[string]any{"id": e.ID, "repo_type": e.RepoType, "repo_id": e.RepoID, "commit_sha": e.Commit, "path": e.Path, "size_bytes": e.Size, "sha256": e.SHA256, "etag": e.ETag, "cached_at": e.CachedAt, "last_accessed_at": e.AccessedAt})
 	}
 	writeJSON(w, 200, map[string]any{"items": items, "limit": limit, "next_cursor": ""})
 }
@@ -287,9 +247,8 @@ func (s *Server) apiCacheEntry(w http.ResponseWriter, r *http.Request, id string
 	if !ok {
 		return
 	}
-	visibility := `r.deleted_at IS NULL AND ($2='admin' OR r.access_policy='public' OR (r.access_policy='allowlist' AND (EXISTS(SELECT 1 FROM repo_grants g WHERE g.repository_id=r.id AND g.subject_type='user' AND g.subject_id=$3) OR EXISTS(SELECT 1 FROM repo_grants g JOIN group_members m ON m.group_id=g.subject_id WHERE g.repository_id=r.id AND g.subject_type='group' AND m.user_id=$3))))`
-	var visible bool
-	if err := s.db.SQL.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM artifacts a JOIN repositories r ON r.id=a.repository_id WHERE a.id=$1 AND `+visibility+`)`, id, p.Role, p.ID).Scan(&visible); err != nil {
+	visible, err := s.db.ArtifactVisible(r.Context(), id, p.Role, p.ID)
+	if err != nil {
 		writeProblem(w, r, 500, "Database error", "Unable to check cache entry visibility.")
 		return
 	}
@@ -298,7 +257,7 @@ func (s *Server) apiCacheEntry(w http.ResponseWriter, r *http.Request, id string
 		return
 	}
 	if err := s.purgeArtifact(r.Context(), id); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, db.ErrNotFound) {
 			writeProblem(w, r, 404, "Cache entry not found", "The cache entry does not exist.")
 			return
 		}
@@ -322,10 +281,7 @@ func (s *Server) apiPurge(w http.ResponseWriter, r *http.Request) {
 	confirm := r.URL.Query().Get("confirm") == "true" || r.FormValue("confirm") == "true"
 	repoID := r.URL.Query().Get("repo_id")
 	path := r.URL.Query().Get("path")
-	visibility := `r.deleted_at IS NULL AND ($3='admin' OR r.access_policy='public' OR (r.access_policy='allowlist' AND (EXISTS(SELECT 1 FROM repo_grants g WHERE g.repository_id=r.id AND g.subject_type='user' AND g.subject_id=$4) OR EXISTS(SELECT 1 FROM repo_grants g JOIN group_members m ON m.group_id=g.subject_id WHERE g.repository_id=r.id AND g.subject_type='group' AND m.user_id=$4))))`
-	var count int64
-	var size int64
-	err := s.db.SQL.QueryRowContext(r.Context(), `SELECT COUNT(*),COALESCE(SUM(b.size_bytes),0) FROM artifacts a JOIN repositories r ON r.id=a.repository_id JOIN blobs b ON b.id=a.blob_id WHERE ($1='' OR r.repo_id=$1) AND ($2='' OR strpos(lower(a.path),lower($2))>0) AND `+visibility, repoID, path, p.Role, p.ID).Scan(&count, &size)
+	count, size, err := s.db.PurgeEstimate(r.Context(), p.Role, p.ID, repoID, path)
 	if err != nil {
 		writeProblem(w, r, 500, "Database error", "Unable to estimate purge impact.")
 		return
@@ -334,19 +290,11 @@ func (s *Server) apiPurge(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"dry_run": true, "entries": count, "bytes": size, "size": formatBytes(size), "confirmation_required": true})
 		return
 	}
-	rows, err := s.db.SQL.QueryContext(r.Context(), `SELECT a.id FROM artifacts a JOIN repositories r ON r.id=a.repository_id WHERE ($1='' OR r.repo_id=$1) AND ($2='' OR strpos(lower(a.path),lower($2))>0) AND `+visibility, repoID, path, p.Role, p.ID)
+	ids, err := s.db.PurgeCandidates(r.Context(), p.Role, p.ID, repoID, path)
 	if err != nil {
 		writeProblem(w, r, 500, "Database error", "Unable to find cache entries.")
 		return
 	}
-	ids := []string{}
-	for rows.Next() {
-		var id string
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
-		}
-	}
-	rows.Close()
 	for _, id := range ids {
 		if err := s.purgeArtifact(r.Context(), id); err != nil {
 			s.logger.Warn("cache purge entry failed")
@@ -357,28 +305,7 @@ func (s *Server) apiPurge(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) purgeArtifact(ctx context.Context, id string) error {
-	tx, err := s.db.SQL.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var blobID string
-	err = tx.QueryRowContext(ctx, `SELECT b.id FROM artifacts a JOIN blobs b ON b.id=a.blob_id WHERE a.id=$1 FOR UPDATE OF a`, id).Scan(&blobID)
-	if err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM artifacts WHERE id=$1`, id); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, `UPDATE blobs SET orphaned_at=now() WHERE id=$1`, blobID); err != nil {
-		return err
-	}
-	if err = tx.Commit(); err != nil {
-		return err
-	}
-	// Keep the blob row/object as an orphan until a grace-period GC removes it.
-	// This prevents a purge racing a re-download from deleting the new object.
-	return nil
+	return s.db.PurgeArtifact(ctx, id)
 }
 
 func (s *Server) apiAudit(w http.ResponseWriter, r *http.Request) {
@@ -387,8 +314,7 @@ func (s *Server) apiAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := pageLimit(r.URL.Query().Get("limit"))
 	cursor := r.URL.Query().Get("cursor")
-	args := []any{limit + 1}
-	where := ""
+	var before *db.AuditCursor
 	if cursor != "" {
 		decoded, err := base64.RawURLEncoding.DecodeString(cursor)
 		if err != nil {
@@ -405,24 +331,18 @@ func (s *Server) apiAudit(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, r, http.StatusBadRequest, "Invalid cursor", "The audit cursor is invalid.")
 			return
 		}
-		where = "WHERE (e.created_at,e.id) < ($1,$2)"
-		args = []any{created, parts[1], limit + 1}
+		before = &db.AuditCursor{At: created, ID: parts[1]}
 	}
-	rows, err := s.db.SQL.QueryContext(r.Context(), `SELECT e.id,COALESCE(u.username,''),e.action,e.target_type,e.target_id,e.metadata_json,e.request_id,e.created_at FROM audit_events e LEFT JOIN users u ON u.id=e.actor_user_id `+where+` ORDER BY e.created_at DESC,e.id DESC LIMIT $`+strconv.Itoa(len(args)), args...)
+	events, err := s.db.ListAudit(r.Context(), before, limit+1)
 	if err != nil {
 		writeProblem(w, r, 500, "Database error", "Unable to read audit events.")
 		return
 	}
-	defer rows.Close()
-	items := []map[string]any{}
-	for rows.Next() {
-		var id, actor, action, targetType, targetID, metadata, requestID string
-		var created time.Time
-		if rows.Scan(&id, &actor, &action, &targetType, &targetID, &metadata, &requestID, &created) == nil {
-			var decoded any
-			_ = json.Unmarshal([]byte(metadata), &decoded)
-			items = append(items, map[string]any{"id": id, "actor": actor, "action": action, "target_type": targetType, "target_id": targetID, "metadata": decoded, "request_id": requestID, "created_at": created})
-		}
+	items := make([]map[string]any, 0, len(events))
+	for _, e := range events {
+		var decoded any
+		_ = json.Unmarshal([]byte(e.Metadata), &decoded)
+		items = append(items, map[string]any{"id": e.ID, "actor": e.Actor, "action": e.Action, "target_type": e.TargetType, "target_id": e.TargetID, "metadata": decoded, "request_id": e.RequestID, "created_at": e.CreatedAt})
 	}
 	nextCursor := ""
 	if len(items) > limit {
@@ -463,16 +383,6 @@ func pageLimit(value string) int {
 		return 200
 	}
 	return limit
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
-}
-
-func isForeignKeyViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
 func encodeListCursor(parts ...string) string {
