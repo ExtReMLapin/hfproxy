@@ -93,6 +93,12 @@ type Config struct {
 	// be served when the Hub is failing.
 	APICacheMaxBytes int64
 	APICacheMaxStale time.Duration
+
+	// DatabaseMaxConns caps the PostgreSQL pool (HFPROXY_DATABASE_MAX_CONNS, 0 =
+	// computed from the fill concurrency). Every running cache fill holds one
+	// connection for its whole download (the per-file lock), so the pool must
+	// stay larger than the fill concurrency or fills would starve each other.
+	DatabaseMaxConns int
 }
 
 func Load() (Config, error) {
@@ -173,6 +179,7 @@ func Load() (Config, error) {
 	c.UpstreamBreakerCooldown = duration("UPSTREAM_BREAKER_COOLDOWN", 30*time.Second)
 	c.APICacheMaxBytes = int64(number("API_CACHE_MAX_BYTES", 32<<20))
 	c.APICacheMaxStale = duration("API_CACHE_MAX_STALE", 24*time.Hour)
+	c.DatabaseMaxConns = number("DATABASE_MAX_CONNS", 0)
 	if err := c.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -260,6 +267,9 @@ func (c Config) Validate() error {
 	}
 	if c.CacheFillConcurrency < 0 || c.CacheMaxTotalSize < 0 || c.RetentionDownloads < 0 || c.RetentionAudit < 0 {
 		return fmt.Errorf("HFPROXY_CACHE_FILL_CONCURRENCY, HFPROXY_CACHE_MAX_TOTAL_SIZE and the retention periods must not be negative")
+	}
+	if c.DatabaseMaxConns < 0 || (c.DatabaseMaxConns > 0 && c.DatabaseMaxConns < c.CacheFillConcurrency+8) {
+		return fmt.Errorf("HFPROXY_DATABASE_MAX_CONNS must be at least HFPROXY_CACHE_FILL_CONCURRENCY plus 8: each running fill holds a connection")
 	}
 	if c.UpstreamBreakerThreshold < 0 || c.UpstreamBreakerCooldown < 0 || c.APICacheMaxBytes < 0 || c.APICacheMaxStale < 0 {
 		return fmt.Errorf("the upstream breaker and API cache settings must not be negative")
@@ -544,4 +554,20 @@ func IsLoopbackHost(host string) bool {
 		return ip.IsLoopback()
 	}
 	return false
+}
+
+// PoolSize is the number of PostgreSQL connections to allow: the configured
+// value, or enough for every fill slot plus the requests around them.
+func (c Config) PoolSize() int {
+	if c.DatabaseMaxConns > 0 {
+		return c.DatabaseMaxConns
+	}
+	fills := c.CacheFillConcurrency
+	if fills <= 0 {
+		fills = 4
+	}
+	if size := 2*fills + 16; size > 20 {
+		return size
+	}
+	return 20
 }

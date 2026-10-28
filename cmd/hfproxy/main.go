@@ -172,6 +172,7 @@ func serve(args []string) error {
 		return err
 	}
 	defer store.SQL.Close()
+	store.SQL.SetMaxOpenConns(cfg.PoolSize())
 	if cfg.AutoMigrate {
 		if err := db.Migrate(ctx, store.SQL); err != nil {
 			return err

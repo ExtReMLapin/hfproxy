@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,12 +38,21 @@ func ahubRandHex(n int) string {
 type ahubFakeS3 struct {
 	mu      sync.Mutex
 	objects map[string][]byte
+	// failWrites makes every PUT answer 500, simulating an object store outage.
+	failWrites atomic.Bool
 }
 
 func (f *ahubFakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(r.URL.Path, "/")
 	switch r.Method {
 	case http.MethodPut:
+		if f.failWrites.Load() {
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `<Error><Code>InternalError</Code></Error>`)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		if strings.Contains(r.Header.Get("Content-Encoding"), "aws-chunked") || strings.HasPrefix(r.Header.Get("X-Amz-Content-Sha256"), "STREAMING") {
 			body = ahubDecodeAWSChunked(body)

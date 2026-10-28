@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestDescribeSourcesMarksOverridesAndHidesSecrets(t *testing.T) {
 	environment := Config{S3Bucket: "env-bucket", S3SecretKey: "topsecret", DatabaseURL: "postgres://user:pw@db/app", LogLevel: "info"}
@@ -69,5 +72,27 @@ func TestLockedSettingsPinToEnvironmentAndRejectChanges(t *testing.T) {
 	}
 	if got := LockedNames([]string{"all"}); len(got) != len(ManagedSettingNames()) {
 		t.Fatalf("all expands to %d names, want %d", len(got), len(ManagedSettingNames()))
+	}
+}
+
+func TestPoolSizeStaysAboveTheFillConcurrency(t *testing.T) {
+	if got := (Config{CacheFillConcurrency: 4}).PoolSize(); got != 24 {
+		t.Fatalf("default pool for 4 fills = %d, want 24", got)
+	}
+	if got := (Config{CacheFillConcurrency: 64}).PoolSize(); got < 64+8 {
+		t.Fatalf("pool for 64 fills = %d: every fill holds a connection", got)
+	}
+	if got := (Config{DatabaseMaxConns: 50}).PoolSize(); got != 50 {
+		t.Fatalf("explicit pool = %d, want 50", got)
+	}
+	cfg := Config{DatabaseMaxConns: 10, CacheFillConcurrency: 8}
+	base := Config{
+		LogLevel: "info", HFBaseURL: "https://huggingface.co", HFTimeout: time.Second, CacheMaxFileSize: 1, CacheRefTTL: time.Second,
+		AuthMode: "local", SessionSecret: "0123456789abcdef0123456789abcdef", SessionIdleTTL: time.Hour, SessionAbsoluteTTL: time.Hour, MetricsPath: "/metrics",
+		TracingServiceName: "hfproxy", TracingSamplingRatio: 0.1, DatabaseURL: "postgres://u:p@db/app", S3Bucket: "b", S3Region: "r", ListenAddr: "127.0.0.1:8080",
+	}
+	base.DatabaseMaxConns, base.CacheFillConcurrency = cfg.DatabaseMaxConns, cfg.CacheFillConcurrency
+	if err := base.Validate(); err == nil {
+		t.Fatal("a pool smaller than the fill concurrency plus headroom must be rejected")
 	}
 }
