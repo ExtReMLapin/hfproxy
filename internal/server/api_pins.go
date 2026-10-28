@@ -14,8 +14,8 @@ func (s *Server) apiRepoPins(w http.ResponseWriter, r *http.Request, repositoryI
 	if !ok {
 		return
 	}
-	var exists bool
-	if err := s.db.SQL.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM repositories WHERE id=$1 AND deleted_at IS NULL)`, repositoryID).Scan(&exists); err != nil {
+	exists, err := s.db.RepositoryExists(r.Context(), repositoryID)
+	if err != nil {
 		writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to load the repository.")
 		return
 	}
@@ -25,12 +25,11 @@ func (s *Server) apiRepoPins(w http.ResponseWriter, r *http.Request, repositoryI
 	}
 	switch r.Method {
 	case http.MethodGet:
-		rows, err := s.db.SQL.QueryContext(r.Context(), `SELECT commit_sha,ref,created_at FROM cache_pins WHERE repository_id=$1 ORDER BY ref,commit_sha`, repositoryID)
+		stored, err := s.db.ListPins(r.Context(), repositoryID)
 		if err != nil {
 			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to list pins.")
 			return
 		}
-		defer rows.Close()
 		type pin struct {
 			Commit  string    `json:"commit"`
 			Ref     string    `json:"ref"`
@@ -38,14 +37,8 @@ func (s *Server) apiRepoPins(w http.ResponseWriter, r *http.Request, repositoryI
 			Created time.Time `json:"created_at"`
 		}
 		pins := []pin{}
-		for rows.Next() {
-			var item pin
-			if err := rows.Scan(&item.Commit, &item.Ref, &item.Created); err != nil {
-				writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to list pins.")
-				return
-			}
-			item.Scope = pinScope(item.Commit, item.Ref)
-			pins = append(pins, item)
+		for _, item := range stored {
+			pins = append(pins, pin{Commit: item.Commit, Ref: item.Ref, Scope: pinScope(item.Commit, item.Ref), Created: item.CreatedAt})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"pins": pins})
 	case http.MethodPost:
@@ -60,12 +53,12 @@ func (s *Server) apiRepoPins(w http.ResponseWriter, r *http.Request, repositoryI
 			writeProblem(w, r, http.StatusBadRequest, "Invalid pin", problem)
 			return
 		}
-		result, err := s.db.SQL.ExecContext(r.Context(), `INSERT INTO cache_pins(repository_id,commit_sha,ref,created_by) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, repositoryID, input.Commit, input.Ref, p.ID)
+		added, err := s.db.AddPin(r.Context(), repositoryID, input.Commit, input.Ref, p.ID)
 		if err != nil {
 			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to pin.")
 			return
 		}
-		if added, _ := result.RowsAffected(); added > 0 {
+		if added {
 			s.audit(r.Context(), p.ID, "cache.pin", "repository", repositoryID, map[string]any{"scope": pinScope(input.Commit, input.Ref), "commit": input.Commit, "ref": input.Ref})
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"commit": input.Commit, "ref": input.Ref, "scope": pinScope(input.Commit, input.Ref)})
@@ -75,12 +68,12 @@ func (s *Server) apiRepoPins(w http.ResponseWriter, r *http.Request, repositoryI
 			writeProblem(w, r, http.StatusBadRequest, "Invalid pin", problem)
 			return
 		}
-		result, err := s.db.SQL.ExecContext(r.Context(), `DELETE FROM cache_pins WHERE repository_id=$1 AND commit_sha=$2 AND ref=$3`, repositoryID, commit, ref)
+		removed, err := s.db.RemovePin(r.Context(), repositoryID, commit, ref)
 		if err != nil {
 			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to unpin.")
 			return
 		}
-		if n, _ := result.RowsAffected(); n == 0 {
+		if !removed {
 			writeProblem(w, r, http.StatusNotFound, "Pin not found", "That pin does not exist.")
 			return
 		}

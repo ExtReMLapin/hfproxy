@@ -1,10 +1,8 @@
 package server
 
 import (
-	"database/sql"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/nicolas/hfproxy/internal/db"
@@ -16,30 +14,23 @@ func (s *Server) apiGroups(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		limit := pageLimit(r.URL.Query().Get("limit"))
-		args := []any{limit + 1}
-		where := ""
+		var after *[2]string
 		if cursor := r.URL.Query().Get("cursor"); cursor != "" {
 			parts, ok := decodeListCursor(cursor, 2)
 			if !ok {
 				writeProblem(w, r, http.StatusBadRequest, "Invalid cursor", "The group cursor is invalid.")
 				return
 			}
-			where = "WHERE (g.name,g.id) > ($1,$2)"
-			args = []any{parts[0], parts[1], limit + 1}
+			after = &[2]string{parts[0], parts[1]}
 		}
-		rows, err := s.db.SQL.QueryContext(r.Context(), `SELECT g.id,g.name,g.source,COUNT(m.user_id) FROM groups g LEFT JOIN group_members m ON m.group_id=g.id `+where+` GROUP BY g.id ORDER BY g.name,g.id LIMIT $`+strconv.Itoa(len(args)), args...)
+		groups, err := s.db.ListGroups(r.Context(), after, limit+1)
 		if err != nil {
 			writeProblem(w, r, 500, "Database error", "Unable to list groups.")
 			return
 		}
-		defer rows.Close()
-		items := []map[string]any{}
-		for rows.Next() {
-			var id, name, source string
-			var members int
-			if rows.Scan(&id, &name, &source, &members) == nil {
-				items = append(items, map[string]any{"id": id, "name": name, "source": source, "members": members})
-			}
+		items := make([]map[string]any, 0, len(groups))
+		for _, g := range groups {
+			items = append(items, map[string]any{"id": g.ID, "name": g.Name, "source": g.Source, "members": g.Members})
 		}
 		next := ""
 		if len(items) > limit {
@@ -67,37 +58,27 @@ func (s *Server) apiGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := db.NewID()
-	tx, err := s.db.SQL.BeginTx(r.Context(), nil)
-	if err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to start group update.")
-		return
-	}
-	defer tx.Rollback()
-	if _, err = tx.ExecContext(r.Context(), `INSERT INTO groups(id,name) VALUES($1,$2)`, id, input.Name); err != nil {
-		if isUniqueViolation(err) {
+	if err := s.db.CreateGroup(r.Context(), id, input.Name, input.Members); err != nil {
+		switch {
+		case errors.Is(err, db.ErrExists):
 			writeProblem(w, r, 409, "Group exists", "A group with this name already exists.")
-		} else {
-			writeProblem(w, r, 500, "Database error", "Unable to create group.")
-		}
-		return
-	}
-	seenMembers := make(map[string]struct{}, len(input.Members))
-	for _, member := range input.Members {
-		if _, seen := seenMembers[member]; seen {
-			continue
-		}
-		seenMembers[member] = struct{}{}
-		if _, err = tx.ExecContext(r.Context(), `INSERT INTO group_members(group_id,user_id) VALUES($1,$2)`, id, member); err != nil {
-			if isForeignKeyViolation(err) {
-				writeProblem(w, r, 400, "Invalid member", "A member ID is invalid.")
-			} else {
-				writeProblem(w, r, 500, "Database error", "Unable to add the group member.")
+		case errors.Is(err, db.ErrInvalidMember):
+			writeProblem(w, r, 400, "Invalid member", "A member ID is invalid.")
+		default:
+			var stage *db.StageError
+			detail := "Unable to create group."
+			if errors.As(err, &stage) {
+				switch stage.Stage {
+				case "begin":
+					detail = "Unable to start group update."
+				case "add_member":
+					detail = "Unable to add the group member."
+				case "commit":
+					detail = "Unable to save group."
+				}
 			}
-			return
+			writeProblem(w, r, 500, "Database error", detail)
 		}
-	}
-	if err = tx.Commit(); err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to save group.")
 		return
 	}
 	s.audit(r.Context(), p.ID, "group.create", "group", id, map[string]any{"name": input.Name, "member_count": len(input.Members)})
@@ -114,27 +95,23 @@ func (s *Server) apiGroup(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	if r.Method == http.MethodGet {
-		var name, source string
-		if err := s.db.SQL.QueryRowContext(r.Context(), `SELECT name,source FROM groups WHERE id=$1`, id).Scan(&name, &source); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
+		group, found, err := s.db.GetGroup(r.Context(), id)
+		if err != nil {
+			var stage *db.StageError
+			switch {
+			case errors.Is(err, db.ErrNotFound):
 				writeProblem(w, r, http.StatusNotFound, "Group not found", "The group does not exist.")
-			} else {
+			case errors.As(err, &stage) && stage.Stage == "members":
+				writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to list group members.")
+			default:
 				writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to load the group.")
 			}
 			return
 		}
-		rows, err := s.db.SQL.QueryContext(r.Context(), `SELECT u.id,u.username,u.role FROM group_members m JOIN users u ON u.id=m.user_id WHERE m.group_id=$1 ORDER BY u.username`, id)
-		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to list group members.")
-			return
-		}
-		defer rows.Close()
+		name, source := group.Name, group.Source
 		members := []map[string]string{}
-		for rows.Next() {
-			var memberID, username, role string
-			if rows.Scan(&memberID, &username, &role) == nil {
-				members = append(members, map[string]string{"id": memberID, "username": username, "role": role})
-			}
+		for _, m := range found {
+			members = append(members, map[string]string{"id": m.ID, "username": m.Username, "role": m.Role})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"id": id, "name": name, "source": source, "members": members})
 		return
@@ -158,54 +135,34 @@ func (s *Server) apiGroup(w http.ResponseWriter, r *http.Request, id string) {
 			return
 		}
 	}
-	tx, err := s.db.SQL.BeginTx(r.Context(), nil)
-	if err != nil {
-		writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to start group update.")
-		return
-	}
-	defer tx.Rollback()
-	var currentName string
-	if err := tx.QueryRowContext(r.Context(), `SELECT name FROM groups WHERE id=$1 FOR UPDATE`, id).Scan(&currentName); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeProblem(w, r, http.StatusNotFound, "Group not found", "The group does not exist.")
-		} else {
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to load the group.")
-		}
-		return
-	}
+	var newName *string
 	if input.Name != nil {
-		if _, err := tx.ExecContext(r.Context(), `UPDATE groups SET name=$2 WHERE id=$1`, id, name); err != nil {
-			if isUniqueViolation(err) {
-				writeProblem(w, r, http.StatusConflict, "Group exists", "A group with this name already exists.")
-			} else {
-				writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to update the group.")
-			}
-			return
-		}
-		currentName = name
+		newName = &name
 	}
-	if input.Members != nil {
-		if _, err := tx.ExecContext(r.Context(), `DELETE FROM group_members WHERE group_id=$1`, id); err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to replace group members.")
-			return
-		}
-		for _, memberID := range *input.Members {
-			if _, err := tx.ExecContext(r.Context(), `INSERT INTO group_members(group_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, id, memberID); err != nil {
-				if isForeignKeyViolation(err) {
-					writeProblem(w, r, http.StatusBadRequest, "Invalid member", "A member ID is invalid.")
-				} else {
-					writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to add the group member.")
-				}
-				return
+	currentName, members, err := s.db.UpdateGroup(r.Context(), id, newName, input.Members)
+	if err != nil {
+		var stage *db.StageError
+		switch {
+		case errors.Is(err, db.ErrNotFound):
+			writeProblem(w, r, http.StatusNotFound, "Group not found", "The group does not exist.")
+		case errors.Is(err, db.ErrExists):
+			writeProblem(w, r, http.StatusConflict, "Group exists", "A group with this name already exists.")
+		case errors.Is(err, db.ErrInvalidMember):
+			writeProblem(w, r, http.StatusBadRequest, "Invalid member", "A member ID is invalid.")
+		case errors.As(err, &stage):
+			detail := map[string]string{
+				"begin": "Unable to start group update.", "load": "Unable to load the group.", "rename": "Unable to update the group.",
+				"replace_members": "Unable to replace group members.", "add_member": "Unable to add the group member.", "commit": "Unable to save group changes.",
+			}[stage.Stage]
+			if detail == "" {
+				detail = "Unable to update the group."
 			}
+			writeProblem(w, r, http.StatusInternalServerError, "Database error", detail)
+		default:
+			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to update the group.")
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to save group changes.")
 		return
 	}
-	var members int
-	_ = s.db.SQL.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM group_members WHERE group_id=$1`, id).Scan(&members)
 	s.audit(r.Context(), p.ID, "group.update", "group", id, map[string]any{"name": currentName, "members": members})
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "name": currentName, "members": members})
 }

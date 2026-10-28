@@ -1,12 +1,9 @@
 package server
 
 import (
-	"database/sql"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/nicolas/hfproxy/internal/db"
 )
@@ -19,32 +16,23 @@ func (s *Server) apiRepos(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		limit := pageLimit(r.URL.Query().Get("limit"))
-		args := []any{p.Role, p.ID, limit + 1}
-		cursorWhere := ""
+		var after *[3]string
 		if cursor := r.URL.Query().Get("cursor"); cursor != "" {
 			parts, ok := decodeListCursor(cursor, 3)
 			if !ok {
 				writeProblem(w, r, http.StatusBadRequest, "Invalid cursor", "The repository cursor is invalid.")
 				return
 			}
-			cursorWhere = " AND (r.repo_type,r.repo_id,r.id) > ($3,$4,$5)"
-			args = []any{p.Role, p.ID, parts[0], parts[1], parts[2], limit + 1}
+			after = &[3]string{parts[0], parts[1], parts[2]}
 		}
-		rows, err := s.db.SQL.QueryContext(r.Context(), `SELECT r.id,r.repo_type,r.repo_id,r.access_policy,r.created_at,r.updated_at
-			FROM repositories r WHERE r.deleted_at IS NULL AND ($1='admin' OR r.access_policy='public' OR (r.access_policy='allowlist' AND (EXISTS(SELECT 1 FROM repo_grants g WHERE g.repository_id=r.id AND g.subject_type='user' AND g.subject_id=$2) OR EXISTS(SELECT 1 FROM repo_grants g JOIN group_members m ON m.group_id=g.subject_id WHERE g.repository_id=r.id AND g.subject_type='group' AND m.user_id=$2))))`+cursorWhere+`
-			ORDER BY r.repo_type,r.repo_id,r.id LIMIT $`+strconv.Itoa(len(args)), args...)
+		repos, err := s.db.ListRepositories(r.Context(), p.Role, p.ID, after, limit+1)
 		if err != nil {
 			writeProblem(w, r, 500, "Database error", "Unable to list repositories.")
 			return
 		}
-		defer rows.Close()
-		result := []map[string]any{}
-		for rows.Next() {
-			var id, t, repo, policy string
-			var created, updated time.Time
-			if rows.Scan(&id, &t, &repo, &policy, &created, &updated) == nil {
-				result = append(result, map[string]any{"id": id, "repo_type": t, "repo_id": repo, "access_policy": policy, "created_at": created, "updated_at": updated})
-			}
+		result := make([]map[string]any, 0, len(repos))
+		for _, repo := range repos {
+			result = append(result, map[string]any{"id": repo.ID, "repo_type": repo.Type, "repo_id": repo.RepoID, "access_policy": repo.Policy, "created_at": repo.CreatedAt, "updated_at": repo.UpdatedAt})
 		}
 		next := ""
 		if len(result) > limit {
@@ -75,9 +63,7 @@ func (s *Server) apiRepos(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, 400, "Invalid repository", "Provide a valid repo_type, repo_id, and access_policy.")
 		return
 	}
-	var id string
-	err := s.db.SQL.QueryRowContext(r.Context(), `INSERT INTO repositories(id,repo_type,repo_id,access_policy,created_by) VALUES($1,$2,$3,$4,$5)
-		ON CONFLICT(repo_type,repo_id) DO UPDATE SET access_policy=EXCLUDED.access_policy,deleted_at=NULL,updated_at=now() RETURNING id`, db.NewID(), input.RepoType, input.RepoID, input.AccessPolicy, p.ID).Scan(&id)
+	id, err := s.db.UpsertRepository(r.Context(), input.RepoType, input.RepoID, input.AccessPolicy, p.ID)
 	if err != nil {
 		writeProblem(w, r, 500, "Database error", "Unable to save repository policy.")
 		return
@@ -111,10 +97,8 @@ func (s *Server) apiRepo(w http.ResponseWriter, r *http.Request, path string) {
 	id := parts[0]
 	switch r.Method {
 	case http.MethodGet:
-		var repoType, repoID, policy string
-		var created, updated time.Time
-		err := s.db.SQL.QueryRowContext(r.Context(), `SELECT repo_type,repo_id,access_policy,created_at,updated_at FROM repositories WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&repoType, &repoID, &policy, &created, &updated)
-		if errors.Is(err, sql.ErrNoRows) {
+		repo, err := s.db.GetRepository(r.Context(), id)
+		if errors.Is(err, db.ErrNotFound) {
 			writeProblem(w, r, 404, "Repository not found", "The repository does not exist.")
 			return
 		}
@@ -122,7 +106,7 @@ func (s *Server) apiRepo(w http.ResponseWriter, r *http.Request, path string) {
 			writeProblem(w, r, 500, "Database error", "Unable to load repository.")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"id": id, "repo_type": repoType, "repo_id": repoID, "access_policy": policy, "created_at": created, "updated_at": updated})
+		writeJSON(w, 200, map[string]any{"id": id, "repo_type": repo.Type, "repo_id": repo.RepoID, "access_policy": repo.Policy, "created_at": repo.CreatedAt, "updated_at": repo.UpdatedAt})
 	case http.MethodPatch:
 		var input struct {
 			AccessPolicy string `json:"access_policy"`
@@ -134,41 +118,27 @@ func (s *Server) apiRepo(w http.ResponseWriter, r *http.Request, path string) {
 			writeProblem(w, r, 400, "Invalid policy", "access_policy must be public, allowlist, or admin_only.")
 			return
 		}
-		result, err := s.db.SQL.ExecContext(r.Context(), `UPDATE repositories SET access_policy=$2,updated_at=now() WHERE id=$1 AND deleted_at IS NULL`, id, input.AccessPolicy)
-		if err != nil {
-			writeProblem(w, r, 500, "Database error", "Unable to update policy.")
-			return
-		}
-		n, _ := result.RowsAffected()
-		if n == 0 {
-			writeProblem(w, r, 404, "Repository not found", "The repository does not exist.")
+		if err := s.db.SetRepositoryPolicy(r.Context(), id, input.AccessPolicy); err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				writeProblem(w, r, 404, "Repository not found", "The repository does not exist.")
+			} else {
+				writeProblem(w, r, 500, "Database error", "Unable to update policy.")
+			}
 			return
 		}
 		s.audit(r.Context(), p.ID, "repository.policy.update", "repository", id, map[string]any{"access_policy": input.AccessPolicy})
 		writeJSON(w, 200, map[string]string{"id": id, "access_policy": input.AccessPolicy})
 	case http.MethodDelete:
-		tx, err := s.db.SQL.BeginTx(r.Context(), nil)
-		if err != nil {
-			writeProblem(w, r, 500, "Database error", "Unable to delete repository.")
-			return
-		}
-		defer tx.Rollback()
-		result, err := tx.ExecContext(r.Context(), `UPDATE repositories SET deleted_at=now(),updated_at=now() WHERE id=$1 AND deleted_at IS NULL`, id)
-		if err != nil {
-			writeProblem(w, r, 500, "Database error", "Unable to delete repository.")
-			return
-		}
-		n, _ := result.RowsAffected()
-		if n == 0 {
-			writeProblem(w, r, 404, "Repository not found", "The repository does not exist.")
-			return
-		}
-		if _, err := tx.ExecContext(r.Context(), `DELETE FROM repo_grants WHERE repository_id=$1`, id); err != nil {
-			writeProblem(w, r, 500, "Database error", "Unable to remove repository grants.")
-			return
-		}
-		if err := tx.Commit(); err != nil {
-			writeProblem(w, r, 500, "Database error", "Unable to delete repository.")
+		if err := s.db.DeleteRepository(r.Context(), id); err != nil {
+			var stage *db.StageError
+			switch {
+			case errors.Is(err, db.ErrNotFound):
+				writeProblem(w, r, 404, "Repository not found", "The repository does not exist.")
+			case errors.As(err, &stage) && stage.Stage == "grants":
+				writeProblem(w, r, 500, "Database error", "Unable to remove repository grants.")
+			default:
+				writeProblem(w, r, 500, "Database error", "Unable to delete repository.")
+			}
 			return
 		}
 		s.audit(r.Context(), p.ID, "repository.delete", "repository", id, nil)
@@ -184,18 +154,14 @@ func (s *Server) apiRepoGrants(w http.ResponseWriter, r *http.Request, repoID st
 		return
 	}
 	if r.Method == http.MethodGet {
-		rows, err := s.db.SQL.QueryContext(r.Context(), `SELECT subject_type,subject_id,permission FROM repo_grants WHERE repository_id=$1 ORDER BY subject_type,subject_id`, repoID)
+		grants, err := s.db.ListGrants(r.Context(), repoID)
 		if err != nil {
 			writeProblem(w, r, 500, "Database error", "Unable to list grants.")
 			return
 		}
-		defer rows.Close()
 		items := []map[string]string{}
-		for rows.Next() {
-			var a, b, c string
-			if rows.Scan(&a, &b, &c) == nil {
-				items = append(items, map[string]string{"subject_type": a, "subject_id": b, "permission": c})
-			}
+		for _, g := range grants {
+			items = append(items, map[string]string{"subject_type": g.SubjectType, "subject_id": g.SubjectID, "permission": g.Permission})
 		}
 		writeJSON(w, 200, map[string]any{"items": items})
 		return
@@ -213,8 +179,8 @@ func (s *Server) apiRepoGrants(w http.ResponseWriter, r *http.Request, repoID st
 			writeProblem(w, r, 400, "Invalid grant", "Provide a user or group subject and a valid permission.")
 			return
 		}
-		var repositoryExists bool
-		if err := s.db.SQL.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM repositories WHERE id=$1 AND deleted_at IS NULL)`, repoID).Scan(&repositoryExists); err != nil {
+		repositoryExists, err := s.db.RepositoryExists(r.Context(), repoID)
+		if err != nil {
 			writeProblem(w, r, 500, "Database error", "Unable to validate the repository.")
 			return
 		}
@@ -222,12 +188,8 @@ func (s *Server) apiRepoGrants(w http.ResponseWriter, r *http.Request, repoID st
 			writeProblem(w, r, 404, "Repository not found", "The repository does not exist.")
 			return
 		}
-		table := "users"
-		if input.SubjectType == "group" {
-			table = "groups"
-		}
-		var subjectExists bool
-		if err := s.db.SQL.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM `+table+` WHERE id=$1)`, input.SubjectID).Scan(&subjectExists); err != nil {
+		subjectExists, err := s.db.GrantSubjectExists(r.Context(), input.SubjectType, input.SubjectID)
+		if err != nil {
 			writeProblem(w, r, 500, "Database error", "Unable to validate the grant subject.")
 			return
 		}
@@ -235,8 +197,7 @@ func (s *Server) apiRepoGrants(w http.ResponseWriter, r *http.Request, repoID st
 			writeProblem(w, r, 404, "Grant subject not found", "The selected user or group does not exist.")
 			return
 		}
-		_, err := s.db.SQL.ExecContext(r.Context(), `INSERT INTO repo_grants(repository_id,subject_type,subject_id,permission) VALUES($1,$2,$3,$4) ON CONFLICT(repository_id,subject_type,subject_id) DO UPDATE SET permission=EXCLUDED.permission`, repoID, input.SubjectType, input.SubjectID, input.Permission)
-		if err != nil {
+		if err := s.db.UpsertGrant(r.Context(), repoID, input.SubjectType, input.SubjectID, input.Permission); err != nil {
 			writeProblem(w, r, 500, "Database error", "Unable to save grant.")
 			return
 		}
@@ -251,8 +212,7 @@ func (s *Server) apiRepoGrants(w http.ResponseWriter, r *http.Request, repoID st
 			writeProblem(w, r, 400, "Invalid grant", "subject_type and subject_id are required.")
 			return
 		}
-		_, err := s.db.SQL.ExecContext(r.Context(), `DELETE FROM repo_grants WHERE repository_id=$1 AND subject_type=$2 AND subject_id=$3`, repoID, subjectType, subjectID)
-		if err != nil {
+		if err := s.db.DeleteGrant(r.Context(), repoID, subjectType, subjectID); err != nil {
 			writeProblem(w, r, 500, "Database error", "Unable to remove grant.")
 			return
 		}

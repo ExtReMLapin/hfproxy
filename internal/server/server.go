@@ -71,6 +71,9 @@ type Server struct {
 	apiFlightMu          sync.Mutex
 	apiFlights           map[string]*apiFlight
 	maintenanceWake      chan struct{}
+	authCacheOnce        sync.Once
+	authCacheStore       *authCache
+	hitLog               *hitLog
 }
 
 type loginBucket struct {
@@ -315,6 +318,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
+	// Hit events are flushed after the HTTP server has drained, so requests that
+	// finish during shutdown still get logged.
+	logCtx, stopHitLog := context.WithCancel(context.Background())
+	s.startHitLog(logCtx)
+	defer func() {
+		stopHitLog()
+		s.waitHitLog()
+	}()
 	errCh := make(chan error, 2)
 	go func() { errCh <- server.ListenAndServe() }()
 	s.logger.Info("http server started", "address", s.currentConfig().ListenAddr)
@@ -708,6 +719,10 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 		if len(token) < 24 || strings.ContainsAny(token, " \t\r\n") {
 			return nil, errUnauthenticated
 		}
+		cacheKey := authCacheKey("token", token)
+		if cached, ok := s.authLookups().get(cacheKey); ok {
+			return cached, nil
+		}
 		ring := s.keyRing()
 		var p Principal
 		var status string
@@ -732,6 +747,7 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 		if _, err := s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET last_used_at=now() WHERE id=$1 AND (last_used_at IS NULL OR last_used_at < now()-interval '1 minute')`, p.TokenID); err != nil {
 			s.logger.Warn("token last use could not be recorded", "request_id", requestID(r.Context()))
 		}
+		s.authLookups().put(cacheKey, &p)
 		return &p, nil
 	}
 	cookie, err := r.Cookie("hfproxy_session")
@@ -740,6 +756,10 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 	}
 	if cookie.Value == "" {
 		return nil, errUnauthenticated
+	}
+	sessionKey := authCacheKey("session", cookie.Value)
+	if cached, ok := s.authLookups().get(sessionKey); ok {
+		return cached, nil
 	}
 	var p Principal
 	var status string
@@ -756,7 +776,15 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 		s.currentConfig().SessionIdleTTL.String(), s.currentConfig().SessionAbsoluteTTL.String(), digest); err != nil {
 		s.logger.Warn("session activity could not be recorded", "request_id", requestID(r.Context()))
 	}
+	s.authLookups().put(sessionKey, &p)
 	return &p, nil
+}
+
+// authLookups returns the short-lived cache of credential lookups, created on
+// first use with the configured TTL.
+func (s *Server) authLookups() *authCache {
+	s.authCacheOnce.Do(func() { s.authCacheStore = newAuthCache(s.currentConfig().AuthCacheTTL) })
+	return s.authCacheStore
 }
 
 func hasBearer(r *http.Request) bool {

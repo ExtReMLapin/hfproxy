@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"embed"
 	"encoding/hex"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,12 +22,40 @@ type migration struct {
 	script  string
 }
 
-// migrations is the ordered schema history. Each entry must stay compatible
-// with the previous release of the code (add columns and tables first, drop or
-// rename only in a later release) so an image rollback after a migration keeps
-// working.
-var migrations = []migration{
-	{1, schemaV1}, {2, schemaV2}, {3, schemaV3}, {4, schemaV4}, {5, schemaV5}, {6, schemaV6}, {7, schemaV7}, {8, schemaV8}, {9, schemaV9}, {10, schemaV10}, {11, schemaV11},
+//go:embed migrations/*.sql
+var migrationFiles embed.FS
+
+// migrations is the ordered schema history, one embedded file per version
+// (migrations/0001_name.sql, ...). Each must stay compatible with the previous
+// release of the code (add columns and tables first, drop or rename only in a
+// later release) so an image rollback after a migration keeps working; see
+// migrations/README.md.
+var migrations = mustLoadMigrations()
+
+func mustLoadMigrations() []migration {
+	entries, err := migrationFiles.ReadDir("migrations")
+	if err != nil {
+		panic("embedded migrations unreadable: " + err.Error())
+	}
+	var list []migration
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".sql") {
+			continue
+		}
+		prefix, _, ok := strings.Cut(name, "_")
+		version, err := strconv.ParseInt(prefix, 10, 64)
+		if !ok || err != nil {
+			panic("migration file " + name + " must start with a version number and an underscore")
+		}
+		script, err := migrationFiles.ReadFile("migrations/" + name)
+		if err != nil {
+			panic("migration " + name + " unreadable: " + err.Error())
+		}
+		list = append(list, migration{version: version, script: string(script)})
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].version < list[j].version })
+	return list
 }
 
 // LatestMigration is the schema version this build expects. /readyz reports
@@ -217,220 +248,6 @@ func NewID() string {
 	hexValue := hex.EncodeToString(b[:])
 	return hexValue[:8] + "-" + hexValue[8:12] + "-" + hexValue[12:16] + "-" + hexValue[16:20] + "-" + hexValue[20:]
 }
-
-const schemaV1 = `
-CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    username TEXT NOT NULL UNIQUE,
-    email TEXT NOT NULL DEFAULT '',
-    display_name TEXT NOT NULL DEFAULT '',
-    password_hash TEXT NOT NULL DEFAULT '',
-    role TEXT NOT NULL DEFAULT 'reader' CHECK (role IN ('admin','operator','reader')),
-    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS external_identities (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,
-    issuer TEXT NOT NULL,
-    subject TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(issuer, subject)
-);
-CREATE TABLE IF NOT EXISTS groups (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    source TEXT NOT NULL DEFAULT 'local',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS group_members (
-    group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    PRIMARY KEY(group_id, user_id)
-);
-CREATE TABLE IF NOT EXISTS access_tokens (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    token_hash BYTEA NOT NULL UNIQUE,
-    prefix TEXT NOT NULL,
-    name TEXT NOT NULL DEFAULT '',
-    scopes TEXT[] NOT NULL DEFAULT ARRAY['read']::TEXT[],
-    expires_at TIMESTAMPTZ,
-    revoked_at TIMESTAMPTZ,
-    last_used_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS repositories (
-    id TEXT PRIMARY KEY,
-    repo_type TEXT NOT NULL CHECK (repo_type IN ('models','datasets','spaces')),
-    repo_id TEXT NOT NULL,
-    access_policy TEXT NOT NULL DEFAULT 'admin_only' CHECK (access_policy IN ('public','allowlist','admin_only')),
-    deleted_at TIMESTAMPTZ,
-    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(repo_type, repo_id)
-);
-CREATE TABLE IF NOT EXISTS repo_grants (
-    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-    subject_type TEXT NOT NULL CHECK (subject_type IN ('user','group')),
-    subject_id TEXT NOT NULL,
-    permission TEXT NOT NULL DEFAULT 'read' CHECK (permission IN ('read','write','admin')),
-    PRIMARY KEY(repository_id, subject_type, subject_id)
-);
-CREATE TABLE IF NOT EXISTS revisions (
-    id TEXT PRIMARY KEY,
-    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-    requested_ref TEXT NOT NULL,
-    commit_sha TEXT NOT NULL,
-    resolved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(repository_id, requested_ref)
-);
-CREATE TABLE IF NOT EXISTS blobs (
-    id TEXT PRIMARY KEY,
-    sha256 TEXT NOT NULL UNIQUE,
-    size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
-    storage_key TEXT NOT NULL UNIQUE,
-    content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    verified_at TIMESTAMPTZ
-);
-CREATE TABLE IF NOT EXISTS artifacts (
-    id TEXT PRIMARY KEY,
-    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-    commit_sha TEXT NOT NULL,
-    path TEXT NOT NULL,
-    blob_id TEXT NOT NULL REFERENCES blobs(id),
-    etag TEXT NOT NULL DEFAULT '',
-    last_modified TIMESTAMPTZ,
-    upstream_size BIGINT NOT NULL DEFAULT 0,
-    cached_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_accessed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(repository_id, commit_sha, path)
-);
-CREATE INDEX IF NOT EXISTS artifacts_repository_idx ON artifacts(repository_id, commit_sha);
-CREATE INDEX IF NOT EXISTS artifacts_last_access_idx ON artifacts(last_accessed_at);
-CREATE TABLE IF NOT EXISTS downloads (
-    id TEXT PRIMARY KEY,
-    repository_id TEXT REFERENCES repositories(id) ON DELETE SET NULL,
-    commit_sha TEXT NOT NULL DEFAULT '',
-    path TEXT NOT NULL,
-    status TEXT NOT NULL,
-    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    completed_at TIMESTAMPTZ,
-    bytes BIGINT NOT NULL DEFAULT 0,
-    error_class TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS audit_events (
-    id TEXT PRIMARY KEY,
-    actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-    action TEXT NOT NULL,
-    target_type TEXT NOT NULL DEFAULT '',
-    target_id TEXT NOT NULL DEFAULT '',
-    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    request_id TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS audit_events_created_idx ON audit_events(created_at DESC);
-CREATE TABLE IF NOT EXISTS sessions (
-    token_hash BYTEA PRIMARY KEY,
-    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    csrf_hash BYTEA NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    expires_at TIMESTAMPTZ NOT NULL
-);
-CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
-`
-
-const schemaV2 = `
-CREATE TABLE IF NOT EXISTS app_settings (
-    setting_key TEXT PRIMARY KEY,
-    ciphertext BYTEA NOT NULL,
-    updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-`
-
-const schemaV3 = `
-CREATE TABLE IF NOT EXISTS download_resumptions (
-    id TEXT PRIMARY KEY,
-    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-    commit_sha TEXT NOT NULL,
-    path TEXT NOT NULL,
-    upstream_etag TEXT NOT NULL DEFAULT '',
-    total_size BIGINT NOT NULL CHECK (total_size >= 0),
-    content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
-    chunk_size BIGINT NOT NULL CHECK (chunk_size > 0),
-    completed_bytes BIGINT NOT NULL DEFAULT 0 CHECK (completed_bytes >= 0),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(repository_id, commit_sha, path)
-);
-CREATE INDEX IF NOT EXISTS download_resumptions_updated_idx ON download_resumptions(updated_at);
-`
-
-const schemaV4 = `
-ALTER TABLE blobs ADD COLUMN IF NOT EXISTS orphaned_at TIMESTAMPTZ;
-CREATE INDEX IF NOT EXISTS blobs_orphaned_idx ON blobs(orphaned_at) WHERE orphaned_at IS NOT NULL;
-`
-
-const schemaV5 = `
-DELETE FROM repo_grants g USING repositories r WHERE g.repository_id=r.id AND r.deleted_at IS NOT NULL;
-`
-
-const schemaV6 = `
-CREATE INDEX IF NOT EXISTS artifacts_blob_idx ON artifacts(blob_id);
-CREATE INDEX IF NOT EXISTS downloads_started_idx ON downloads(started_at);
-CREATE INDEX IF NOT EXISTS access_tokens_user_idx ON access_tokens(user_id);
-CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
-CREATE INDEX IF NOT EXISTS group_members_user_idx ON group_members(user_id);
-`
-
-const schemaV7 = `
-ALTER TABLE downloads ADD COLUMN IF NOT EXISTS user_id TEXT;
-ALTER TABLE downloads ADD COLUMN IF NOT EXISTS token_id TEXT;
-ALTER TABLE downloads ADD COLUMN IF NOT EXISTS client_ip TEXT;
-`
-
-const schemaV8 = `
-CREATE TABLE IF NOT EXISTS login_attempts (
-    key TEXT PRIMARY KEY,
-    window_start TIMESTAMPTZ NOT NULL,
-    attempts INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS login_attempts_window_idx ON login_attempts(window_start);
-`
-
-const schemaV9 = `
-ALTER TABLE access_tokens ADD COLUMN IF NOT EXISTS key_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS key_id TEXT NOT NULL DEFAULT '';
-`
-
-const schemaV10 = `
-CREATE TABLE IF NOT EXISTS cache_pins (
-    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
-    commit_sha TEXT NOT NULL DEFAULT '',
-    created_by TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY(repository_id, commit_sha)
-);
-`
-
-// schemaV11 lets a pin name a branch or tag. A pin is now one of:
-//
-//	commit_sha='' and ref=''   every revision of the repository
-//	commit_sha=X  and ref=''   one commit
-//	commit_sha='' and ref=R    whatever commit R points to now
-//
-// Rows written by the previous release have ref=” and keep their meaning.
-const schemaV11 = `
-ALTER TABLE cache_pins ADD COLUMN IF NOT EXISTS ref TEXT NOT NULL DEFAULT '';
-ALTER TABLE cache_pins DROP CONSTRAINT IF EXISTS cache_pins_pkey;
-ALTER TABLE cache_pins ADD PRIMARY KEY (repository_id, commit_sha, ref);
-`
 
 // PinnedArtifactSQL is a correlated subquery, true for an artifact aliased "a"
 // that some pin covers: its repository is pinned, its commit is pinned, or a

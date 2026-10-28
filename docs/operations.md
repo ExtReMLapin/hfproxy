@@ -11,7 +11,7 @@
 2. Run `hfproxy migrate status`, then `hfproxy migrate up`, or start one instance with `HFPROXY_AUTO_MIGRATE=true`.
 3. Roll out the new image. A new build refuses to start until the schema is at its version, and `/readyz` stays unavailable until then.
 
-Migrations only add tables, columns and indexes while a release depends on the old shape, so the previous image still starts after a migration. To roll back, redeploy the previous image; do not remove migration rows by hand.
+Migrations are embedded SQL files (`internal/db/migrations`, one per version) and only add tables, columns and indexes while a release depends on the old shape, so the previous image still starts after a migration. To roll back, redeploy the previous image; do not remove migration rows by hand.
 
 One rollback limit: from 0.0.4 on, access tokens move to a derived key the first time they are used, sessions are created under it, and saved settings are rewritten in a keyed format when they are saved or rotated. An older release cannot verify those: its users would have to sign in again and create new tokens, and it cannot read re-saved settings. Back up the database before upgrading, and treat a rollback past 0.0.4 as a restore from that backup.
 
@@ -62,6 +62,22 @@ Suggested starting points, to adjust to your traffic:
 - **Freshness**: a ref is confirmed with the Hub at least every `HFPROXY_CACHE_REF_TTL` while the Hub is reachable.
 
 [prometheus-alerts.yml](prometheus-alerts.yml) contains matching alert rules, and [grafana-observability.json](grafana-observability.json) the dashboard.
+
+## Running several replicas
+
+Several instances can share one PostgreSQL database and one bucket. What is shared and what is per instance:
+
+| State | Scope | Consequence |
+| --- | --- | --- |
+| Catalog, pins, settings, sessions, tokens | PostgreSQL, shared | Consistent everywhere |
+| Login rate limits | PostgreSQL, shared | Limits hold across replicas |
+| Cache fill of one file | A PostgreSQL advisory lock per file, shared | A file with a verifiable digest (LFS) is fetched from the Hub once; the other replica waits, then serves the cached copy |
+| Concurrent requests for a file without a digest (small non-LFS files) | Per instance | Followers stream straight from the Hub instead of waiting, so a burst can fetch such a file several times |
+| Negative cache (404/410 from the Hub), metadata cache, circuit breaker | Per instance | Each replica learns on its own; a replica may ask the Hub once more |
+| Fill slots (`HFPROXY_CACHE_FILL_CONCURRENCY`), staging space | Per instance | The limits apply to each replica, so the fleet total is the limit times the number of replicas |
+| Settings saved from the console | PostgreSQL, but loaded at start | Other replicas pick them up when they restart |
+
+Pin one replica as the only one with `HFPROXY_AUTO_MIGRATE=true` (or run `hfproxy migrate up` as a job), and give every replica the same `HFPROXY_SESSION_SECRET`. A single replica remains a valid choice: failover is then a restart, and the cache survives because it lives in the bucket.
 
 ## Capacity
 

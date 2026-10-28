@@ -100,6 +100,15 @@ type Config struct {
 	// be served when the Hub is failing.
 	APICacheMaxBytes int64
 	APICacheMaxStale time.Duration
+
+	// AuthCacheTTL is how long a successful token or session lookup is reused
+	// (HFPROXY_AUTH_CACHE_TTL, 0 turns it off). Revocations made through this
+	// instance take effect at once; changes made elsewhere within this time.
+	AuthCacheTTL time.Duration
+	// DownloadLogQueue is the number of hit events buffered before they are
+	// written in batches (HFPROXY_DOWNLOAD_LOG_QUEUE, 0 writes each one in the
+	// request).
+	DownloadLogQueue int
 }
 
 func Load() (Config, error) {
@@ -183,6 +192,8 @@ func Load() (Config, error) {
 	c.UpstreamBreakerCooldown = duration("UPSTREAM_BREAKER_COOLDOWN", 30*time.Second)
 	c.APICacheMaxBytes = int64(number("API_CACHE_MAX_BYTES", 32<<20))
 	c.APICacheMaxStale = duration("API_CACHE_MAX_STALE", 24*time.Hour)
+	c.AuthCacheTTL = duration("AUTH_CACHE_TTL", 5*time.Second)
+	c.DownloadLogQueue = number("DOWNLOAD_LOG_QUEUE", 1024)
 	if err := c.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -270,6 +281,9 @@ func (c Config) Validate() error {
 	}
 	if c.CacheFillConcurrency < 0 || c.CacheMaxTotalSize < 0 || c.RetentionDownloads < 0 || c.RetentionAudit < 0 {
 		return fmt.Errorf("HFPROXY_CACHE_FILL_CONCURRENCY, HFPROXY_CACHE_MAX_TOTAL_SIZE and the retention periods must not be negative")
+	}
+	if c.AuthCacheTTL < 0 || c.AuthCacheTTL > time.Minute || c.DownloadLogQueue < 0 {
+		return fmt.Errorf("HFPROXY_AUTH_CACHE_TTL must be between 0 and 1m and HFPROXY_DOWNLOAD_LOG_QUEUE must not be negative")
 	}
 	if c.UpstreamBreakerThreshold < 0 || c.UpstreamBreakerCooldown < 0 || c.APICacheMaxBytes < 0 || c.APICacheMaxStale < 0 {
 		return fmt.Errorf("the upstream breaker and API cache settings must not be negative")

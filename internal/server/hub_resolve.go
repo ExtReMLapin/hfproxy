@@ -313,17 +313,17 @@ func (s *Server) fillCache(res *fileResolution) {
 		}
 		defer releaseStaging()
 	}
-	if res.sizeKnown {
-		unlockResume, lockErr := s.lockDownloadResume(r.Context(), res.repoPK, res.commit, res.parsed.FilePath)
-		if lockErr != nil {
-			s.finishDownload(r.Context(), fill.downloadID, 0, "resume_lock")
-			writeProblem(w, r, http.StatusInternalServerError, "Cache metadata error", "Unable to coordinate the cache fill.")
-			return
-		}
-		defer unlockResume()
-		if s.serveCacheHit(res, res.commit, "Unable to recheck cache metadata.") {
-			return
-		}
+	// A database lock per file makes fills exclusive across all instances that
+	// share the database: the others wait here, then find the file cached.
+	unlockFill, lockErr := s.lockDownloadResume(r.Context(), res.repoPK, res.commit, res.parsed.FilePath)
+	if lockErr != nil {
+		s.finishDownload(r.Context(), fill.downloadID, 0, "resume_lock")
+		writeProblem(w, r, http.StatusInternalServerError, "Cache metadata error", "Unable to coordinate the cache fill.")
+		return
+	}
+	defer unlockFill()
+	if s.serveCacheHit(res, res.commit, "Unable to recheck cache metadata.") {
+		return
 	}
 	defer func() {
 		if fill.body != nil {

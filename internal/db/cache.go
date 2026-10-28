@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -172,4 +173,32 @@ func nullTime(t sql.NullTime) any {
 		return nil
 	}
 	return t.Time
+}
+
+// DownloadEvent is one finished download to log.
+type DownloadEvent struct {
+	RepoID, Commit, Path, Status, ErrorClass string
+	Bytes                                    int64
+	Caller                                   Caller
+}
+
+// RecordDownloads logs several finished downloads with a single statement.
+func (s *Store) RecordDownloads(ctx context.Context, events []DownloadEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	const columns = 10
+	var query strings.Builder
+	query.WriteString("INSERT INTO downloads(id,repository_id,commit_sha,path,status,completed_at,bytes,error_class,user_id,token_id,client_ip) VALUES ")
+	args := make([]any, 0, len(events)*columns)
+	for i, event := range events {
+		if i > 0 {
+			query.WriteString(",")
+		}
+		n := i*columns + 1
+		fmt.Fprintf(&query, "($%d,$%d,$%d,$%d,$%d,now(),$%d,$%d,NULLIF($%d,''),NULLIF($%d,''),NULLIF($%d,''))", n, n+1, n+2, n+3, n+4, n+5, n+6, n+7, n+8, n+9)
+		args = append(args, NewID(), event.RepoID, event.Commit, event.Path, event.Status, event.Bytes, event.ErrorClass, event.Caller.UserID, event.Caller.TokenID, event.Caller.ClientIP)
+	}
+	_, err := s.SQL.ExecContext(ctx, query.String(), args...)
+	return err
 }
