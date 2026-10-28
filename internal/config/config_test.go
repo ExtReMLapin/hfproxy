@@ -115,6 +115,7 @@ func TestValidateRejectsInvalidOperationalLimits(t *testing.T) {
 		"negative download period": func(c *Config) { c.RetentionDownloads = -1 },
 		"negative audit period":    func(c *Config) { c.RetentionAudit = -1 },
 		"metrics address":          func(c *Config) { c.MetricsAddr = "no-port" },
+		"negative staging minimum": func(c *Config) { c.StagingMinFreeBytes = -1 },
 	} {
 		c := base()
 		mutate(&c)

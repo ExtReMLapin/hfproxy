@@ -45,6 +45,8 @@ Tokens created before this key separation existed (hashed straight from the secr
 | Log line "upstream circuit opened" | Five consecutive Hub failures | Expected during an outage: requests fail fast for the cooldown, then one probe retries. If it repeats while the Hub is healthy, check your egress path and proxy |
 | Clients get 503 `Cache fill capacity exhausted` | More simultaneous fills than `HFPROXY_CACHE_FILL_CONCURRENCY` | Retry; raise the limit if disk and bandwidth allow |
 | Clients get 507 | Staging volume too small for the file | Enlarge `HFPROXY_STAGING_DIR` or lower concurrency |
+| `/readyz` 503 with `"reason":"staging_space"` | Less free staging space than `HFPROXY_STAGING_MIN_FREE_BYTES` | Free or enlarge the staging volume; the instance is back in rotation once the space returns |
+| Log "the cache is over its size limit but what remains is pinned" | Pinned files alone exceed the quota | `hfproxy cache pins` shows what is pinned; unpin what is no longer essential or raise `HFPROXY_CACHE_MAX_TOTAL_SIZE` |
 | Storage errors in logs, `hfproxy_storage_errors_total` rising | Object storage outage or bad credentials | Restore storage access; cached reads fail until then |
 | Cache keeps growing | No quota set | Set `HFPROXY_CACHE_MAX_TOTAL_SIZE`; use `hfproxy cache purge` (dry run by default) |
 | Cannot sign in, admin locked out | Forgotten password | `scripts/reset-admin-password.sh` or `hfproxy admin reset-password` |

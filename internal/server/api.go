@@ -85,6 +85,8 @@ func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {
 			allow = "GET, POST, DELETE"
 		} else if len(parts) == 2 && parts[1] == "preload" {
 			allow = "POST"
+		} else if len(parts) == 2 && parts[1] == "pins" {
+			allow = "GET, POST, DELETE"
 		} else if len(parts) != 1 {
 			writeProblem(w, r, http.StatusNotFound, "Not found", "This hfproxy API route is not implemented.")
 			return
@@ -189,6 +191,7 @@ type settingsResponse struct {
 	SessionIdleTTL         string   `json:"session_idle_ttl"`
 	SessionAbsoluteTTL     string   `json:"session_absolute_ttl"`
 	CacheMaxFileSize       int64    `json:"cache_max_file_size"`
+	CacheMaxTotalSize      int64    `json:"cache_max_total_size"`
 	CacheRefTTL            string   `json:"cache_ref_ttl"`
 	CacheNegativeTTL       string   `json:"cache_negative_ttl"`
 	CacheGCGrace           string   `json:"cache_gc_grace"`
@@ -236,6 +239,7 @@ type settingsInput struct {
 	SessionIdleTTL         string   `json:"session_idle_ttl"`
 	SessionAbsoluteTTL     string   `json:"session_absolute_ttl"`
 	CacheMaxFileSize       int64    `json:"cache_max_file_size"`
+	CacheMaxTotalSize      *int64   `json:"cache_max_total_size"`
 	CacheRefTTL            string   `json:"cache_ref_ttl"`
 	CacheNegativeTTL       string   `json:"cache_negative_ttl"`
 	CacheGCGrace           string   `json:"cache_gc_grace"`
@@ -267,7 +271,7 @@ func settingsView(cfg config.Config) settingsResponse {
 		PublicURL: cfg.PublicURL, HFBaseURL: cfg.HFBaseURL, HFProxySet: cfg.HFProxyURL != "", HFAllowedHosts: cfg.HFAllowedHosts, HFTimeout: cfg.HFTimeout.String(), HFTokenSet: cfg.HFToken != "",
 		S3Endpoint: cfg.S3Endpoint, S3Region: cfg.S3Region, S3Bucket: cfg.S3Bucket, S3Prefix: cfg.S3Prefix, S3ForcePathStyle: cfg.S3ForcePathStyle, S3ServerSideEncryption: cfg.S3ServerSideEncryption,
 		S3AccessKeySet: cfg.S3AccessKey != "", S3SecretKeySet: cfg.S3SecretKey != "", AuthMode: cfg.AuthMode, AnonymousPublicRead: cfg.AnonymousPublicRead,
-		SessionIdleTTL: cfg.SessionIdleTTL.String(), SessionAbsoluteTTL: cfg.SessionAbsoluteTTL.String(), CacheMaxFileSize: cfg.CacheMaxFileSize,
+		SessionIdleTTL: cfg.SessionIdleTTL.String(), SessionAbsoluteTTL: cfg.SessionAbsoluteTTL.String(), CacheMaxFileSize: cfg.CacheMaxFileSize, CacheMaxTotalSize: cfg.CacheMaxTotalSize,
 		CacheRefTTL: cfg.CacheRefTTL.String(), CacheNegativeTTL: cfg.CacheNegativeTTL.String(), CacheGCGrace: cfg.CacheGCGrace.String(),
 		OIDCIssuer: cfg.OIDCIssuer, OIDCClientID: cfg.OIDCClientID, OIDCClientSecretSet: cfg.OIDCClientSecret != "", OIDCRedirectURL: cfg.OIDCRedirectURL,
 		OIDCAutoProvision: cfg.OIDCAutoProvision, LDAPURL: cfg.LDAPURL, LDAPStartTLS: cfg.LDAPStartTLS, LDAPBindDN: cfg.LDAPBindDN,
@@ -357,6 +361,13 @@ func (in settingsInput) apply(cfg config.Config) (config.Config, error) {
 	cfg.S3Endpoint, cfg.S3Region, cfg.S3Bucket, cfg.S3Prefix, cfg.S3ForcePathStyle, cfg.S3ServerSideEncryption = strings.TrimSpace(in.S3Endpoint), strings.TrimSpace(in.S3Region), strings.TrimSpace(in.S3Bucket), strings.Trim(in.S3Prefix, "/"), in.S3ForcePathStyle, in.S3ServerSideEncryption
 	cfg.AuthMode, cfg.AnonymousPublicRead = in.AuthMode, in.AnonymousPublicRead
 	cfg.CacheMaxFileSize = in.CacheMaxFileSize
+	// Left out of the request, the limit stays as it is; sending 0 removes it.
+	if in.CacheMaxTotalSize != nil {
+		if *in.CacheMaxTotalSize < 0 {
+			return config.Config{}, errors.New("the total cache size limit cannot be negative")
+		}
+		cfg.CacheMaxTotalSize = *in.CacheMaxTotalSize
+	}
 	cfg.SessionIdleTTL, err = parseDuration("session idle TTL", in.SessionIdleTTL, cfg.SessionIdleTTL)
 	if err != nil {
 		return config.Config{}, err
@@ -711,6 +722,10 @@ func (s *Server) apiRepo(w http.ResponseWriter, r *http.Request, path string) {
 	}
 	if len(parts) == 2 && parts[1] == "preload" && r.Method == http.MethodPost {
 		s.startRepoPreload(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "pins" {
+		s.apiRepoPins(w, r, parts[0])
 		return
 	}
 	if len(parts) != 1 {

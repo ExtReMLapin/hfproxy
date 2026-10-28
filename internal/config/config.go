@@ -67,7 +67,10 @@ type Config struct {
 
 	// Environment-only settings: they are not editable from the console and
 	// are never overridden by saved settings.
-	StagingDir           string
+	StagingDir string
+	// StagingMinFreeBytes makes /readyz fail while the staging directory has
+	// less free space than this (0 turns the check off).
+	StagingMinFreeBytes  int64
 	CacheFillConcurrency int
 	CacheMaxTotalSize    int64
 	RetentionDownloads   time.Duration
@@ -150,6 +153,7 @@ func Load() (Config, error) {
 	c.OTLPEndpoint = value("OTLP_ENDPOINT", "")
 	c.CacheInventoryRefresh = duration("CACHE_INVENTORY_REFRESH", 5*time.Minute)
 	c.StagingDir = value("STAGING_DIR", "")
+	c.StagingMinFreeBytes = int64(number("STAGING_MIN_FREE_BYTES", 0))
 	c.CacheFillConcurrency = number("CACHE_FILL_CONCURRENCY", 4)
 	c.CacheMaxTotalSize = int64(number("CACHE_MAX_TOTAL_SIZE", 0))
 	c.RetentionDownloads = duration("RETENTION_DOWNLOADS", 90*24*time.Hour)
@@ -224,6 +228,9 @@ func (c Config) Validate() error {
 	}
 	if c.TracingEnabled && c.OTLPEndpoint == "" {
 		return fmt.Errorf("HFPROXY_OTLP_ENDPOINT is required when tracing is enabled")
+	}
+	if c.StagingMinFreeBytes < 0 {
+		return fmt.Errorf("HFPROXY_STAGING_MIN_FREE_BYTES must not be negative")
 	}
 	if c.CacheFillConcurrency < 0 || c.CacheMaxTotalSize < 0 || c.RetentionDownloads < 0 || c.RetentionAudit < 0 {
 		return fmt.Errorf("HFPROXY_CACHE_FILL_CONCURRENCY, HFPROXY_CACHE_MAX_TOTAL_SIZE and the retention periods must not be negative")
@@ -409,7 +416,7 @@ func validateEnvironmentOverrides() error {
 			}
 		}
 	}
-	for _, key := range []string{"CACHE_MAX_FILE_SIZE", "CACHE_MAX_TOTAL_SIZE", "CACHE_FILL_CONCURRENCY", "UPSTREAM_BREAKER_THRESHOLD", "API_CACHE_MAX_BYTES"} {
+	for _, key := range []string{"CACHE_MAX_FILE_SIZE", "CACHE_MAX_TOTAL_SIZE", "CACHE_FILL_CONCURRENCY", "UPSTREAM_BREAKER_THRESHOLD", "API_CACHE_MAX_BYTES", "STAGING_MIN_FREE_BYTES"} {
 		name := "HFPROXY_" + key
 		if value, ok := os.LookupEnv(name); ok && value != "" {
 			if _, err := strconv.Atoi(value); err != nil {

@@ -160,3 +160,21 @@ func TestPreviousSessionSecretsParsingAndValidation(t *testing.T) {
 		t.Fatal("an unbounded list of previous secrets was accepted")
 	}
 }
+
+func TestSavedSettingsWithoutTheCacheLimitKeepTheEnvironmentValue(t *testing.T) {
+	base := Config{CacheMaxTotalSize: 500}
+	if got := (managedSettings{}).apply(base).CacheMaxTotalSize; got != 500 {
+		t.Fatalf("settings saved before the limit existed reset it to %d, want the environment's 500", got)
+	}
+	zero := int64(0)
+	if got := (managedSettings{CacheMaxTotalSize: &zero}).apply(base).CacheMaxTotalSize; got != 0 {
+		t.Fatalf("an explicit 0 (unlimited) from the console was ignored: %d", got)
+	}
+	saved := managedFromConfig(Config{CacheMaxTotalSize: 123})
+	if saved.CacheMaxTotalSize == nil || *saved.CacheMaxTotalSize != 123 {
+		t.Fatal("the limit is not saved with the other settings")
+	}
+	if got := saved.apply(Config{CacheMaxTotalSize: 9}).CacheMaxTotalSize; got != 123 {
+		t.Fatalf("saved limit = %d, want 123", got)
+	}
+}

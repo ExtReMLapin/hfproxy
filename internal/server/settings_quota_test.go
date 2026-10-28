@@ -1,0 +1,129 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/nicolas/hfproxy/internal/config"
+	"github.com/nicolas/hfproxy/internal/db"
+)
+
+// settingsAdmin returns an administrator token principal backed by a real user,
+// so audit rows can reference it.
+func settingsAdmin(t *testing.T, store *db.Store) *Principal {
+	t.Helper()
+	id := db.NewID()
+	if _, err := store.SQL.Exec(`INSERT INTO users(id,username,role) VALUES($1,$2,'admin')`, id, "settings-"+id[:8]); err != nil {
+		t.Fatal(err)
+	}
+	return &Principal{ID: id, Username: "settings", Role: "admin", Authenticated: true, TokenID: "settings-token", Scopes: []string{"admin"}}
+}
+
+// settingsPayload does what the console does: read the settings and send them
+// back, without the read-only *_set flags.
+func settingsPayload(t *testing.T, s *Server, admin *Principal) map[string]any {
+	t.Helper()
+	rec := auditAPIDoAs(s, admin, http.MethodGet, "/api/v1/settings", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET settings = %d %s", rec.Code, rec.Body.String())
+	}
+	var view map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	for key := range view {
+		if strings.HasSuffix(key, "_set") {
+			delete(view, key)
+		}
+	}
+	return view
+}
+
+func putSettings(t *testing.T, s *Server, admin *Principal, payload map[string]any) (int, map[string]any) {
+	t.Helper()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := auditAPIDoAs(s, admin, http.MethodPut, "/api/v1/settings", string(body))
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	return rec.Code, out
+}
+
+func TestTotalCacheLimitCanBeChangedFromTheConsole(t *testing.T) {
+	store := auditAPIFreshStore(t)
+	s := auditAPINewServer(t, store, auditAPIConfig())
+	admin := settingsAdmin(t, store)
+
+	view := settingsPayload(t, s, admin)
+	if limit, ok := view["cache_max_total_size"]; !ok || limit.(float64) != 0 {
+		t.Fatalf("the settings view must report the limit (0 = unlimited), got %v", view["cache_max_total_size"])
+	}
+
+	view["cache_max_total_size"] = float64(5 << 30)
+	if status, out := putSettings(t, s, admin, view); status != http.StatusOK || out["cache_max_total_size"].(float64) != float64(5<<30) {
+		t.Fatalf("PUT = %d %v", status, out)
+	}
+	if got := s.currentConfig().CacheMaxTotalSize; got != 5<<30 {
+		t.Fatalf("the running server still uses %d, want the new limit applied at once", got)
+	}
+	saved, err := config.LoadPersisted(context.Background(), store.SQL, auditAPIConfig())
+	if err != nil || saved.CacheMaxTotalSize != 5<<30 {
+		t.Fatalf("saved limit = %d (%v), want it persisted across restarts", saved.CacheMaxTotalSize, err)
+	}
+
+	// A client that does not know the field must not remove the limit.
+	older := settingsPayload(t, s, admin)
+	delete(older, "cache_max_total_size")
+	if status, _ := putSettings(t, s, admin, older); status != http.StatusOK {
+		t.Fatalf("PUT without the field = %d", status)
+	}
+	if got := s.currentConfig().CacheMaxTotalSize; got != 5<<30 {
+		t.Fatalf("leaving the field out changed the limit to %d", got)
+	}
+
+	negative := settingsPayload(t, s, admin)
+	negative["cache_max_total_size"] = float64(-1)
+	if status, _ := putSettings(t, s, admin, negative); status != http.StatusBadRequest {
+		t.Fatalf("a negative limit = %d, want 400", status)
+	}
+
+	off := settingsPayload(t, s, admin)
+	off["cache_max_total_size"] = float64(0)
+	if status, _ := putSettings(t, s, admin, off); status != http.StatusOK || s.currentConfig().CacheMaxTotalSize != 0 {
+		t.Fatalf("sending 0 must remove the limit: status %d, limit %d", status, s.currentConfig().CacheMaxTotalSize)
+	}
+}
+
+func TestLoweringTheLimitEvictsWithoutWaitingForTheNextTick(t *testing.T) {
+	store := auditAPIFreshStore(t)
+	cfg := auditAPIConfig()
+	cfg.LogLevel, cfg.DatabaseURL = "info", "postgres://unused" // applyConfig validates the whole configuration
+	s := auditAPINewServer(t, store, cfg)
+	s.maintenanceWake = make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	s.startMaintenance(ctx) // the periodic tick is a minute away at first, then ten
+
+	repo := seedRepository(t, store, "org/quota-live")
+	seedPinnedArtifact(t, store, repo, pinCommitA, "old", 10, "2 days")
+	seedPinnedArtifact(t, store, repo, pinCommitA, "new", 10, "1 day")
+
+	cfg.CacheMaxTotalSize = 15
+	if err := s.applyConfig(ctx, cfg, ""); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if remainingArtifacts(t, store) == "new" {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("the new limit was not enforced within 5 seconds (artifacts left: %q); eviction waited for the periodic timer", remainingArtifacts(t, store))
+}

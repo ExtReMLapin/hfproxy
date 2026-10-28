@@ -24,7 +24,7 @@ type migration struct {
 // rename only in a later release) so an image rollback after a migration keeps
 // working.
 var migrations = []migration{
-	{1, schemaV1}, {2, schemaV2}, {3, schemaV3}, {4, schemaV4}, {5, schemaV5}, {6, schemaV6}, {7, schemaV7}, {8, schemaV8}, {9, schemaV9},
+	{1, schemaV1}, {2, schemaV2}, {3, schemaV3}, {4, schemaV4}, {5, schemaV5}, {6, schemaV6}, {7, schemaV7}, {8, schemaV8}, {9, schemaV9}, {10, schemaV10}, {11, schemaV11},
 }
 
 // LatestMigration is the schema version this build expects. /readyz reports
@@ -401,3 +401,34 @@ const schemaV9 = `
 ALTER TABLE access_tokens ADD COLUMN IF NOT EXISTS key_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS key_id TEXT NOT NULL DEFAULT '';
 `
+
+const schemaV10 = `
+CREATE TABLE IF NOT EXISTS cache_pins (
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    commit_sha TEXT NOT NULL DEFAULT '',
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY(repository_id, commit_sha)
+);
+`
+
+// schemaV11 lets a pin name a branch or tag. A pin is now one of:
+//
+//	commit_sha='' and ref=''   every revision of the repository
+//	commit_sha=X  and ref=''   one commit
+//	commit_sha='' and ref=R    whatever commit R points to now
+//
+// Rows written by the previous release have ref=” and keep their meaning.
+const schemaV11 = `
+ALTER TABLE cache_pins ADD COLUMN IF NOT EXISTS ref TEXT NOT NULL DEFAULT '';
+ALTER TABLE cache_pins DROP CONSTRAINT IF EXISTS cache_pins_pkey;
+ALTER TABLE cache_pins ADD PRIMARY KEY (repository_id, commit_sha, ref);
+`
+
+// PinnedArtifactSQL is a correlated subquery, true for an artifact aliased "a"
+// that some pin covers: its repository is pinned, its commit is pinned, or a
+// pinned branch or tag currently points to its commit.
+const PinnedArtifactSQL = `SELECT 1 FROM cache_pins p WHERE p.repository_id=a.repository_id AND (
+		(p.commit_sha='' AND p.ref='')
+		OR (p.commit_sha<>'' AND p.commit_sha=a.commit_sha)
+		OR (p.ref<>'' AND EXISTS (SELECT 1 FROM revisions v WHERE v.repository_id=p.repository_id AND v.requested_ref=p.ref AND v.commit_sha=a.commit_sha)))`

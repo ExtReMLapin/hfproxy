@@ -68,6 +68,7 @@ type Server struct {
 	apiCache             *apiCache
 	apiFlightMu          sync.Mutex
 	apiFlights           map[string]*apiFlight
+	maintenanceWake      chan struct{}
 }
 
 type loginBucket struct {
@@ -120,6 +121,7 @@ func New(ctx context.Context, cfg config.Config, store *db.Store, objectStore *s
 		slots = defaultFillConcurrency
 	}
 	s.fillSlots = make(chan struct{}, slots)
+	s.maintenanceWake = make(chan struct{}, 1)
 	if cfg.StagingDir != "" {
 		if err := os.MkdirAll(cfg.StagingDir, 0o700); err != nil {
 			return nil, fmt.Errorf("prepare staging directory: %w", err)
@@ -145,6 +147,9 @@ func (s *Server) startCacheInventoryMetrics(ctx context.Context) {
 		}
 		s.metrics.setGauge("hfproxy_cache_objects", float64(count))
 		s.metrics.setGauge("hfproxy_cache_size_bytes", float64(size))
+		if pinned, err := s.pinnedBytes(ctx); err == nil {
+			s.metrics.setGauge("hfproxy_cache_pinned_bytes", float64(pinned))
+		}
 	}
 	go func() {
 		refreshInventory()
@@ -249,6 +254,11 @@ func (s *Server) applyConfig(ctx context.Context, cfg config.Config, actorID str
 	activatePreparedTracing(ctx, traceProcessor, cfg)
 	select {
 	case s.inventoryRefreshWake <- struct{}{}:
+	default:
+	}
+	// A changed cache size limit should take effect now, not at the next tick.
+	select {
+	case s.maintenanceWake <- struct{}{}:
 	default:
 	}
 	return nil
@@ -358,6 +368,10 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	version, migrationErr := db.MigrationStatus(ctx, s.db.SQL)
 	if s.db.SQL.PingContext(ctx) != nil || migrationErr != nil || version < db.LatestMigration || s.currentStorage().Ready(ctx) != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+		return
+	}
+	if s.stagingLow() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "reason": "staging_space"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
