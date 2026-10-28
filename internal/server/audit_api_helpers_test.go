@@ -33,7 +33,7 @@ func auditAPIConfig() config.Config {
 	}
 }
 
-func auditAPINewServer(t *testing.T, store *db.Store, cfg config.Config) *Server {
+func auditAPINewServer(t testing.TB, store *db.Store, cfg config.Config) *Server {
 	t.Helper()
 	s := &Server{db: store, metrics: newMetrics(), logger: slog.New(slog.NewTextHandler(io.Discard, nil)), preloads: make(map[string]*preloadJob), preloadSlots: make(chan struct{}, 2)}
 	s.runtime.Store(&runtimeState{config: cfg, httpClient: newHFHTTPClient(cfg)})
@@ -41,7 +41,7 @@ func auditAPINewServer(t *testing.T, store *db.Store, cfg config.Config) *Server
 }
 
 // auditAPIFreshStore creates an isolated, migrated PostgreSQL database for one test.
-func auditAPIFreshStore(t *testing.T) *db.Store {
+func auditAPIFreshStore(t testing.TB) *db.Store {
 	t.Helper()
 	dsn := auditAPIFreshDSN(t)
 	ctx := context.Background()
@@ -57,7 +57,7 @@ func auditAPIFreshStore(t *testing.T) *db.Store {
 }
 
 // auditAPIFreshDSN creates an empty database named audit_api_<random> and returns its DSN.
-func auditAPIFreshDSN(t *testing.T) string {
+func auditAPIFreshDSN(t testing.TB) string {
 	t.Helper()
 	base := os.Getenv("HFPROXY_TEST_DATABASE_URL")
 	if base == "" {

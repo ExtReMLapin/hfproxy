@@ -204,6 +204,7 @@ func (s *Server) apiUserPatch(w http.ResponseWriter, r *http.Request, id string)
 		writeProblem(w, r, 500, "Database error", "Unable to update user.")
 		return
 	}
+	s.authLookups().purge()
 	s.audit(r.Context(), p.ID, "user.update", "user", id, map[string]any{"role": input.Role, "status": input.Status})
 	writeJSON(w, 200, map[string]string{"id": id, "role": input.Role, "status": input.Status})
 }

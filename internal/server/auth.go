@@ -154,6 +154,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 			s.logger.Error("session could not be deleted at logout; it stays valid until it expires", "request_id", requestID(r.Context()))
 		}
 	}
+	s.authLookups().purge()
 	s.audit(r.Context(), actorID, "auth.logout", "user", actorID, nil)
 	clearCookie(w, "hfproxy_session")
 	clearCookie(w, "hfproxy_csrf")

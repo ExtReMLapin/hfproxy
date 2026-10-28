@@ -362,9 +362,11 @@ func safeUpstreamHeader(value string, max int) string {
 }
 
 func (s *Server) recordDownload(ctx context.Context, repoID, commit, file, status string, bytes int64, errorClass string) {
-	caller := callerOf(ctx)
-	_, err := s.db.SQL.ExecContext(ctx, "INSERT INTO downloads(id,repository_id,commit_sha,path,status,completed_at,bytes,error_class,user_id,token_id,client_ip) VALUES($1,$2,$3,$4,$5,now(),$6,$7,NULLIF($8,''),NULLIF($9,''),NULLIF($10,''))", db.NewID(), repoID, commit, file, status, bytes, errorClass, caller.UserID, caller.TokenID, caller.ClientIP)
-	if err != nil {
+	event := db.DownloadEvent{RepoID: repoID, Commit: commit, Path: file, Status: status, Bytes: bytes, ErrorClass: errorClass, Caller: dbCaller(callerOf(ctx))}
+	if status == "hit" && s.enqueueHit(event) {
+		return
+	}
+	if err := s.db.RecordDownloads(ctx, []db.DownloadEvent{event}); err != nil {
 		s.logger.Warn("download event could not be recorded")
 	}
 }
