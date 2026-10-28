@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
@@ -440,6 +441,11 @@ func (s *Server) frontend(w http.ResponseWriter, r *http.Request) {
 	if name == "index.html" {
 		contentType = "text/html; charset=utf-8"
 		w.Header().Set("Cache-Control", "no-cache")
+		if bytes.Contains(content, []byte(cspNoncePlaceholder)) {
+			nonce := randomSecret(18)
+			content = bytes.ReplaceAll(content, []byte(cspNoncePlaceholder), []byte(nonce))
+			w.Header().Set("Content-Security-Policy", contentSecurityPolicy(nonce))
+		}
 	} else if immutableAsset(name) {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	} else {
@@ -612,10 +618,28 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		if state := s.runtime.Load(); state != nil && strings.HasPrefix(state.config.PublicURL, "https://") {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'")
+		w.Header().Set("Content-Security-Policy", contentSecurityPolicy(""))
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()")
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		next.ServeHTTP(w, r)
 	})
 }
+
+// contentSecurityPolicy is the policy for every response. Styles come from our
+// own files only; the console passes a per-response nonce so that the styles
+// Angular injects at runtime are allowed without 'unsafe-inline'.
+func contentSecurityPolicy(styleNonce string) string {
+	style := "style-src 'self'"
+	if styleNonce != "" {
+		style += " 'nonce-" + styleNonce + "'"
+	}
+	return "default-src 'self'; " + style + "; form-action 'self'; frame-ancestors 'none'; base-uri 'self'"
+}
+
+// cspNoncePlaceholder stands for the nonce in the built index.html
+// (ngCspNonce on the root element).
+const cspNoncePlaceholder = "__CSP_NONCE__"
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

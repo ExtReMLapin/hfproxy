@@ -73,7 +73,14 @@ type Config struct {
 
 	// Environment-only settings: they are not editable from the console and
 	// are never overridden by saved settings.
-	StagingDir string
+
+	// LDAPGroupSync mirrors the user's directory groups (LDAPGroupFilter, with
+	// {dn} replaced by the user's DN, searched under LDAPGroupBaseDN) into
+	// hfproxy groups with source "ldap" at each sign-in.
+	LDAPGroupSync   bool
+	LDAPGroupBaseDN string
+	LDAPGroupFilter string
+	StagingDir      string
 	// StagingMinFreeBytes makes /readyz fail while the staging directory has
 	// less free space than this (0 turns the check off).
 	StagingMinFreeBytes  int64
@@ -148,6 +155,9 @@ func Load() (Config, error) {
 	c.LDAPBaseDN = value("LDAP_BASE_DN", "")
 	c.LDAPUserFilter = value("LDAP_USER_FILTER", "(uid={username})")
 	c.LDAPAutoProvision = boolean("LDAP_AUTO_PROVISION", false)
+	c.LDAPGroupSync = boolean("LDAP_GROUP_SYNC", false)
+	c.LDAPGroupBaseDN = value("LDAP_GROUP_BASE_DN", c.LDAPBaseDN)
+	c.LDAPGroupFilter = value("LDAP_GROUP_FILTER", "(member={dn})")
 	c.MetricsEnabled = boolean("METRICS_ENABLED", false)
 	c.MetricsPath = value("METRICS_PATH", "/metrics")
 	c.TracingEnabled = boolean("TRACING_ENABLED", false)
@@ -351,6 +361,9 @@ func (c Config) Validate() error {
 		ldapURL, ldapErr := url.Parse(c.LDAPURL)
 		if ldapErr != nil || ldapURL.Host == "" || ldapURL.User != nil || (ldapURL.Scheme != "ldaps" && ldapURL.Scheme != "ldap") || c.LDAPBaseDN == "" || !strings.Contains(c.LDAPUserFilter, "{username}") {
 			return fmt.Errorf("LDAP requires a valid HFPROXY_LDAP_URL, HFPROXY_LDAP_BASE_DN, and a HFPROXY_LDAP_USER_FILTER containing {username}")
+		}
+		if c.LDAPGroupSync && (c.LDAPGroupBaseDN == "" || !strings.Contains(c.LDAPGroupFilter, "{dn}")) {
+			return fmt.Errorf("HFPROXY_LDAP_GROUP_SYNC requires HFPROXY_LDAP_GROUP_BASE_DN and a HFPROXY_LDAP_GROUP_FILTER containing {dn}")
 		}
 		if ldapURL.Scheme == "ldap" && !c.LDAPStartTLS {
 			return fmt.Errorf("plain LDAP is disabled; use ldaps:// or enable StartTLS")

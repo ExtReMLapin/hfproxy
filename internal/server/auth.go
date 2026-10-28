@@ -26,7 +26,7 @@ import (
 	"golang.org/x/oauth2"
 )
 
-const loginPage = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connexion · hfproxy</title><link rel="stylesheet" href="/assets/app.css"><style>body{background:#f4f5f1}.login{max-width:430px;margin:12vh auto;background:white;padding:36px;border:1px solid #e5e8e0;border-radius:20px;box-shadow:0 20px 50px #1e33200c}.brand{font-weight:800;font-size:24px;letter-spacing:-.04em}.mark{display:inline-block;vertical-align:middle;width:30px;height:30px;border-radius:9px;margin-right:9px}.muted{color:#667064;font-size:14px;line-height:1.6}label{display:block;margin:18px 0 6px;font-size:13px;font-weight:650}input{width:100%;padding:12px;border:1px solid #dce1d7;border-radius:9px;font:inherit}button,.button{display:block;width:100%;margin-top:18px;border:0;border-radius:9px;padding:12px;background:#172019;color:white;font-weight:700;text-align:center;text-decoration:none;cursor:pointer}.error{padding:12px;background:#fff0ed;border-radius:9px;color:#a93d2b;font-size:14px}.divider{border-top:1px solid #e8ebe5;margin:24px 0}</style></head><body><main class="login"><div class="brand"><img class="mark" src="/hfproxy-mark.svg" alt="">hfproxy</div><p class="muted">Connectez-vous pour accéder au proxy et à son cache de modèles.</p>{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{if .Local}}<form method="post" action="/login"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><label for="username">Identifiant</label><input id="username" name="username" autocomplete="username" required><label for="password">Mot de passe</label><input id="password" type="password" name="password" autocomplete="current-password" required><button type="submit">Se connecter</button></form>{{end}}{{if .OIDC}}{{if .Local}}<div class="divider"></div>{{end}}<a class="button" href="/auth/login">Continuer avec SSO</a>{{end}}{{if not .Local}}{{if not .OIDC}}<p class="muted">Aucun fournisseur d’authentification n’est configuré.</p>{{end}}{{end}}</main></body></html>`
+const loginPage = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connexion · hfproxy</title><link rel="stylesheet" href="/assets/app.css"></head><body><main class="login"><div class="brand"><img class="mark" src="/hfproxy-mark.svg" alt="">hfproxy</div><p class="muted">Connectez-vous pour accéder au proxy et à son cache de modèles.</p>{{if .Error}}<p class="error">{{.Error}}</p>{{end}}{{if .Local}}<form method="post" action="/login"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><label for="username">Identifiant</label><input id="username" name="username" autocomplete="username" required><label for="password">Mot de passe</label><input id="password" type="password" name="password" autocomplete="current-password" required><button type="submit">Se connecter</button></form>{{end}}{{if .OIDC}}{{if .Local}}<div class="divider"></div>{{end}}<a class="button" href="/auth/login">Continuer avec SSO</a>{{end}}{{if not .Local}}{{if not .OIDC}}<p class="muted">Aucun fournisseur d’authentification n’est configuré.</p>{{end}}{{end}}</main></body></html>`
 
 type loginData struct {
 	Error string
@@ -319,7 +319,7 @@ func (s *Server) authenticateLDAP(ctx context.Context, username, password string
 		}
 	}
 	filter := strings.ReplaceAll(s.currentConfig().LDAPUserFilter, "{username}", ldap.EscapeFilter(username))
-	request := ldap.NewSearchRequest(s.currentConfig().LDAPBaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2, 5, false, filter, []string{"mail", "cn", "displayName"}, nil)
+	request := ldap.NewSearchRequest(s.currentConfig().LDAPBaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2, 5, false, filter, ldapUserAttributes, nil)
 	result, err := conn.Search(request)
 	if err != nil || len(result.Entries) != 1 {
 		return "", fmt.Errorf("LDAP user lookup failed")
@@ -328,13 +328,21 @@ func (s *Server) authenticateLDAP(ctx context.Context, username, password string
 	if err := conn.Bind(entry.DN, password); err != nil {
 		return "", fmt.Errorf("LDAP credentials rejected")
 	}
+	if ldapAccountDisabled(entry) {
+		return "", errLDAPAccountDisabled
+	}
 	issuer := s.currentConfig().LDAPURL
-	var userID, status string
-	err = s.db.SQL.QueryRowContext(ctx, "SELECT u.id,u.status FROM external_identities x JOIN users u ON u.id=x.user_id WHERE x.issuer=$1 AND x.subject=$2", issuer, entry.DN).Scan(&userID, &status)
+	stable := ldapStableSubject(entry)
+	subject := stable
+	if subject == "" {
+		subject = entry.DN
+	}
+	userID, status, err := s.findLDAPIdentity(ctx, issuer, stable, entry.DN)
 	if err == nil {
 		if status != "active" {
 			return "", fmt.Errorf("account disabled")
 		}
+		s.refreshLDAPGroups(ctx, conn, userID, entry.DN)
 		return userID, nil
 	}
 	if err != sql.ErrNoRows || !s.currentConfig().LDAPAutoProvision {
@@ -361,14 +369,39 @@ func (s *Server) authenticateLDAP(ctx context.Context, username, password string
 	if _, err = tx.ExecContext(ctx, "INSERT INTO users(id,username,email,display_name,role) VALUES($1,$2,$3,$4,'reader')", userID, localUsername, email, displayName); err != nil {
 		return "", fmt.Errorf("provision LDAP user failed")
 	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO external_identities(id,user_id,provider,issuer,subject) VALUES($1,$2,'ldap',$3,$4)", db.NewID(), userID, issuer, entry.DN); err != nil {
+	if _, err = tx.ExecContext(ctx, "INSERT INTO external_identities(id,user_id,provider,issuer,subject) VALUES($1,$2,'ldap',$3,$4)", db.NewID(), userID, issuer, subject); err != nil {
 		return "", fmt.Errorf("record LDAP identity failed")
 	}
 	if err := tx.Commit(); err != nil {
 		return "", err
 	}
 	s.audit(ctx, userID, "user.provision", "user", userID, map[string]any{"provider": "ldap"})
+	s.refreshLDAPGroups(ctx, conn, userID, entry.DN)
 	return userID, nil
+}
+
+// refreshLDAPGroups mirrors the directory groups when group sync is on. A
+// failure is logged and never blocks the sign-in; memberships stay as they were.
+func (s *Server) refreshLDAPGroups(ctx context.Context, conn *ldap.Conn, userID, dn string) {
+	if !s.currentConfig().LDAPGroupSync {
+		return
+	}
+	// The connection is bound as the user; search as the service account, which
+	// is the one allowed to read groups.
+	if cfg := s.currentConfig(); cfg.LDAPBindDN != "" {
+		if err := conn.Bind(cfg.LDAPBindDN, cfg.LDAPBindPassword); err != nil {
+			s.logger.Warn("LDAP service bind failed before reading groups; memberships unchanged", "request_id", requestID(ctx))
+			return
+		}
+	}
+	names, err := s.ldapGroupNames(conn, dn)
+	if err != nil {
+		s.logger.Warn("LDAP groups could not be read; memberships unchanged", "request_id", requestID(ctx))
+		return
+	}
+	if err := s.syncLDAPGroups(ctx, userID, names); err != nil {
+		s.logger.Warn("LDAP groups could not be synchronised", "request_id", requestID(ctx))
+	}
 }
 
 func usernameFromLogin(value string) string {

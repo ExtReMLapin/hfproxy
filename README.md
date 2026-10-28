@@ -159,6 +159,12 @@ OIDC uses Authorization Code, PKCE S256, state, nonce, and ID token validation. 
 
 LDAP supports LDAPS or LDAP with StartTLS. The user filter must contain `{username}`; the value is escaped before the search. The proxy searches for a single entry, then binds with the supplied password. It does not retain that password. LDAP auto-provisioning is disabled by default; when enabled, new accounts receive the reader role.
 
+LDAP identity and directory state:
+
+- The link between a directory entry and its local account uses a stable identifier (`entryUUID`, or `objectGUID` on Active Directory) rather than the DN, so moving or renaming a user in the directory does not break it. Accounts linked by DN before this change are moved to the stable identifier at their next sign-in; directories that expose neither attribute keep using the DN.
+- An account the directory marks as disabled or locked (`userAccountControl` flag 2, `nsAccountLock: true`, `pwdAccountLockedTime`) cannot sign in. Sessions and tokens issued earlier stay valid until they expire or an administrator disables the local account, which revokes them.
+- `HFPROXY_LDAP_GROUP_SYNC=true` mirrors the user's directory groups into hfproxy groups with source `ldap` at every sign-in (`HFPROXY_LDAP_GROUP_BASE_DN`, default the user base; `HFPROXY_LDAP_GROUP_FILTER`, default `(member={dn})`, where `{dn}` is the escaped user DN; the group name is its `cn`). Memberships in local groups are never changed, and a group read failure leaves memberships as they were.
+
 OIDC and LDAP provide sign-in to the same local role model (`admin`, `operator`, `reader`). Groups can be managed locally and granted access through allowlist policies.
 
 ## Hub API and compatibility
