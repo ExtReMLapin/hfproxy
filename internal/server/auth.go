@@ -387,10 +387,6 @@ func usernameFromLogin(value string) string {
 	return base + "-" + randomSecret(4)
 }
 
-func (s *Server) renderDashboardLogout(w http.ResponseWriter, csrf string) template.HTML {
-	return template.HTML(`<form method="post" action="/logout"><input type="hidden" name="csrf_token" value="` + template.HTMLEscapeString(csrf) + `"><button class="quiet-button">Se déconnecter</button></form>`)
-}
-
 func clearCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 }

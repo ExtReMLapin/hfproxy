@@ -47,6 +47,13 @@ func Open(ctx context.Context, databaseURL string) (*Store, error) {
 }
 
 func Migrate(ctx context.Context, sqlDB *sql.DB) error {
+	return migrateUpTo(ctx, sqlDB, LatestMigration)
+}
+
+// migrateUpTo applies every migration newer than the database's version, up to
+// and including limit. Production code always goes to LatestMigration; tests
+// stop earlier to reproduce a database left by an older release.
+func migrateUpTo(ctx context.Context, sqlDB *sql.DB, limit int64) error {
 	conn, err := sqlDB.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("reserve migration connection: %w", err)
@@ -71,7 +78,7 @@ func Migrate(ctx context.Context, sqlDB *sql.DB) error {
 		return fmt.Errorf("read migration version: %w", err)
 	}
 	for _, m := range migrations {
-		if version < m.version {
+		if version < m.version && m.version <= limit {
 			if err := applyMigrationTx(ctx, tx, m.version, m.script); err != nil {
 				return err
 			}

@@ -507,7 +507,6 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 			writeStreamAwareProblem(w, r, streamed, 500, "Cache metadata error", "Unable to publish cache metadata.")
 			return
 		}
-		key = existingKey
 	} else if err != nil {
 		s.finishDownload(publishCtx, downloadID, size, "metadata")
 		writeStreamAwareProblem(w, r, streamed, 500, "Cache metadata error", "Unable to read blob metadata.")
@@ -769,11 +768,6 @@ func (s *Server) accessProblem(w http.ResponseWriter, r *http.Request, err error
 		return
 	}
 	writeProblem(w, r, 500, "Authorization error", "Unable to evaluate repository access.")
-}
-
-type fetchResult struct {
-	*http.Response
-	First http.Header
 }
 
 type idleBody struct {
@@ -1381,7 +1375,7 @@ func (s *Server) serveArtifact(w http.ResponseWriter, r *http.Request, a artifac
 			partial = false
 		}
 	}
-	if r.Header.Get("Range") != "" && rangeOK == false {
+	if r.Header.Get("Range") != "" && !rangeOK {
 		setHeaders()
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", a.Size))
 		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)

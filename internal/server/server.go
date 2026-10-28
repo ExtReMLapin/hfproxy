@@ -733,11 +733,6 @@ func hasBearer(r *http.Request) bool {
 	return len(parts) == 2 && strings.EqualFold(parts[0], "Bearer")
 }
 
-func (s *Server) currentPrincipal(r *http.Request) *Principal {
-	p, _ := s.authenticate(r)
-	return p
-}
-
 func (s *Server) createSession(ctx context.Context, userID string, w http.ResponseWriter, r *http.Request) (string, error) {
 	// A login always starts a fresh session: drop the one the browser still
 	// holds so a pre-login session identifier can never survive authentication.

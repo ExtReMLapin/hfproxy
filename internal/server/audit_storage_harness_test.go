@@ -46,7 +46,6 @@ type auditStorageEnv struct {
 	repoID   string
 	repoType string
 	hub      *httptest.Server
-	s3Target string
 }
 
 type auditStorageOptions struct {

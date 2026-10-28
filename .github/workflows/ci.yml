@@ -83,6 +83,21 @@ jobs:
             go.sum
       - name: Scan dependencies and standard library for known vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+  staticcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+      - name: Static analysis
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.1 ./...
   ui:
     runs-on: ubuntu-latest
     defaults:
