@@ -154,14 +154,16 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 			meta.LastMod = sql.NullTime{Time: t, Valid: true}
 		}
 	}
-	sizeKnown := upstream.ContentLength >= 0
-	if sizeKnown {
-		meta.Size = upstream.ContentLength
-	} else if size := firstHeaders.Get("X-Linked-Size"); size != "" {
+	sizeKnown := false
+	if size := firstHeaders.Get("X-Linked-Size"); size != "" {
 		if parsedSize, parseErr := strconv.ParseInt(size, 10, 64); parseErr == nil && parsedSize >= 0 {
 			meta.Size = parsedSize
 			sizeKnown = true
 		}
+	}
+	if !sizeKnown && upstream.ContentLength >= 0 {
+		meta.Size = upstream.ContentLength
+		sizeKnown = true
 	}
 	if meta.ContentType == "" {
 		meta.ContentType = "application/octet-stream"
@@ -277,9 +279,6 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 			}
 			writeProblem(w, r, http.StatusBadGateway, "Upstream transfer failed", "The file could not be completed. Retry the preload to continue from the last stored block.")
 			return
-		}
-		if resume.ETag != "" {
-			meta.ETag = resume.ETag
 		}
 		defer func() {
 			name := tmp.Name()
@@ -1078,6 +1077,14 @@ func (s *Server) setArtifactHeaders(w http.ResponseWriter, a artifact, upstream 
 		if value := upstream.Get(key); value != "" {
 			w.Header().Set(key, value)
 		}
+	}
+	if w.Header().Get("X-Linked-ETag") == "" {
+		if digest := lfsSHA256(a.ETag); digest != "" {
+			w.Header().Set("X-Linked-ETag", `"`+digest+`"`)
+		}
+	}
+	if w.Header().Get("X-Linked-Size") == "" && w.Header().Get("X-Linked-ETag") != "" {
+		w.Header().Set("X-Linked-Size", strconv.FormatInt(a.Size, 10))
 	}
 }
 
