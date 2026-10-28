@@ -68,3 +68,5 @@ Suggested starting points, to adjust to your traffic:
 - Staging volume: `HFPROXY_CACHE_FILL_CONCURRENCY` times your largest file, plus headroom.
 - Object storage: your hot set; set a quota and watch `hfproxy_cache_size_bytes`.
 - PostgreSQL: small. `downloads` and `audit_events` are purged by the retention settings.
+- CPU and memory: a cache hit is a streamed copy from object storage, so one or two vCPUs and 512 MiB to 1 GiB of memory serve a typical team. Expect the single-pass SHA-256 of a fill to use about one core per concurrent fill. Memory does not grow with file size, since files are streamed; it grows with `HFPROXY_API_CACHE_MAX_BYTES` (default 32 MiB) and the number of open connections.
+- Bandwidth: a cold fill moves each file twice (Hub to the proxy, then to the bucket), a hit moves it once to the client. Size the proxy-to-bucket link for your largest burst of simultaneous downloads. Start from these figures and measure with your own models.

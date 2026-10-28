@@ -91,7 +91,7 @@ func validateLDAPOnly(ldap Config) error {
 	base := Config{
 		LogLevel: "info", HFBaseURL: "https://huggingface.co", HFTimeout: time.Second, CacheMaxFileSize: 1, CacheRefTTL: time.Second,
 		AuthMode: "local", SessionSecret: "0123456789abcdef0123456789abcdef", SessionIdleTTL: time.Hour, SessionAbsoluteTTL: time.Hour, MetricsPath: "/metrics",
-		TracingServiceName: "hfproxy", TracingSamplingRatio: 0.1,
+		TracingServiceName: "hfproxy", TracingSamplingRatio: 0.1, DatabaseURL: "postgres://u:p@db/app", S3Bucket: "b", S3Region: "r", ListenAddr: "127.0.0.1:8080",
 	}
 	base.LDAPURL, base.LDAPStartTLS, base.LDAPBaseDN, base.LDAPUserFilter = ldap.LDAPURL, ldap.LDAPStartTLS, ldap.LDAPBaseDN, ldap.LDAPUserFilter
 	base.LDAPGroupSync, base.LDAPGroupBaseDN, base.LDAPGroupFilter = ldap.LDAPGroupSync, ldap.LDAPGroupBaseDN, ldap.LDAPGroupFilter

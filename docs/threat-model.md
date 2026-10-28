@@ -32,6 +32,16 @@ hfproxy sits between internal clients and Hugging Face. It authenticates clients
 | Upstream outage or rate limiting | Retries with backoff, a per-host circuit breaker, cached files served when a known ref cannot be confirmed, and cached repository metadata served stale for up to a day (`X-Cache: STALE`) | Uncached files and metadata fail until the Hub recovers; a repository's metadata can lag the Hub by up to the stale limit during an outage |
 | Compromise or loss of the session secret | Separate derived keys for tokens, sessions and settings; rotation with `HFPROXY_SESSION_SECRET_PREVIOUS` and `hfproxy admin rotate-secret` | Rotate promptly after a leak and revoke old tokens; losing every copy of the secret makes saved settings unreadable |
 
+## Known limits and recommended measures
+
+- **Network.** Run hfproxy on a private network. Allow inbound traffic only from the reverse proxy and outbound traffic only to the Hub hosts, the object store and PostgreSQL; keep the metrics port internal.
+- **TLS.** hfproxy speaks plain HTTP: terminate TLS at a reverse proxy and set `HFPROXY_PUBLIC_URL` to the HTTPS address. Cookies are `Secure` and HSTS is sent from that URL. PostgreSQL and S3 connections should use TLS as well (`sslmode=verify-full`).
+- **Origin separation.** Cached files are sandboxed (`Content-Security-Policy: sandbox`), but they share a hostname with the console. For defense in depth, publish the file routes (`/{repo}/resolve/...`) under a different hostname than the console.
+- **Shared Hub token.** The upstream token's reach is bounded only by local repository policies; use a read-only token and register only the repositories you intend to serve.
+- **Administrators.** An administrator can change the Hub URL and storage endpoints, so the role is a privileged one: limit it, prefer SSO with MFA, and review the audit log. `HFPROXY_LOCKED_SETTINGS` pins sensitive settings to the deployment so the console cannot change them.
+- **Console scripts.** The console runs under a CSP without `unsafe-inline`; styles injected by the framework carry a per-response nonce.
+- **Downloaded content.** Treat models as untrusted code (see below).
+
 ## Out of scope
 
 hfproxy does not terminate TLS, does not scan model files for malicious content (for example unsafe pickle files), and does not isolate tenants from each other beyond repository policies. Treat downloaded models as untrusted code, exactly as you would when downloading them directly.
