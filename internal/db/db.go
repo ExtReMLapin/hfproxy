@@ -15,7 +15,24 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-type Store struct{ SQL *sql.DB }
+type Store struct {
+	SQL *sql.DB
+	// DSN is the connection string the store was opened with. The listener for
+	// cross-instance notifications needs a connection of its own.
+	DSN string
+}
+
+// AuthChannel is the PostgreSQL notification channel instances use to tell
+// each other that credentials changed (a token or session was revoked, a user
+// was disabled or demoted), so they drop their short-lived credential caches.
+const AuthChannel = "hfproxy_auth"
+
+// NotifyAuthChange tells every instance, this one included, to forget cached
+// credential lookups.
+func (s *Store) NotifyAuthChange(ctx context.Context) error {
+	_, err := s.SQL.ExecContext(ctx, `SELECT pg_notify($1,'purge')`, AuthChannel)
+	return err
+}
 
 type migration struct {
 	version int64
@@ -74,7 +91,7 @@ func Open(ctx context.Context, databaseURL string) (*Store, error) {
 		sqlDB.Close()
 		return nil, fmt.Errorf("connect to database: %w", err)
 	}
-	return &Store{SQL: sqlDB}, nil
+	return &Store{SQL: sqlDB, DSN: databaseURL}, nil
 }
 
 func Migrate(ctx context.Context, sqlDB *sql.DB) error {
