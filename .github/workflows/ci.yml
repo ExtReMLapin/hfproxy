@@ -206,6 +206,7 @@ jobs:
       - name: Translations are complete and up to date
         run: |
           npm run i18n:extract
+          npx prettier --write src/locale/messages.json
           git diff --exit-code -- src/locale/messages.json
           npm run i18n:check
       - name: Test
