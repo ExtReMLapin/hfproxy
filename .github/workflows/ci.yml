@@ -61,9 +61,11 @@ jobs:
           AWS_SECRET_ACCESS_KEY: test
         run: |
           go test -race -count=1 -v -coverprofile=coverage.out -coverpkg=./... ./... | tee test.log
-          if grep -q -- '--- SKIP' test.log; then
+          # The load test is opt-in (nightly workflow); every other skip means a
+          # dependency of the integration tests is missing.
+          if grep -- '--- SKIP' test.log | grep -qv TestLoadParallelDownloads; then
             echo "Integration tests were skipped; PostgreSQL and S3 must both be available."
-            grep -- '--- SKIP' test.log
+            grep -- '--- SKIP' test.log | grep -v TestLoadParallelDownloads
             exit 1
           fi
       - name: Coverage threshold

@@ -42,12 +42,12 @@ func TestFrontendIndexGetsAFreshNonce(t *testing.T) {
 	nonces := map[string]bool{}
 	for i := 0; i < 2; i++ {
 		rec := httptest.NewRecorder()
-		s.frontend(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		s.frontend(rec, httptest.NewRequest(http.MethodGet, "/repositories", nil))
 		if rec.Code != http.StatusOK {
 			t.Skipf("admin interface not built (status %d)", rec.Code)
 		}
 		body := rec.Body.String()
-		if !strings.Contains(body, "ngcspnonce=") {
+		if !strings.Contains(strings.ToLower(body), "ngcspnonce=") {
 			t.Skip("built index.html has no ngCspNonce placeholder (rebuild the UI)")
 		}
 		if strings.Contains(body, cspNoncePlaceholder) {
