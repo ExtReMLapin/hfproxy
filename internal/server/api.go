@@ -119,6 +119,8 @@ func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {
 		s.apiStats(w, r)
 	case path == "downloads/active" && r.Method == http.MethodGet:
 		s.apiActiveDownloads(w, r)
+	case path == "published" || strings.HasPrefix(path, "published/"):
+		s.apiPublished(w, r, strings.TrimPrefix(path, "published"))
 	case path == "repos":
 		s.apiRepos(w, r)
 	case strings.HasPrefix(path, "repos/"):

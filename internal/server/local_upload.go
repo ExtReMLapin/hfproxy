@@ -673,45 +673,64 @@ func (s *Server) apiCommit(w http.ResponseWriter, r *http.Request, route localRo
 		hfError(w, http.StatusNotFound, "EntryNotFound", err.Error())
 		return
 	}
-	if overQuota, quota, err := s.ownerQuotaExceeded(r.Context(), repo.OwnerID, sizes); err != nil {
-		hfError(w, http.StatusInternalServerError, "", "The storage quota could not be checked.")
-		return
-	} else if overQuota {
-		hfError(w, http.StatusRequestEntityTooLarge, "", fmt.Sprintf("This would take the owner of the repository over their storage quota of %d bytes.", quota))
-		return
-	}
-
 	author := header.AuthorName
 	if author == "" {
 		author = p.Username
 	}
-	commit, err := s.db.CommitLocal(r.Context(), db.CommitInput{
-		RepositoryID: repo.ID, Branch: branch, ParentCommit: header.ParentCommit,
-		AuthorID: p.ID, AuthorName: author, Summary: strings.TrimSpace(header.Summary), Description: header.Description, Ops: ops,
+	commit, failure := s.commitOps(r.Context(), p, repo.ID, repo.OwnerID, branch, header.ParentCommit, author, header.Summary, header.Description, ops, sizes)
+	if failure != nil {
+		hfError(w, failure.status, failure.code, failure.message)
+		return
+	}
+	s.audit(r.Context(), p.ID, "repository.commit", "repository", repo.ID, map[string]any{"commit": commit.SHA, "branch": branch, "operations": len(ops), "summary": safeLogValue(commit.Summary, 120)})
+	writeHFJSON(w, http.StatusOK, map[string]any{
+		"success": true, "commitOid": commit.SHA, "hookOutput": "",
+		"commitUrl": s.publicBase(r) + "/" + repoURLPrefix(route.Type) + route.RepoID + "/commit/" + commit.SHA,
+	})
+}
+
+// commitFailure is why a commit was refused, in the Hub's terms.
+type commitFailure struct {
+	status        int
+	code, message string
+}
+
+// commitOps checks the storage quota and records a commit on a branch. sizes
+// names the contents the commit adds (hash and size) for the quota. The commit
+// API and the console's uploads both end here.
+func (s *Server) commitOps(ctx context.Context, p *Principal, repoPK, ownerID, branch, parent, author, summary, description string, ops []db.CommitOp, sizes map[string]int64) (db.LocalCommit, *commitFailure) {
+	if strings.TrimSpace(summary) == "" {
+		return db.LocalCommit{}, &commitFailure{http.StatusBadRequest, "", "A commit needs a summary."}
+	}
+	overQuota, quota, err := s.ownerQuotaExceeded(ctx, ownerID, sizes)
+	if err != nil {
+		return db.LocalCommit{}, &commitFailure{http.StatusInternalServerError, "", "The storage quota could not be checked."}
+	}
+	if overQuota {
+		return db.LocalCommit{}, &commitFailure{http.StatusRequestEntityTooLarge, "", fmt.Sprintf("This would take the owner of the repository over their storage quota of %d bytes.", quota)}
+	}
+	commit, err := s.db.CommitLocal(ctx, db.CommitInput{
+		RepositoryID: repoPK, Branch: branch, ParentCommit: parent,
+		AuthorID: p.ID, AuthorName: author, Summary: strings.TrimSpace(summary), Description: description, Ops: ops,
 	})
 	var missing *db.BlobMissingError
 	switch {
 	case errors.Is(err, db.ErrRevisionNotFound):
-		hfError(w, http.StatusNotFound, "RevisionNotFound", "Invalid rev id: "+branch+" (commits go to a branch)")
+		return db.LocalCommit{}, &commitFailure{http.StatusNotFound, "RevisionNotFound", "Invalid rev id: " + branch + " (commits go to a branch)"}
 	case errors.Is(err, db.ErrParentMismatch):
-		hfError(w, http.StatusPreconditionFailed, "", "The branch has moved since the parent commit you gave. Fetch it again and retry.")
+		return db.LocalCommit{}, &commitFailure{http.StatusPreconditionFailed, "", "The branch has moved since the parent commit you gave. Fetch it again and retry."}
 	case errors.Is(err, db.ErrPathConflict):
-		hfError(w, http.StatusBadRequest, "", err.Error())
+		return db.LocalCommit{}, &commitFailure{http.StatusBadRequest, "", err.Error()}
 	case errors.As(err, &missing):
-		hfError(w, http.StatusBadRequest, "", "The content "+missing.SHA256+" was not uploaded.")
+		return db.LocalCommit{}, &commitFailure{http.StatusBadRequest, "", "The content " + missing.SHA256 + " was not uploaded."}
 	case err != nil:
-		s.logger.Error("commit failed", "request_id", requestID(r.Context()), "error", safeLogValue(err.Error(), 300))
-		hfError(w, http.StatusInternalServerError, "", "The commit could not be recorded.")
-	default:
-		s.audit(r.Context(), p.ID, "repository.commit", "repository", repo.ID, map[string]any{"commit": commit.SHA, "branch": branch, "operations": len(ops), "summary": safeLogValue(commit.Summary, 120)})
-		if s.metrics != nil {
-			s.metrics.add("hfproxy_published_commits_total", nil, 1)
-		}
-		writeHFJSON(w, http.StatusOK, map[string]any{
-			"success": true, "commitOid": commit.SHA, "hookOutput": "",
-			"commitUrl": s.publicBase(r) + "/" + repoURLPrefix(route.Type) + route.RepoID + "/commit/" + commit.SHA,
-		})
+		s.logger.Error("commit failed", "request_id", requestID(ctx), "error", safeLogValue(err.Error(), 300))
+		return db.LocalCommit{}, &commitFailure{http.StatusInternalServerError, "", "The commit could not be recorded."}
 	}
+	if s.metrics != nil {
+		s.metrics.add("hfproxy_published_commits_total", nil, 1)
+	}
+	return commit, nil
 }
 
 // storeInlineBlob stores the content of a file sent inside a commit.

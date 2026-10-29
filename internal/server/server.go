@@ -957,7 +957,12 @@ func (s *Server) checkCSRF(r *http.Request) bool {
 	if err != nil || csrfCookie.Value == "" {
 		return false
 	}
-	provided := r.FormValue("csrf_token")
+	// Only a URL-encoded form carries the token in its body. Reading the form of
+	// a multipart upload here would consume the upload and buffer its files.
+	provided := ""
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
+		provided = r.FormValue("csrf_token")
+	}
 	if provided == "" {
 		provided = r.Header.Get("X-CSRF-Token")
 	}

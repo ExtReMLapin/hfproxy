@@ -23,6 +23,10 @@ func (s *Server) apiRepoPins(w http.ResponseWriter, r *http.Request, repositoryI
 		writeProblem(w, r, http.StatusNotFound, "Repository not found", "The repository does not exist.")
 		return
 	}
+	if repo, err := s.db.GetRepository(r.Context(), repositoryID); err == nil && repo.Origin == "local" {
+		writeProblem(w, r, http.StatusBadRequest, "Nothing to pin", "Published repositories are never evicted: there is nothing to pin.")
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		stored, err := s.db.ListPins(r.Context(), repositoryID)

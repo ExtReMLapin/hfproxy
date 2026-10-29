@@ -372,47 +372,54 @@ func (s *Server) apiCreateRepo(w http.ResponseWriter, r *http.Request) {
 	if namespace == "" {
 		namespace = p.Username
 	}
-	if !validLocalRepoName(name) {
-		hfError(w, http.StatusBadRequest, "", "Invalid repository name: use letters, digits, '-', '_' and '.', at most 96 characters, without leading or trailing '-' or '.', '--', '..' or a '.git' ending.")
+	private := in.Private != nil && *in.Private
+	id, status, message := s.createPublishedRepo(r.Context(), p, repoType, namespace, name, private, "hub-api")
+	if status == http.StatusConflict {
+		// The Hub's clients read the address from the conflict, for exist_ok.
+		w.Header().Set("X-Error-Message", headerSafe(message))
+		writeHFJSON(w, http.StatusConflict, map[string]string{"error": message, "url": s.publicBase(r) + "/" + repoURLPrefix(repoType) + namespace + "/" + name})
 		return
 	}
-	if !validRepoID(namespace + "/" + name) {
-		hfError(w, http.StatusBadRequest, "", "This name cannot be used as a namespace: it has characters repository names cannot hold.")
-		return
-	}
-	ns, status, message := s.authorizeNamespace(r.Context(), p, namespace)
 	if status != 0 {
 		hfError(w, status, "", message)
 		return
 	}
-	private := in.Private != nil && *in.Private
-	repoID := namespace + "/" + name
-	id, err := s.db.CreateLocalRepository(r.Context(), repoType, repoID, policyFor(private), p.ID)
-	if errors.Is(err, db.ErrExists) {
-		// The Hub's clients read the address from the conflict, for exist_ok.
-		w.Header().Set("X-Error-Message", "You already created this "+repoTypeName(repoType)+" repo")
-		writeHFJSON(w, http.StatusConflict, map[string]string{
-			"error": "You already created this " + repoTypeName(repoType) + " repo",
-			"url":   s.publicBase(r) + "/" + repoURLPrefix(repoType) + repoID,
-		})
-		return
-	}
-	if err != nil {
-		s.logger.Error("published repository could not be created", "request_id", requestID(r.Context()), "error", safeLogValue(err.Error(), 300))
-		hfError(w, http.StatusInternalServerError, "", "The repository could not be created.")
-		return
-	}
-	if err := s.applyVisibility(r.Context(), id, private, ns, p.ID); err != nil {
-		s.logger.Error("published repository access could not be set", "request_id", requestID(r.Context()), "error", safeLogValue(err.Error(), 300))
-		hfError(w, http.StatusInternalServerError, "", "The repository was created but its access could not be set.")
-		return
-	}
-	s.audit(r.Context(), p.ID, "repository.created", "repository", id, map[string]any{"repo_type": repoType, "repo_id": repoID, "private": private, "source": "hub-api"})
 	writeHFJSON(w, http.StatusOK, map[string]any{
-		"url":  s.publicBase(r) + "/" + repoURLPrefix(repoType) + repoID,
-		"name": repoID,
+		"url":  s.publicBase(r) + "/" + repoURLPrefix(repoType) + namespace + "/" + name,
+		"name": namespace + "/" + name,
 		"id":   id,
 	})
+}
+
+// createPublishedRepo checks that p may publish under namespace and creates the
+// repository. It returns the new id, or the HTTP status and message of the
+// refusal.
+func (s *Server) createPublishedRepo(ctx context.Context, p *Principal, repoType, namespace, name string, private bool, source string) (string, int, string) {
+	if !validLocalRepoName(name) {
+		return "", http.StatusBadRequest, "Invalid repository name: use letters, digits, '-', '_' and '.', at most 96 characters, without leading or trailing '-' or '.', '--', '..' or a '.git' ending."
+	}
+	if !validRepoID(namespace + "/" + name) {
+		return "", http.StatusBadRequest, "This name cannot be used as a namespace: it has characters repository names cannot hold."
+	}
+	ns, status, message := s.authorizeNamespace(ctx, p, namespace)
+	if status != 0 {
+		return "", status, message
+	}
+	repoID := namespace + "/" + name
+	id, err := s.db.CreateLocalRepository(ctx, repoType, repoID, policyFor(private), p.ID)
+	if errors.Is(err, db.ErrExists) {
+		return "", http.StatusConflict, "You already created this " + repoTypeName(repoType) + " repo"
+	}
+	if err != nil {
+		s.logger.Error("published repository could not be created", "request_id", requestID(ctx), "error", safeLogValue(err.Error(), 300))
+		return "", http.StatusInternalServerError, "The repository could not be created."
+	}
+	if err := s.applyVisibility(ctx, id, private, ns, p.ID); err != nil {
+		s.logger.Error("published repository access could not be set", "request_id", requestID(ctx), "error", safeLogValue(err.Error(), 300))
+		return "", http.StatusInternalServerError, "The repository was created but its access could not be set."
+	}
+	s.audit(ctx, p.ID, "repository.created", "repository", id, map[string]any{"repo_type": repoType, "repo_id": repoID, "private": private, "source": source})
+	return id, 0, ""
 }
 
 // policyFor maps the Hub's public/private to an access policy: private means

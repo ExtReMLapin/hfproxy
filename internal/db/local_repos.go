@@ -703,3 +703,34 @@ func (s *Store) BlobIsRetained(ctx context.Context, sha256 string) (bool, error)
 	err := s.SQL.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM blobs WHERE sha256=$1 AND (orphaned_at IS NULL OR orphaned_at > now()))`, sha256).Scan(&retained)
 	return retained, err
 }
+
+// Published is a repository published on this proxy, as listed in the console.
+type Published struct {
+	ID, Type, RepoID, Policy, OwnerID, OwnerName string
+	Bytes                                        int64
+	CreatedAt, UpdatedAt                         time.Time
+}
+
+// ListPublished lists the published repositories a user may see: public ones,
+// those granted to them or their groups, their own, and all for an administrator.
+// Most recently changed first.
+func (s *Store) ListPublished(ctx context.Context, role, userID string, limit int) ([]Published, error) {
+	rows, err := s.SQL.QueryContext(ctx, `SELECT r.id,r.repo_type,r.repo_id,r.access_policy,COALESCE(r.owner_user_id,''),COALESCE(u.username,''),r.created_at,r.updated_at,
+			COALESCE((SELECT SUM(b.size_bytes) FROM blobs b WHERE b.id IN (SELECT blob_id FROM artifacts WHERE repository_id=r.id)),0)
+		FROM repositories r LEFT JOIN users u ON u.id=r.owner_user_id
+		WHERE r.origin='local' AND r.deleted_at IS NULL AND (`+visibleRepository(1, 2)+` OR r.owner_user_id=$2)
+		ORDER BY r.updated_at DESC, r.id LIMIT $3`, role, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []Published
+	for rows.Next() {
+		var p Published
+		if err := rows.Scan(&p.ID, &p.Type, &p.RepoID, &p.Policy, &p.OwnerID, &p.OwnerName, &p.CreatedAt, &p.UpdatedAt, &p.Bytes); err != nil {
+			return nil, err
+		}
+		list = append(list, p)
+	}
+	return list, rows.Err()
+}
