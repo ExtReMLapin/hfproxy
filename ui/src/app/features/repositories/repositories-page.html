@@ -121,7 +121,11 @@
                 </div>
                 <div>
                   <span class="text-sm font-semibold text-slate-800">{{ repo.repo_id }}</span>
-                  @if (preloadFor(repo); as job) {
+                  @if (preloadStarting(repo)) {
+                    <p class="mt-1 text-[11px] font-medium text-emerald-700" i18n>
+                      Preloading · starting…
+                    </p>
+                  } @else if (preloadFor(repo); as job) {
                     <p class="mt-1 text-[11px] font-medium text-emerald-700" i18n>
                       Preloading · {{ job.files_processed }} / {{ job.files_total || '…' }} files
                     </p>

@@ -106,7 +106,16 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
     this.preloading.update((items) => ({ ...items, [repo.id]: true }));
     this.feedback.clear();
     try {
-      await this.api.post(`/api/v1/repos/${encodeURIComponent(repo.id)}/preload`, {});
+      const started = await this.api.post<PreloadJob>(
+        `/api/v1/repos/${encodeURIComponent(repo.id)}/preload`,
+        {},
+      );
+      // Show the new attempt at once instead of the previous outcome (and its
+      // error) until the next poll.
+      this.preloadJobs.update((jobs) => [
+        started,
+        ...jobs.filter((job) => job.repo_type !== repo.repo_type || job.repo_id !== repo.repo_id),
+      ]);
       this.feedback.showSuccess(
         $localize`Preloading started for ${repo.repo_id}:REPOSITORY:. Follow progress on Overview.`,
       );
@@ -122,6 +131,11 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
   protected preloadFor(repo: Repository): PreloadJob | undefined {
     const job = this.latestPreloadFor(repo);
     return job?.status === 'queued' || job?.status === 'running' ? job : undefined;
+  }
+
+  /** True from the click on Preload until the new attempt is known. */
+  protected preloadStarting(repo: Repository): boolean {
+    return !!this.preloading()[repo.id] && !this.preloadFor(repo);
   }
 
   protected isCached(repo: Repository): boolean {
