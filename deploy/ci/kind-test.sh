@@ -25,6 +25,10 @@ diagnostics() {
   if [ "$status" -ne 0 ]; then
     echo "--- cluster state at failure"
     kubectl get pods -o wide || true
+    for pod in $(kubectl get pods -o name 2>/dev/null); do
+      echo "--- logs of $pod"; kubectl logs "$pod" --all-containers --tail=40 || true
+      echo "--- previous logs of $pod"; kubectl logs "$pod" --all-containers --previous --tail=40 2>/dev/null || true
+    done
     kubectl describe pods -l app.kubernetes.io/name=hfproxy | tail -60 || true
     kubectl logs -l app.kubernetes.io/name=hfproxy --tail=80 --all-containers --prefix || true
     kubectl logs job/hfproxy-migrate --tail=40 || true
@@ -63,7 +67,7 @@ log "start PostgreSQL, S3 and the Hub stand-in"
 kubectl create configmap fakehub-script --from-file=fakehub.py="$HERE/fakehub.py"
 kubectl apply -f "$HERE/dependencies.yaml"
 kubectl rollout status deploy/postgres --timeout=180s
-kubectl rollout status deploy/moto --timeout=300s
+kubectl rollout status deploy/moto --timeout=180s
 kubectl rollout status deploy/fakehub --timeout=180s
 forward moto 15000 5000
 sleep 2
