@@ -25,6 +25,7 @@ config:
   S3_SERVER_SIDE_ENCRYPTION: "true"
   AUTH_MODE: local
   ANONYMOUS_PUBLIC_READ: "false"
+  LOG_LEVEL: info           # debug, info, warn or error; also editable in the console
   # Pods behind the ingress controller: list its network (CIDR) so client
   # addresses are read from X-Forwarded-For.
   TRUSTED_PROXIES: ""

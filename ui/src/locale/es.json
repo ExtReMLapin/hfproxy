@@ -292,6 +292,7 @@
     "681942627979264325": "Supervisión y trazado",
     "503359249737927668": "Observabilidad",
     "1313168010844959987": "Las métricas se exponen en la ruta configurada sin autenticación de la aplicación. Mantenga esa ruta en una red de supervisión privada. Los trazados se exportan por OTLP/HTTP; las credenciales y los datos de las solicitudes nunca se añaden a los spans.",
+    "5263267265282631494": "Nivel de registro{$START_TAG_SELECT}{$START_TAG_OPTION}Depuración{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_1}Info{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_2}Advertencia{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_3}Error{$CLOSE_TAG_OPTION}{$CLOSE_TAG_SELECT}{$START_TAG_SPAN}Se aplica de inmediato, sin reiniciar. Depuración añade detalles de cada solicitud y puede ser muy extenso; Error solo informa de los fallos. Las contraseñas, los tokens y los secretos nunca se registran.{$CLOSE_TAG_SPAN}",
     "3526572593379043188": "{$TAG_INPUT} Activar las métricas de Prometheus",
     "5701539060358858775": "Ruta de las métricas{$TAG_INPUT}",
     "8377028721251905902": "Actualización del inventario de la caché{$TAG_INPUT}{$START_TAG_SPAN}Lee de forma asíncrona los metadatos de referencia de la base de datos; este intervalo evita consultas durante los scrapes de Prometheus.{$CLOSE_TAG_SPAN}",

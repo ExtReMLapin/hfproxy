@@ -292,6 +292,7 @@
     "681942627979264325": "Surveillance et traçage",
     "503359249737927668": "Observabilité",
     "1313168010844959987": "Les métriques sont exposées sur le chemin configuré sans authentification applicative. Gardez ce chemin sur un réseau de supervision privé. Les traces sont exportées via OTLP/HTTP ; les identifiants et les données de requête ne sont jamais ajoutés aux spans.",
+    "5263267265282631494": "Niveau de journalisation{$START_TAG_SELECT}{$START_TAG_OPTION}Debug{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_1}Info{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_2}Avertissement{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_3}Erreur{$CLOSE_TAG_OPTION}{$CLOSE_TAG_SELECT}{$START_TAG_SPAN}S'applique immédiatement, sans redémarrage. Debug ajoute des détails sur chaque requête et peut être très verbeux ; Erreur ne signale que les échecs. Les mots de passe, jetons et secrets ne sont jamais journalisés.{$CLOSE_TAG_SPAN}",
     "3526572593379043188": "{$TAG_INPUT} Activer les métriques Prometheus",
     "5701539060358858775": "Chemin des métriques{$TAG_INPUT}",
     "8377028721251905902": "Actualisation de l'inventaire du cache{$TAG_INPUT}{$START_TAG_SPAN}Lit de façon asynchrone les métadonnées de référence de la base de données ; cet intervalle évite des requêtes pendant les collectes Prometheus.{$CLOSE_TAG_SPAN}",

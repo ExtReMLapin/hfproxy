@@ -292,6 +292,7 @@
     "681942627979264325": "Monitoramento e rastreamento",
     "503359249737927668": "Observabilidade",
     "1313168010844959987": "As métricas são expostas no caminho configurado sem autenticação da aplicação. Mantenha esse caminho em uma rede de monitoramento privada. Os traces são exportados por OTLP/HTTP; credenciais e dados de requisições nunca são adicionados aos spans.",
+    "5263267265282631494": "Nível de log{$START_TAG_SELECT}{$START_TAG_OPTION}Depuração{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_1}Info{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_2}Aviso{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_3}Erro{$CLOSE_TAG_OPTION}{$CLOSE_TAG_SELECT}{$START_TAG_SPAN}Aplica-se imediatamente, sem reiniciar. Depuração acrescenta detalhes de cada requisição e pode ser muito extensa; Erro informa apenas falhas. Senhas, tokens e segredos nunca são registrados.{$CLOSE_TAG_SPAN}",
     "3526572593379043188": "{$TAG_INPUT} Ativar métricas do Prometheus",
     "5701539060358858775": "Caminho das métricas{$TAG_INPUT}",
     "8377028721251905902": "Atualização do inventário do cache{$TAG_INPUT}{$START_TAG_SPAN}Lê de forma assíncrona os metadados de referência do banco de dados; esse intervalo evita consultas durante as coletas do Prometheus.{$CLOSE_TAG_SPAN}",

@@ -292,6 +292,7 @@
     "681942627979264325": "Überwachung und Tracing",
     "503359249737927668": "Observability",
     "1313168010844959987": "Metriken werden auf dem konfigurierten Pfad ohne Anwendungsauthentifizierung bereitgestellt. Halten Sie diesen Pfad in einem privaten Überwachungsnetzwerk. Traces werden über OTLP/HTTP exportiert; Zugangsdaten und Anfragedaten werden nie zu Spans hinzugefügt.",
+    "5263267265282631494": "Log-Level{$START_TAG_SELECT}{$START_TAG_OPTION}Debug{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_1}Info{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_2}Warnung{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_3}Fehler{$CLOSE_TAG_OPTION}{$CLOSE_TAG_SELECT}{$START_TAG_SPAN}Gilt sofort, ohne Neustart. Debug fügt Details zu jeder Anfrage hinzu und kann sehr umfangreich sein; Fehler meldet nur Ausfälle. Passwörter, Tokens und Geheimnisse werden nie protokolliert.{$CLOSE_TAG_SPAN}",
     "3526572593379043188": "{$TAG_INPUT} Prometheus-Metriken aktivieren",
     "5701539060358858775": "Metrikpfad{$TAG_INPUT}",
     "8377028721251905902": "Aktualisierung des Cache-Inventars{$TAG_INPUT}{$START_TAG_SPAN}Liest die maßgeblichen Datenbank-Metadaten asynchron; dieses Intervall vermeidet Abfragen während der Prometheus-Scrapes.{$CLOSE_TAG_SPAN}",

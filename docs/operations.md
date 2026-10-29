@@ -1,5 +1,17 @@
 # Operations runbook
 
+## Logging
+
+Logs are JSON lines on standard output. The level is `debug`, `info`, `warn` (or `warning`) or `error`; the default is `info`.
+
+- **Set it** with `HFPROXY_LOG_LEVEL`, or in the console under **Settings → Observability → Log level**. A level saved in the console takes effect immediately, without a restart, and wins over the environment unless `log_level` is listed in `HFPROXY_LOCKED_SETTINGS`. Each change is logged (`log level changed`) and recorded in the audit log with the other settings.
+- **error**: server errors, with the underlying cause (`request failed`), failed audit writes, and every request that ended in a 5xx.
+- **warn**: refused or invalid requests (400, 403, 409, 429…) with the reason in the `problem` field, denied access with the user and role, failed sign-ins (client address and provider only), upstream failures such as an unreachable Hub or object store, and preload files that could not be cached.
+- **info**: one line per request (`http request`: route, status, duration, bytes, user, token), one `audit event` line per administrative action (who, what, which target), and start-up and maintenance summaries.
+- **debug**: authentication decisions, cache searches, preload progress per file, and the health probes and static files that are otherwise hidden. Expect a lot of output; use it for an investigation, then go back to `info`.
+
+Never logged: passwords, tokens, secrets, request bodies, query strings, or the user name typed at a failed sign-in (people sometimes type their password there; a capped copy is kept in the audit table). Use the `request_id` of a line, also returned in the `X-Request-ID` header and in error responses, to follow one request.
+
 ## Health and readiness
 
 - `/healthz` answers while the process runs. `hfproxy healthcheck` probes it and is the container health check.

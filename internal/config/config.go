@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hfproxy/hfproxy/internal/logging"
 )
 
 type Config struct {
@@ -129,6 +131,9 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("HFPROXY_TRUSTED_PROXIES: %w", err)
 	}
 	c.LogLevel = strings.ToLower(value("LOG_LEVEL", "info"))
+	if canonical, err := logging.Normalize(c.LogLevel); err == nil {
+		c.LogLevel = canonical // "warning" is accepted for "warn"
+	}
 	c.DatabaseURL = secret("DATABASE_URL", "")
 	c.AutoMigrate = boolean("AUTO_MIGRATE", false)
 	c.HFBaseURL = value("HF_BASE_URL", "https://huggingface.co")
@@ -308,8 +313,8 @@ func (c Config) Validate() error {
 	if c.CacheInventoryRefresh < 0 {
 		return fmt.Errorf("HFPROXY_CACHE_INVENTORY_REFRESH must not be negative")
 	}
-	if c.LogLevel != "debug" && c.LogLevel != "info" && c.LogLevel != "warn" && c.LogLevel != "error" {
-		return fmt.Errorf("HFPROXY_LOG_LEVEL must be debug, info, warn, or error")
+	if _, err := logging.Normalize(c.LogLevel); err != nil || c.LogLevel == "" {
+		return fmt.Errorf("HFPROXY_LOG_LEVEL must be debug, info, warn (or warning), or error")
 	}
 	if c.PublicURL != "" {
 		public, publicErr := url.Parse(c.PublicURL)

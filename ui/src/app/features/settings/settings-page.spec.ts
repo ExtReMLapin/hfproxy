@@ -47,6 +47,7 @@ const settings: ManagedSettings = {
   tracing_sampling_ratio: 0.1,
   otlp_endpoint: '',
   cache_inventory_refresh: '5m0s',
+  log_level: 'info',
   locked: [],
 } as ManagedSettings;
 
@@ -127,6 +128,53 @@ describe('Settings page', () => {
     expect(field!.min).toBe('0');
     expect(field!.value).toBe('5368709120');
     expect(fixture.nativeElement.textContent).toContain('Pinned files are never removed');
+  });
+
+  it('lets the log level be chosen in the observability section and sends it back', async () => {
+    const fixture = TestBed.createComponent(SettingsPageComponent);
+    fixture.detectChanges();
+    http.expectOne('/api/v1/settings').flush(settings);
+    await flushMicrotasks();
+    const internals = fixture.componentInstance as unknown as {
+      section: { set(value: string): void };
+      draft: ManagedSettings | null;
+      save(): Promise<void>;
+    };
+    internals.section.set('observability');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const select = fixture.nativeElement.querySelector('select[name="logLevel"]') as HTMLSelectElement | null;
+    expect(select).not.toBeNull();
+    expect([...select!.options].map((option) => option.value)).toEqual(['debug', 'info', 'warn', 'error']);
+    expect(select!.value).toBe('info');
+    expect(select!.disabled).toBe(false);
+
+    select!.value = 'debug';
+    select!.dispatchEvent(new Event('change'));
+    expect(internals.draft?.log_level).toBe('debug');
+    const saving = internals.save();
+    await flushMicrotasks();
+    const put = http.expectOne((request) => request.method === 'PUT');
+    expect((put.request.body as Record<string, unknown>)['log_level']).toBe('debug');
+    put.flush({ ...settings, log_level: 'debug' });
+    await flushMicrotasks();
+    http.match('/api/v1/auth/providers').forEach((request) => request.flush({ local: true, oidc: false, ldap: false }));
+    await saving;
+  });
+
+  it('disables the log level when the environment locks it', async () => {
+    const fixture = TestBed.createComponent(SettingsPageComponent);
+    fixture.detectChanges();
+    http.expectOne('/api/v1/settings').flush({ ...settings, locked: ['log_level'] });
+    await flushMicrotasks();
+    (fixture.componentInstance as unknown as { section: { set(value: string): void } }).section.set('observability');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const select = fixture.nativeElement.querySelector('select[name="logLevel"]') as HTMLSelectElement;
+    expect(select.disabled).toBe(true);
   });
 
   it('knows which fields the environment locks and never sends the list back', async () => {

@@ -27,7 +27,7 @@ func (s *Server) apiRepos(w http.ResponseWriter, r *http.Request) {
 		}
 		repos, err := s.db.ListRepositories(r.Context(), p.Role, p.ID, after, limit+1)
 		if err != nil {
-			writeProblem(w, r, 500, "Database error", "Unable to list repositories.")
+			s.fail(w, r, err, 500, "Database error", "Unable to list repositories.")
 			return
 		}
 		result := make([]map[string]any, 0, len(repos))
@@ -65,7 +65,7 @@ func (s *Server) apiRepos(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := s.db.UpsertRepository(r.Context(), input.RepoType, input.RepoID, input.AccessPolicy, p.ID)
 	if err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to save repository policy.")
+		s.fail(w, r, err, 500, "Database error", "Unable to save repository policy.")
 		return
 	}
 	s.audit(r.Context(), p.ID, "repository.upsert", "repository", id, map[string]any{"repo_type": input.RepoType, "repo_id": input.RepoID, "access_policy": input.AccessPolicy})
@@ -103,7 +103,7 @@ func (s *Server) apiRepo(w http.ResponseWriter, r *http.Request, path string) {
 			return
 		}
 		if err != nil {
-			writeProblem(w, r, 500, "Database error", "Unable to load repository.")
+			s.fail(w, r, err, 500, "Database error", "Unable to load repository.")
 			return
 		}
 		writeJSON(w, 200, map[string]any{"id": id, "repo_type": repo.Type, "repo_id": repo.RepoID, "access_policy": repo.Policy, "created_at": repo.CreatedAt, "updated_at": repo.UpdatedAt})
@@ -122,7 +122,7 @@ func (s *Server) apiRepo(w http.ResponseWriter, r *http.Request, path string) {
 			if errors.Is(err, db.ErrNotFound) {
 				writeProblem(w, r, 404, "Repository not found", "The repository does not exist.")
 			} else {
-				writeProblem(w, r, 500, "Database error", "Unable to update policy.")
+				s.fail(w, r, err, 500, "Database error", "Unable to update policy.")
 			}
 			return
 		}
@@ -135,9 +135,9 @@ func (s *Server) apiRepo(w http.ResponseWriter, r *http.Request, path string) {
 			case errors.Is(err, db.ErrNotFound):
 				writeProblem(w, r, 404, "Repository not found", "The repository does not exist.")
 			case errors.As(err, &stage) && stage.Stage == "grants":
-				writeProblem(w, r, 500, "Database error", "Unable to remove repository grants.")
+				s.fail(w, r, err, 500, "Database error", "Unable to remove repository grants.")
 			default:
-				writeProblem(w, r, 500, "Database error", "Unable to delete repository.")
+				s.fail(w, r, err, 500, "Database error", "Unable to delete repository.")
 			}
 			return
 		}
@@ -156,7 +156,7 @@ func (s *Server) apiRepoGrants(w http.ResponseWriter, r *http.Request, repoID st
 	if r.Method == http.MethodGet {
 		grants, err := s.db.ListGrants(r.Context(), repoID)
 		if err != nil {
-			writeProblem(w, r, 500, "Database error", "Unable to list grants.")
+			s.fail(w, r, err, 500, "Database error", "Unable to list grants.")
 			return
 		}
 		items := []map[string]string{}
@@ -181,7 +181,7 @@ func (s *Server) apiRepoGrants(w http.ResponseWriter, r *http.Request, repoID st
 		}
 		repositoryExists, err := s.db.RepositoryExists(r.Context(), repoID)
 		if err != nil {
-			writeProblem(w, r, 500, "Database error", "Unable to validate the repository.")
+			s.fail(w, r, err, 500, "Database error", "Unable to validate the repository.")
 			return
 		}
 		if !repositoryExists {
@@ -190,7 +190,7 @@ func (s *Server) apiRepoGrants(w http.ResponseWriter, r *http.Request, repoID st
 		}
 		subjectExists, err := s.db.GrantSubjectExists(r.Context(), input.SubjectType, input.SubjectID)
 		if err != nil {
-			writeProblem(w, r, 500, "Database error", "Unable to validate the grant subject.")
+			s.fail(w, r, err, 500, "Database error", "Unable to validate the grant subject.")
 			return
 		}
 		if !subjectExists {
@@ -198,7 +198,7 @@ func (s *Server) apiRepoGrants(w http.ResponseWriter, r *http.Request, repoID st
 			return
 		}
 		if err := s.db.UpsertGrant(r.Context(), repoID, input.SubjectType, input.SubjectID, input.Permission); err != nil {
-			writeProblem(w, r, 500, "Database error", "Unable to save grant.")
+			s.fail(w, r, err, 500, "Database error", "Unable to save grant.")
 			return
 		}
 		s.audit(r.Context(), p.ID, "repository.grant.upsert", "repository", repoID, map[string]any{"subject_type": input.SubjectType, "subject_id": input.SubjectID, "permission": input.Permission})
@@ -213,7 +213,7 @@ func (s *Server) apiRepoGrants(w http.ResponseWriter, r *http.Request, repoID st
 			return
 		}
 		if err := s.db.DeleteGrant(r.Context(), repoID, subjectType, subjectID); err != nil {
-			writeProblem(w, r, 500, "Database error", "Unable to remove grant.")
+			s.fail(w, r, err, 500, "Database error", "Unable to remove grant.")
 			return
 		}
 		s.audit(r.Context(), p.ID, "repository.grant.delete", "repository", repoID, map[string]any{"subject_type": subjectType, "subject_id": subjectID})

@@ -62,7 +62,7 @@ func (s *Server) startRepoPreload(w http.ResponseWriter, r *http.Request, reposi
 		return
 	}
 	if err != nil {
-		writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to load the repository.")
+		s.fail(w, r, err, http.StatusInternalServerError, "Database error", "Unable to load the repository.")
 		return
 	}
 
@@ -96,8 +96,10 @@ func (s *Server) runRepoPreload(jobID, repositoryPK, repoType, repoID string, pr
 	defer func() { <-s.preloadSlots }()
 	ctx := context.Background()
 	s.updatePreload(jobID, func(job *preloadJob) { job.Status = "running" })
+	s.logger.Debug("preload running", "job_id", jobID, "repo_type", repoType, "repo_id", repoID)
 	files, commit, err := s.listHubFiles(ctx, repoType, repoID, "main")
 	if err != nil {
+		s.logger.Warn("preload failed: the file list could not be read from the Hub", "job_id", jobID, "repo_type", repoType, "repo_id", repoID, "error", safeLogValue(err.Error(), 300))
 		s.updatePreload(jobID, func(job *preloadJob) {
 			job.Status = "failed"
 			job.Error = err.Error()
@@ -108,6 +110,7 @@ func (s *Server) runRepoPreload(jobID, repositoryPK, repoType, repoID string, pr
 	if !validCommit(commit) {
 		commit, err = s.resolveCommit(ctx, resolvePath{RepoType: repoType, RepoID: repoID, Revision: "main"})
 		if err != nil {
+			s.logger.Warn("preload failed: the main revision could not be resolved", "job_id", jobID, "repo_type", repoType, "repo_id", repoID, "error", safeLogValue(err.Error(), 300))
 			message := "Unable to resolve the repository's main revision from Hugging Face."
 			s.updatePreload(jobID, func(job *preloadJob) {
 				job.Status = "failed"
@@ -136,6 +139,9 @@ func (s *Server) runRepoPreload(jobID, repositoryPK, repoType, repoID string, pr
 		processed++
 		if requestFailed {
 			failed++
+			s.logger.Warn("preload: a file could not be cached", "job_id", jobID, "repo_id", repoID, "path", safeLogValue(file, 300), "status", result.Code)
+		} else {
+			s.logger.Debug("preload: file cached", "job_id", jobID, "repo_id", repoID, "path", safeLogValue(file, 300), "status", result.Code)
 		}
 		s.updatePreload(jobID, func(job *preloadJob) {
 			job.FilesProcessed++
@@ -156,6 +162,9 @@ func (s *Server) runRepoPreload(jobID, repositoryPK, repoType, repoID string, pr
 		}
 		status, message = job.Status, job.Error
 	})
+	if failed > 0 {
+		s.logger.Warn("preload finished with errors", "job_id", jobID, "repo_id", repoID, "files", len(files), "failed", failed)
+	}
 	s.recordPreloadCompletion(ctx, principal.ID, repositoryPK, jobID, repoType, repoID, status, commit, len(files), processed, failed, message)
 }
 

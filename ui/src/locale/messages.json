@@ -292,6 +292,7 @@
     "681942627979264325": " Monitoring and tracing ",
     "503359249737927668": "Observability",
     "1313168010844959987": " Metrics are exposed on the configured path without application authentication. Keep that path on a private monitoring network. Traces are exported over OTLP/HTTP; credentials and request data are never added to spans. ",
+    "5263267265282631494": "Log level{$START_TAG_SELECT}{$START_TAG_OPTION}Debug{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_1}Info{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_2}Warning{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_3}Error{$CLOSE_TAG_OPTION}{$CLOSE_TAG_SELECT}{$START_TAG_SPAN}Applies immediately, without a restart. Debug adds details on every request and can be verbose; Error only reports failures. Passwords, tokens and secrets are never logged.{$CLOSE_TAG_SPAN}",
     "3526572593379043188": "{$TAG_INPUT} Enable Prometheus metrics ",
     "5701539060358858775": "Metrics path{$TAG_INPUT}",
     "8377028721251905902": "Cache inventory refresh{$TAG_INPUT}{$START_TAG_SPAN}Reads authoritative database metadata asynchronously; this interval avoids queries during Prometheus scrapes.{$CLOSE_TAG_SPAN}",

@@ -44,7 +44,7 @@ func (s *Server) apiPersonalTokens(w http.ResponseWriter, r *http.Request, suffi
 		}
 		revoked, err := s.db.RevokeToken(r.Context(), p.ID, id)
 		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to revoke this token.")
+			s.fail(w, r, err, http.StatusInternalServerError, "Database error", "Unable to revoke this token.")
 			return
 		}
 		if !revoked {
@@ -60,7 +60,7 @@ func (s *Server) apiPersonalTokens(w http.ResponseWriter, r *http.Request, suffi
 	case http.MethodGet:
 		tokens, err := s.db.ListTokens(r.Context(), p.ID)
 		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to load your tokens.")
+			s.fail(w, r, err, http.StatusInternalServerError, "Database error", "Unable to load your tokens.")
 			return
 		}
 		items := make([]personalToken, 0, len(tokens))
@@ -93,7 +93,7 @@ func (s *Server) apiPersonalTokens(w http.ResponseWriter, r *http.Request, suffi
 			case errors.Is(err, db.ErrTokenLimit):
 				writeProblem(w, r, http.StatusConflict, "Token limit reached", "Revoke an existing token before creating another (maximum 100).")
 			default:
-				writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to create a token.")
+				s.fail(w, r, err, http.StatusInternalServerError, "Database error", "Unable to create a token.")
 			}
 			return
 		}
