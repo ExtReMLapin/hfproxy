@@ -96,7 +96,7 @@ Local username/password authentication is enabled by default. OIDC/SSO and LDAP 
     hfproxy cache pin|unpin|pins
     hfproxy config validate
     hfproxy config show --source
-    hfproxy version
+    hfproxy version [--emoji|--a11y|--tag|--semver]    # EmojiVer: docs/emojiver.md
 
 `cache purge` is a dry run by default; execution requires `--execute --yes`. `cache verify` reads the objects and checks their SHA-256 hashes. Secrets can be supplied through `HFPROXY_*_FILE`. `config validate` does not reveal configuration values.
 

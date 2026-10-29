@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      issues: read
       packages: write
       attestations: write
       id-token: write
@@ -23,6 +24,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Validate release tag
         env:
@@ -40,6 +42,30 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: echo "value=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+
+      # EmojiVer (docs/emojiver.md): nature from the commits since the previous
+      # tag, health from the open "Still broken after fix" issues.
+      - name: Compute EmojiVer
+        id: emojiver
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          previous=$(git describe --tags --abbrev=0 "${RELEASE_TAG}^" 2>/dev/null || true)
+          regressions=$(gh issue list --repo "$REPOSITORY" --state open --search 'in:title "Still broken after fix"' --json number --jq length || echo -1)
+          git log -z --format=%B "${previous:+${previous}..}${RELEASE_TAG}" > "$RUNNER_TEMP/commits"
+          args=(--version "$RELEASE_TAG" --commit "$GITHUB_SHA" --date "$(git log -1 --format=%cI "$RELEASE_TAG")" --nature auto --open-regressions "$regressions")
+          emoji=$(go run ./cmd/emojiver encode "${args[@]}" < "$RUNNER_TEMP/commits")
+          tag=$(go run ./cmd/emojiver encode "${args[@]}" --format tag < "$RUNNER_TEMP/commits")
+          echo "emoji=$emoji" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "### ${RELEASE_TAG} = ${emoji}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
@@ -63,8 +89,10 @@ jobs:
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=${{ steps.emojiver.outputs.tag }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            io.hfproxy.emojiver=${{ steps.emojiver.outputs.emoji }}
 
       - name: Build and push image
         id: push
@@ -78,6 +106,7 @@ jobs:
           build-args: |
             BUILD_VERSION=${{ steps.version.outputs.value }}
             BUILD_COMMIT=${{ github.sha }}
+            BUILD_EMOJI=${{ steps.emojiver.outputs.emoji }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: mode=max

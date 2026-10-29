@@ -105,6 +105,14 @@ type Principal struct {
 // Version is embedded in upstream User-Agent headers and set by release builds.
 var Version = "dev"
 
+// Commit and Emoji are set by release builds. Emoji is the EmojiVer string
+// computed by CI (docs/emojiver.md); it is only shown when it matches Version
+// and Commit.
+var (
+	Commit = "unknown"
+	Emoji  = ""
+)
+
 func New(ctx context.Context, cfg config.Config, store *db.Store, objectStore *storage.S3, logger *slog.Logger) (*Server, error) {
 	state, err := makeRuntimeState(ctx, cfg, objectStore, nil)
 	if err != nil {

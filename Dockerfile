@@ -10,6 +10,7 @@ RUN npm run build
 FROM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS build
 ARG BUILD_VERSION=dev
 ARG BUILD_COMMIT=unknown
+ARG BUILD_EMOJI=
 
 RUN apk add --no-cache ca-certificates git
 WORKDIR /src
@@ -17,7 +18,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=ui /ui/dist/hfproxy/browser ./internal/server/web/dist
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${BUILD_VERSION} -X github.com/hfproxy/hfproxy/internal/server.Version=${BUILD_VERSION} -X main.commit=${BUILD_COMMIT}" -o /out/hfproxy ./cmd/hfproxy
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${BUILD_VERSION} -X github.com/hfproxy/hfproxy/internal/server.Version=${BUILD_VERSION} -X main.commit=${BUILD_COMMIT} -X github.com/hfproxy/hfproxy/internal/server.Commit=${BUILD_COMMIT} -X github.com/hfproxy/hfproxy/internal/server.Emoji=${BUILD_EMOJI}" -o /out/hfproxy ./cmd/hfproxy
 
 # The final image holds the static binary and CA certificates only: no shell,
 # no package manager. It runs as UID 65532 (nonroot).

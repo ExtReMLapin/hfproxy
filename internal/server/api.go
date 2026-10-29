@@ -43,7 +43,7 @@ func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {
 	// Match known paths before methods so callers receive 405 with the
 	// endpoint's actual Allow header instead of an ambiguous 404.
 	switch path {
-	case "auth/providers", "me", "healthz", "stats", "downloads/active", "cache/entries", "audit-events", "settings/public":
+	case "auth/providers", "me", "healthz", "version", "stats", "downloads/active", "cache/entries", "audit-events", "settings/public":
 		if r.Method != http.MethodGet {
 			methodNotAllowedWith(w, "GET")
 			return
@@ -110,6 +110,8 @@ func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, p)
 	case path == "healthz" && r.Method == http.MethodGet:
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	case path == "version" && r.Method == http.MethodGet:
+		s.apiVersion(w, r)
 	case path == "stats" && r.Method == http.MethodGet:
 		s.apiStats(w, r)
 	case path == "downloads/active" && r.Method == http.MethodGet:

@@ -51,8 +51,7 @@ func run(args []string) error {
 		printUsage()
 		return nil
 	case "version":
-		fmt.Printf("hfproxy %s (commit %s)\n", version, commit)
-		return nil
+		return versionCommand(args[1:], os.Stdout)
 	case "config":
 		return configCommand(args[1:])
 	case "healthcheck":
@@ -91,7 +90,7 @@ Usage:
   hfproxy config validate
   hfproxy config show --source
   hfproxy healthcheck
-  hfproxy version
+  hfproxy version [--emoji|--a11y|--tag|--semver]
 
 Secrets are read from HFPROXY_*_FILE or protected mounted files; never pass them as flags.
 `)

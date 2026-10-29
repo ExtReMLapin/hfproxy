@@ -1,0 +1,21 @@
+{
+  "comment": "Append-only. The entry at index N is the codename of major version N. Never edit, reorder or remove an entry; see docs/emojiver.md.",
+  "codenames": [
+    {"emoji": "🐙", "name": "octopus"},
+    {"emoji": "🦊", "name": "fox"},
+    {"emoji": "🦉", "name": "owl"},
+    {"emoji": "🐢", "name": "turtle"},
+    {"emoji": "🦋", "name": "butterfly"},
+    {"emoji": "🐳", "name": "spouting whale"},
+    {"emoji": "🦀", "name": "crab"},
+    {"emoji": "🦔", "name": "hedgehog"},
+    {"emoji": "🐝", "name": "honeybee"},
+    {"emoji": "🦜", "name": "parrot"},
+    {"emoji": "🐧", "name": "penguin"},
+    {"emoji": "🦒", "name": "giraffe"},
+    {"emoji": "🦓", "name": "zebra"},
+    {"emoji": "🦘", "name": "kangaroo"},
+    {"emoji": "🦥", "name": "sloth"},
+    {"emoji": "🦦", "name": "otter"}
+  ]
+}
