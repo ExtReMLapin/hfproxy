@@ -103,7 +103,9 @@ func TestUpgradeFromEveryPreviousVersion(t *testing.T) {
 			}
 			// The totals of the console start from what the downloads table held,
 			// and a grant that promised more than reading now says what it gives.
-			if n := count(`SELECT COALESCE(SUM(hits),0) FROM repository_download_counts WHERE repository_id='r1'`); n != 1 {
+			// (From version 15 on the counters exist already and rows inserted by hand
+			// are not counted; only older databases are filled by the migration.)
+			if n := count(`SELECT COALESCE(SUM(hits),0) FROM repository_download_counts WHERE repository_id='r1'`); from < 15 && n != 1 {
 				t.Errorf("the hit counter holds %d after the upgrade, want the 1 seeded download", n)
 			}
 			if n := count(`SELECT COUNT(*) FROM repo_grants WHERE permission='read'`); n != 1 {

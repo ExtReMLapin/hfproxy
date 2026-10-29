@@ -10,6 +10,9 @@ import (
 )
 
 func (s *Server) hubAPI(w http.ResponseWriter, r *http.Request) {
+	if s.serveLocalAPI(w, r) {
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		methodNotAllowed(w)
 		return
@@ -25,7 +28,21 @@ func (s *Server) hubAPI(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, r, http.StatusUnauthorized, "Authentication required", "This endpoint reports the local hfproxy identity.")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"name": p.Username, "fullname": p.DisplayName, "email": p.Email, "auth": map[string]any{"type": "hfproxy", "accessToken": map[string]string{"displayName": "hfproxy"}}})
+		// The groups a user belongs to are the "organizations" Hub clients list.
+		orgs := []map[string]any{}
+		if names, err := s.db.UserGroupNames(r.Context(), p.ID); err == nil {
+			for _, name := range names {
+				orgs = append(orgs, map[string]any{"type": "org", "name": name, "fullname": name, "roleInOrg": "write", "canPay": false, "isEnterprise": false})
+			}
+		}
+		role := "read"
+		if hasScope(p, "publish") && s.currentConfig().CustomRepos {
+			role = "write"
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"type": "user", "id": p.ID, "name": p.Username, "fullname": p.DisplayName, "email": p.Email, "orgs": orgs, "canPay": false,
+			"auth": map[string]any{"type": "access_token", "accessToken": map[string]string{"displayName": "hfproxy", "role": role}},
+		})
 		return
 	}
 	parsed, upstreamPath, query, err := parseHubAPIPath(r.URL.EscapedPath(), r.URL.Query())

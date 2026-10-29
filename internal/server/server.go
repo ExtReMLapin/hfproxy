@@ -492,6 +492,9 @@ func (s *Server) serveMainListenerMetrics(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) dashboardOrResolve(w http.ResponseWriter, r *http.Request) {
+	if strings.Contains(r.URL.Path, ".git/info/lfs/") && s.serveLFS(w, r) {
+		return
+	}
 	if r.URL.Path == "/" {
 		s.frontend(w, r)
 		return

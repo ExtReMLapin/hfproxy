@@ -18,6 +18,17 @@ import (
 // upload takes at most 10000 parts and storage.S3.Put sends 64 MiB parts.
 const MaxCacheFileSize = 10000 * (64 << 20)
 
+// DefaultUploadMaxFileSize is the largest published file when none is set.
+const DefaultUploadMaxFileSize = 50 << 30
+
+// MaxUploadFileSize is the largest file a user may publish.
+func (c Config) MaxUploadFileSize() int64 {
+	if c.UploadMaxFileSize <= 0 {
+		return DefaultUploadMaxFileSize
+	}
+	return c.UploadMaxFileSize
+}
+
 type Config struct {
 	ListenAddr     string
 	PublicURL      string
@@ -108,6 +119,12 @@ type Config struct {
 	// DownloadDailyQuota is the default amount of data a user may download in
 	// 24 hours, in bytes. A user's own quota overrides it.
 	DownloadDailyQuota int64
+	// CustomRepos lets users publish their own models and datasets on the proxy.
+	// UploadMaxFileSize bounds one published file and UploadUserQuota the bytes a
+	// user may keep in repositories they own (0 turns the quota off).
+	CustomRepos        bool
+	UploadMaxFileSize  int64
+	UploadUserQuota    int64
 	RetentionDownloads time.Duration
 	RetentionAudit     time.Duration
 	MetricsAddr        string
@@ -227,6 +244,9 @@ func Load() (Config, error) {
 	c.DownloadMaxConcurrent = int64(number("DOWNLOAD_MAX_CONCURRENT_PER_USER", 0))
 	c.DownloadRateLimit = int64(number("DOWNLOAD_RATE_LIMIT", 0))
 	c.DownloadDailyQuota = int64(number("DOWNLOAD_DAILY_QUOTA", 0))
+	c.CustomRepos = boolean("CUSTOM_REPOSITORIES", true)
+	c.UploadMaxFileSize = int64(number("UPLOAD_MAX_FILE_SIZE", DefaultUploadMaxFileSize))
+	c.UploadUserQuota = int64(number("UPLOAD_USER_QUOTA", 0))
 	c.RetentionDownloads = duration("RETENTION_DOWNLOADS", 90*24*time.Hour)
 	c.RetentionAudit = duration("RETENTION_AUDIT", 365*24*time.Hour)
 	c.MetricsAddr = value("METRICS_ADDR", "")
@@ -322,6 +342,9 @@ func (c Config) Validate() error {
 	}
 	if c.StagingMinFreeBytes < 0 {
 		return fmt.Errorf("HFPROXY_STAGING_MIN_FREE_BYTES must not be negative")
+	}
+	if c.UploadMaxFileSize < 0 || c.UploadMaxFileSize > MaxCacheFileSize || c.UploadUserQuota < 0 {
+		return fmt.Errorf("HFPROXY_UPLOAD_MAX_FILE_SIZE must be at most %d bytes (0 means 50 GiB), and HFPROXY_UPLOAD_USER_QUOTA must not be negative", MaxCacheFileSize)
 	}
 	if c.DownloadMaxConcurrent < 0 || c.DownloadRateLimit < 0 || c.DownloadDailyQuota < 0 {
 		return fmt.Errorf("the download limits (HFPROXY_DOWNLOAD_*) must not be negative")
@@ -528,7 +551,7 @@ func validateEnvironmentOverrides() error {
 			}
 		}
 	}
-	for _, key := range []string{"CACHE_MAX_FILE_SIZE", "CACHE_MAX_TOTAL_SIZE", "DOWNLOAD_MAX_CONCURRENT_PER_USER", "DOWNLOAD_RATE_LIMIT", "DOWNLOAD_DAILY_QUOTA", "CACHE_FILL_CONCURRENCY", "UPSTREAM_BREAKER_THRESHOLD", "API_CACHE_MAX_BYTES", "STAGING_MIN_FREE_BYTES"} {
+	for _, key := range []string{"CACHE_MAX_FILE_SIZE", "CACHE_MAX_TOTAL_SIZE", "DOWNLOAD_MAX_CONCURRENT_PER_USER", "DOWNLOAD_RATE_LIMIT", "DOWNLOAD_DAILY_QUOTA", "UPLOAD_MAX_FILE_SIZE", "UPLOAD_USER_QUOTA", "CACHE_FILL_CONCURRENCY", "UPSTREAM_BREAKER_THRESHOLD", "API_CACHE_MAX_BYTES", "STAGING_MIN_FREE_BYTES"} {
 		name := "HFPROXY_" + key
 		if value, ok := os.LookupEnv(name); ok && value != "" {
 			if _, err := strconv.Atoi(value); err != nil {

@@ -72,6 +72,9 @@ func (s *Server) apiPersonalTokens(w http.ResponseWriter, r *http.Request, suffi
 		var input struct {
 			Name          string `json:"name"`
 			ExpiresInDays int    `json:"expires_in_days"`
+			// Scope is "read" (the default) or "publish", which also lets the
+			// token create and change models and datasets published here.
+			Scope string `json:"scope"`
 		}
 		if !decodeJSON(w, r, &input) {
 			return
@@ -81,9 +84,21 @@ func (s *Server) apiPersonalTokens(w http.ResponseWriter, r *http.Request, suffi
 			writeProblem(w, r, http.StatusBadRequest, "Invalid token", "Provide a name of 1–100 characters and an expiration of 1–365 days.")
 			return
 		}
+		scope := input.Scope
+		if scope == "" {
+			scope = "read"
+		}
+		if scope != "read" && scope != "publish" {
+			writeProblem(w, r, http.StatusBadRequest, "Invalid token", "The scope must be read or publish.")
+			return
+		}
+		if scope == "publish" && !s.currentConfig().CustomRepos {
+			writeProblem(w, r, http.StatusConflict, "Publishing is off", "Publishing models and datasets is turned off on this proxy.")
+			return
+		}
 		secret := "hfpx_" + randomSecret(32)
 		expires := time.Now().UTC().Add(time.Duration(input.ExpiresInDays) * 24 * time.Hour)
-		item := personalToken{ID: db.NewID(), Name: input.Name, Prefix: secret[:16], Scopes: []string{"read"}, ExpiresAt: &expires}
+		item := personalToken{ID: db.NewID(), Name: input.Name, Prefix: secret[:16], Scopes: []string{scope}, ExpiresAt: &expires}
 		ring := s.keyRing()
 		stored := db.AccessToken{ID: item.ID, Name: item.Name, Prefix: item.Prefix, Scopes: item.Scopes, ExpiresAt: item.ExpiresAt}
 		if err := s.db.CreateToken(r.Context(), p.ID, &stored, ring.Hash(secret), ring.KeyID(), 100); err != nil {

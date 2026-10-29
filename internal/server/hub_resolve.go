@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hfproxy/hfproxy/internal/db"
@@ -56,9 +57,20 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, authErr := s.authenticate(r)
-	repoPK, policy, err := s.repositoryAccess(r.Context(), p, authErr, parsed.RepoType, parsed.RepoID)
+	grant, err := s.repositoryAccessInfo(r.Context(), p, authErr, parsed.RepoType, parsed.RepoID)
 	if err != nil {
+		var access accessError
+		if errors.As(err, &access) && access.status == http.StatusForbidden && access.title == "Repository not registered" &&
+			s.inLocalNamespace(r.Context(), strings.SplitN(parsed.RepoID, "/", 2)[0]) && strings.Contains(parsed.RepoID, "/") {
+			hfError(w, http.StatusNotFound, "RepoNotFound", "Repository not found")
+			return
+		}
 		s.accessProblem(w, r, err)
+		return
+	}
+	repoPK, policy := grant.ID, grant.Policy
+	if grant.Origin == "local" {
+		s.serveLocalFile(w, r, parsed, grant, p)
 		return
 	}
 	r, w, releaseDownload, admitted := s.admitDownload(w, r, p)
