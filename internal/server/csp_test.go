@@ -53,7 +53,7 @@ func TestFrontendIndexGetsAFreshNonce(t *testing.T) {
 		if strings.Contains(body, cspNoncePlaceholder) {
 			t.Fatal("the nonce placeholder was not replaced")
 		}
-		match := regexp.MustCompile(`ngcspnonce="([^"]+)"`).FindStringSubmatch(body)
+		match := regexp.MustCompile(`(?i)ngcspnonce="([^"]+)"`).FindStringSubmatch(body)
 		if match == nil || !strings.Contains(rec.Header().Get("Content-Security-Policy"), "'nonce-"+match[1]+"'") {
 			t.Fatalf("the policy %q does not carry the nonce in the page", rec.Header().Get("Content-Security-Policy"))
 		}
