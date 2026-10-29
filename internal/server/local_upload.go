@@ -3,7 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/sha1" //nolint:gosec // Git blob names are SHA-1; they identify content, they do not protect it.
+	"crypto/sha1" // #nosec G505 -- Git blob names are SHA-1; they identify content, they do not protect it.
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -80,7 +80,7 @@ func validRepoFilePath(p string) bool {
 
 // gitBlobOID is the Git object name of a file's content.
 func gitBlobOID(content []byte) string {
-	h := sha1.New() //nolint:gosec // see the import.
+	h := sha1.New() // #nosec G401 -- see the import.
 	fmt.Fprintf(h, "blob %d\x00", len(content))
 	h.Write(content)
 	return hex.EncodeToString(h.Sum(nil))

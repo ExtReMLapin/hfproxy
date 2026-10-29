@@ -235,7 +235,7 @@ func TestPublishAModelAndReadItBack(t *testing.T) {
 	if status != http.StatusOK || !bytes.Equal(data, config) || header.Get("X-Repo-Commit") != first["commitOid"] || len(strings.Trim(header.Get("ETag"), `"`)) != 40 || header.Get("X-Linked-Etag") != "" {
 		t.Fatalf("regular file = %d %q %v", status, data, header)
 	}
-	status, header, data = env.do(t, http.MethodHead, "/alice/tiny/resolve/main/model.safetensors", env.alice, nil)
+	status, header, _ = env.do(t, http.MethodHead, "/alice/tiny/resolve/main/model.safetensors", env.alice, nil)
 	if status != http.StatusOK || strings.Trim(header.Get("X-Linked-Etag"), `"`) != sum(weights) || header.Get("X-Linked-Size") != fmt.Sprint(len(weights)) || header.Get("Content-Length") != fmt.Sprint(len(weights)) {
 		t.Fatalf("LFS file HEAD = %d %v", status, header)
 	}

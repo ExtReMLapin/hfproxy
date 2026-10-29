@@ -3,7 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/sha1" //nolint:gosec // Git object names are SHA-1; they identify content, they do not protect it.
+	"crypto/sha1" // #nosec G505 -- Git object names are SHA-1; they identify content, they do not protect it.
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -614,7 +614,7 @@ func fileEntryFor(f db.LocalFile) fileEntry {
 // dirOID gives a directory a stable Git-style identity from what it holds.
 func dirOID(entries []string) string {
 	sort.Strings(entries)
-	h := sha1.New() //nolint:gosec // see the import.
+	h := sha1.New() // #nosec G401 -- see the import.
 	for _, e := range entries {
 		h.Write([]byte(e))
 		h.Write([]byte{0})

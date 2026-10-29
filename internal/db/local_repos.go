@@ -2,7 +2,7 @@ package db
 
 import (
 	"context"
-	"crypto/sha1" //nolint:gosec // Git object names are SHA-1; this is an identifier, not a security boundary.
+	"crypto/sha1" // #nosec G505 -- Git object names are SHA-1; this is an identifier, not a security boundary.
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -605,7 +605,7 @@ func checkFileDirConflicts(tree map[string]LocalFile) error {
 
 // commitName derives a Git-looking 40-hex commit name from what a commit holds.
 func commitName(message, repositoryID, parent string, manifest []string, at time.Time) string {
-	h := sha1.New() //nolint:gosec // see the import.
+	h := sha1.New() // #nosec G401 -- see the import.
 	fmt.Fprintf(h, "commit %s\nparent %s\ntime %d\n%s\n", repositoryID, parent, at.UnixNano(), message)
 	for _, line := range manifest {
 		h.Write([]byte(line))
