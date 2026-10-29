@@ -22,6 +22,8 @@ export class UsersPageComponent implements OnInit {
   protected readonly busy = signal(false);
   protected readonly users = signal<AdminUser[]>([]);
   private readonly savedValues = new Map<string, { role: string; status: string }>();
+  // Quotas typed in the table, in GiB, by user id; absent until edited.
+  private readonly quotaEdits = new Map<string, string>();
   protected draft = { username: '', email: '', display_name: '', password: '', role: 'reader' };
 
   ngOnInit(): void {
@@ -64,11 +66,24 @@ export class UsersPageComponent implements OnInit {
   protected async save(user: AdminUser): Promise<void> {
     const previous = this.savedValues.get(user.id) ?? { role: user.role, status: user.status };
     this.busy.set(true);
+    const quota = this.quotaEdits.has(user.id)
+      ? this.quotaBytes(this.quotaEdits.get(user.id)!)
+      : undefined;
+    if (quota === 'invalid') {
+      this.feedback.showError(
+        $localize`The quota must be a number of GiB, 0 for unlimited, or empty for the default.`,
+      );
+      this.busy.set(false);
+      return;
+    }
     try {
       await this.api.patch(`/api/v1/users/${encodeURIComponent(user.id)}`, {
         role: user.role,
         status: user.status,
+        ...(quota === undefined ? {} : { daily_quota_bytes: quota }),
       });
+      if (quota !== undefined) user.daily_quota_bytes = quota;
+      this.quotaEdits.delete(user.id);
       this.savedValues.delete(user.id);
       this.feedback.showSuccess($localize`Updated ${user.username}:USERNAME:.`);
     } catch (error) {
@@ -96,6 +111,26 @@ export class UsersPageComponent implements OnInit {
       this.savedValues.get(user.id) ?? { role: user.role, status: user.status },
     );
     user.status = status;
+  }
+
+  /** What the quota field shows: GiB, empty when the user follows the default. */
+  protected quotaText(user: AdminUser): string {
+    const edited = this.quotaEdits.get(user.id);
+    if (edited !== undefined) return edited;
+    if (user.daily_quota_bytes === null || user.daily_quota_bytes === undefined) return '';
+    return String(Math.round((user.daily_quota_bytes / 2 ** 30) * 100) / 100);
+  }
+
+  protected setQuota(user: AdminUser, text: string | number | null): void {
+    this.quotaEdits.set(user.id, text === null ? '' : String(text));
+  }
+
+  /** GiB typed by the administrator to bytes: null for the default, 'invalid' for a bad entry. */
+  private quotaBytes(text: string): number | null | 'invalid' {
+    if (text.trim() === '') return null;
+    const gib = Number(text);
+    if (!Number.isFinite(gib) || gib < 0) return 'invalid';
+    return Math.round(gib * 2 ** 30);
   }
 
   protected get currentUserId(): string {

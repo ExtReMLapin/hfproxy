@@ -390,8 +390,11 @@ func callerOf(ctx context.Context) requestInfo {
 func (s *Server) finishDownload(ctx context.Context, id string, bytes int64, errorClass string) {
 	ctx, cancel := bookkeepingContext(ctx)
 	defer cancel()
+	if errorClass != "" {
+		s.logger.Warn("download did not complete", "request_id", requestID(ctx), "download_id", id, "reason", errorClass, "bytes", bytes)
+	}
 	if err := s.db.FinishDownload(ctx, id, bytes, errorClass); err != nil {
-		s.logger.Warn("download completion could not be recorded")
+		s.logger.Warn("download completion could not be recorded", "request_id", requestID(ctx), "download_id", id, "error", safeLogValue(err.Error(), 200))
 	}
 }
 

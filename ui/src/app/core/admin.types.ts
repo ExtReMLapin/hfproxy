@@ -94,6 +94,8 @@ export interface AdminUser {
   role: string;
   status: string;
   created_at: string;
+  /** The user's own daily download quota in bytes: null uses the default, 0 is unlimited. */
+  daily_quota_bytes?: number | null;
 }
 
 export interface AdminGroup {
@@ -142,6 +144,10 @@ export interface ManagedSettings {
   session_absolute_ttl: string;
   cache_max_file_size: number;
   cache_max_total_size: number;
+  /** Download limits; 0 turns each one off. */
+  download_max_concurrent: number;
+  download_rate_limit: number;
+  download_daily_quota: number;
   cache_ref_ttl: string;
   cache_negative_ttl: string;
   cache_gc_grace: string;

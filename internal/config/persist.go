@@ -36,6 +36,9 @@ type managedSettings struct {
 	SessionAbsoluteTTL     time.Duration `json:"session_absolute_ttl"`
 	CacheMaxFileSize       int64         `json:"cache_max_file_size"`
 	CacheMaxTotalSize      *int64        `json:"cache_max_total_size,omitempty"`
+	DownloadMaxConcurrent  *int64        `json:"download_max_concurrent,omitempty"`
+	DownloadRateLimit      *int64        `json:"download_rate_limit,omitempty"`
+	DownloadDailyQuota     *int64        `json:"download_daily_quota,omitempty"`
 	CacheRefTTL            time.Duration `json:"cache_ref_ttl"`
 	CacheNegativeTTL       time.Duration `json:"cache_negative_ttl"`
 	CacheGCGrace           time.Duration `json:"cache_gc_grace"`
@@ -151,7 +154,7 @@ func managedFromConfig(c Config) managedSettings {
 		PublicURL: c.PublicURL, HFBaseURL: c.HFBaseURL, HFProxyURL: stringPointer(c.HFProxyURL), HFToken: c.HFToken, HFAllowedHosts: c.HFAllowedHosts, HFTimeout: c.HFTimeout,
 		S3Endpoint: c.S3Endpoint, S3Region: c.S3Region, S3Bucket: c.S3Bucket, S3Prefix: c.S3Prefix, S3ForcePathStyle: c.S3ForcePathStyle,
 		S3AccessKey: c.S3AccessKey, S3SecretKey: c.S3SecretKey, S3ServerSideEncryption: boolPointer(c.S3ServerSideEncryption), AuthMode: c.AuthMode, AnonymousPublicRead: c.AnonymousPublicRead,
-		SessionIdleTTL: c.SessionIdleTTL, SessionAbsoluteTTL: c.SessionAbsoluteTTL, CacheMaxFileSize: c.CacheMaxFileSize, CacheMaxTotalSize: int64Pointer(c.CacheMaxTotalSize),
+		SessionIdleTTL: c.SessionIdleTTL, SessionAbsoluteTTL: c.SessionAbsoluteTTL, CacheMaxFileSize: c.CacheMaxFileSize, CacheMaxTotalSize: int64Pointer(c.CacheMaxTotalSize), DownloadMaxConcurrent: int64Pointer(c.DownloadMaxConcurrent), DownloadRateLimit: int64Pointer(c.DownloadRateLimit), DownloadDailyQuota: int64Pointer(c.DownloadDailyQuota),
 		CacheRefTTL: c.CacheRefTTL, CacheNegativeTTL: c.CacheNegativeTTL, CacheGCGrace: c.CacheGCGrace,
 		OIDCIssuer: c.OIDCIssuer, OIDCClientID: c.OIDCClientID, OIDCClientSecret: c.OIDCClientSecret, OIDCRedirectURL: c.OIDCRedirectURL,
 		OIDCAutoProvision: c.OIDCAutoProvision, LDAPURL: c.LDAPURL, LDAPStartTLS: c.LDAPStartTLS, LDAPBindDN: c.LDAPBindDN,
@@ -175,6 +178,17 @@ func (s managedSettings) apply(c Config) Config {
 	// the environment is kept rather than reset to "unlimited".
 	if s.CacheMaxTotalSize != nil {
 		c.CacheMaxTotalSize = *s.CacheMaxTotalSize
+	}
+	// Settings saved before the download limits existed leave them unset, so
+	// the values from the environment are kept.
+	if s.DownloadMaxConcurrent != nil {
+		c.DownloadMaxConcurrent = *s.DownloadMaxConcurrent
+	}
+	if s.DownloadRateLimit != nil {
+		c.DownloadRateLimit = *s.DownloadRateLimit
+	}
+	if s.DownloadDailyQuota != nil {
+		c.DownloadDailyQuota = *s.DownloadDailyQuota
 	}
 	c.CacheRefTTL, c.CacheNegativeTTL, c.CacheGCGrace = s.CacheRefTTL, s.CacheNegativeTTL, s.CacheGCGrace
 	c.OIDCIssuer, c.OIDCClientID, c.OIDCClientSecret, c.OIDCRedirectURL = s.OIDCIssuer, s.OIDCClientID, s.OIDCClientSecret, s.OIDCRedirectURL

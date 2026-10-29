@@ -23,6 +23,20 @@ Logs are JSON lines on standard output. The level is `debug`, `info`, `warn` (or
 
 Never logged: passwords, tokens, secrets, request bodies, query strings, or the user name typed at a failed sign-in (people sometimes type their password there; a capped copy is kept in the audit table). Use the `request_id` of a line, also returned in the `X-Request-ID` header and in error responses, to follow one request.
 
+## Download limits
+
+Three limits keep one client from taking all the bandwidth. Each is off (0) by default, can be set with an environment variable or in the console (**Settings → Proxy behavior → Download limits**), and applies at once.
+
+| Limit | Variable | Behaviour |
+| --- | --- | --- |
+| Simultaneous downloads per user | `HFPROXY_DOWNLOAD_MAX_CONCURRENT_PER_USER` | A user (or, when anonymous, a client address) over the limit gets `429` with `Retry-After: 5`. Counted on each instance, not across replicas. The slot is given back when the last byte has been sent, so sequential downloads on one connection are not refused. |
+| Speed per download | `HFPROXY_DOWNLOAD_RATE_LIMIT` (bytes per second) | Each transfer is paced to the cap, with about a quarter of a second of data let through at once. Applies to cache hits and to files being fetched. |
+| Daily quota per user | `HFPROXY_DOWNLOAD_DAILY_QUOTA` (bytes) | Counted over the last 24 hours from the download history, so it is shared by all replicas. Checked when a transfer starts: one already running is never cut, so a user can exceed the quota by the size of their last file. Over the quota, a user gets `429` with a clear message. Anonymous clients have no account and are not counted. |
+
+A user's own quota overrides the default: on the **Users** page enter a number of GiB (0 is unlimited, empty follows the default), or send `daily_quota_bytes` (null, 0 or bytes) in `PATCH /api/v1/users/{id}`.
+
+Preloads started by an administrator are never limited. A refusal is logged at `warn` (`download refused: limit reached`) and counted in `hfproxy_download_rejected_total{reason="concurrency"|"quota"}`.
+
 ## Health and readiness
 
 - `/healthz` answers while the process runs. `hfproxy healthcheck` probes it and is the container health check.

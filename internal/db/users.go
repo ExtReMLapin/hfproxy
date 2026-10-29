@@ -30,6 +30,9 @@ func (e *StageError) Unwrap() error { return e.Err }
 type User struct {
 	ID, Username, Email, DisplayName, Role, Status string
 	CreatedAt                                      time.Time
+	// DailyQuotaBytes overrides the default download quota: nil uses the
+	// default, 0 means unlimited, a positive value is the limit.
+	DailyQuotaBytes *int64
 }
 
 // CreateUser inserts a local user. It returns ErrExists for a taken username.
@@ -44,7 +47,7 @@ func (s *Store) CreateUser(ctx context.Context, id, username, email, displayName
 // ListUsers returns up to limit users ordered by username then id, starting
 // after the given keyset when after is not nil.
 func (s *Store) ListUsers(ctx context.Context, after *[2]string, limit int) ([]User, error) {
-	query := `SELECT id,username,email,display_name,role,status,created_at FROM users `
+	query := `SELECT id,username,email,display_name,role,status,created_at,daily_quota_bytes FROM users `
 	args := []any{}
 	if after != nil {
 		query += `WHERE (username,id) > ($1,$2) `
@@ -60,7 +63,7 @@ func (s *Store) ListUsers(ctx context.Context, after *[2]string, limit int) ([]U
 	var users []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.Role, &u.Status, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.DisplayName, &u.Role, &u.Status, &u.CreatedAt, &u.DailyQuotaBytes); err != nil {
 			continue
 		}
 		users = append(users, u)
@@ -159,4 +162,36 @@ func (s *Store) CreateFirstAdmin(ctx context.Context, id, username, email, displ
 		return err
 	}
 	return tx.Commit()
+}
+
+// SetUserDailyQuota sets or clears (nil) the user's own download quota. It
+// returns ErrNotFound for an unknown user.
+func (s *Store) SetUserDailyQuota(ctx context.Context, id string, quota *int64) error {
+	result, err := s.SQL.ExecContext(ctx, `UPDATE users SET daily_quota_bytes=$2,updated_at=now() WHERE id=$1`, id, quota)
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// AnyUserDailyQuota reports whether some user has a quota of their own.
+func (s *Store) AnyUserDailyQuota(ctx context.Context) (bool, error) {
+	var exists bool
+	err := s.SQL.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE daily_quota_bytes IS NOT NULL AND daily_quota_bytes > 0)`).Scan(&exists)
+	return exists, err
+}
+
+// DownloadUsage returns the user's own quota (nil when none is set) and the
+// bytes downloaded over the last 24 hours.
+func (s *Store) DownloadUsage(ctx context.Context, userID string) (quota *int64, usedBytes int64, err error) {
+	err = s.SQL.QueryRowContext(ctx, `SELECT u.daily_quota_bytes,
+		COALESCE((SELECT SUM(d.bytes) FROM downloads d WHERE d.user_id=u.id AND d.started_at > now()-interval '24 hours'),0)
+		FROM users u WHERE u.id=$1`, userID).Scan(&quota, &usedBytes)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, 0, nil
+	}
+	return quota, usedBytes, err
 }
