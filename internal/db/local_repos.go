@@ -599,16 +599,27 @@ func (s *Store) UserGroupNames(ctx context.Context, userID string) ([]string, er
 	return names, rows.Err()
 }
 
-// NewBytesForOwner sums the size of the listed contents the owner's published
-// repositories do not hold yet: what adding them would add to the quota.
-func (s *Store) NewBytesForOwner(ctx context.Context, ownerID string, sha256s []string) (int64, error) {
+// OwnedContent returns which of the listed contents the owner's published
+// repositories already hold: those cost nothing more against the quota.
+func (s *Store) OwnedContent(ctx context.Context, ownerID string, sha256s []string) (map[string]bool, error) {
+	owned := map[string]bool{}
 	if len(sha256s) == 0 {
-		return 0, nil
+		return owned, nil
 	}
-	var total int64
-	err := s.SQL.QueryRowContext(ctx, `SELECT COALESCE(SUM(b.size_bytes),0) FROM blobs b WHERE b.sha256=ANY($1)
-		AND NOT EXISTS (SELECT 1 FROM artifacts a JOIN repositories r ON r.id=a.repository_id WHERE a.blob_id=b.id AND r.origin='local' AND r.owner_user_id=$2)`, sha256s, ownerID).Scan(&total)
-	return total, err
+	rows, err := s.SQL.QueryContext(ctx, `SELECT b.sha256 FROM blobs b WHERE b.sha256=ANY($1)
+		AND EXISTS (SELECT 1 FROM artifacts a JOIN repositories r ON r.id=a.repository_id WHERE a.blob_id=b.id AND r.origin='local' AND r.owner_user_id=$2)`, sha256s, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sum string
+		if err := rows.Scan(&sum); err != nil {
+			return nil, err
+		}
+		owned[sum] = true
+	}
+	return owned, rows.Err()
 }
 
 // BlobIsRetained reports whether content is stored and will stay: it is used by

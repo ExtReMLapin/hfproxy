@@ -264,9 +264,10 @@ func (s *Server) checkLFSSignature(r *http.Request, repoPK, oid string) (userID 
 	return "", 0, false
 }
 
-// ownerQuotaExceeded says whether adding newBytes of content would take the
-// repository's owner over the storage quota.
-func (s *Server) ownerQuotaExceeded(ctx context.Context, ownerID string, shas []string) (bool, int64, error) {
+// ownerQuotaExceeded says whether adding the listed contents (hash and size)
+// would take the repository's owner over the storage quota. Content the owner's
+// repositories already hold is not counted again.
+func (s *Server) ownerQuotaExceeded(ctx context.Context, ownerID string, sizes map[string]int64) (bool, int64, error) {
 	quota := s.currentConfig().UploadUserQuota
 	if quota <= 0 || ownerID == "" {
 		return false, 0, nil
@@ -275,9 +276,19 @@ func (s *Server) ownerQuotaExceeded(ctx context.Context, ownerID string, shas []
 	if err != nil {
 		return false, 0, err
 	}
-	extra, err := s.db.NewBytesForOwner(ctx, ownerID, shas)
+	shas := make([]string, 0, len(sizes))
+	for sha := range sizes {
+		shas = append(shas, sha)
+	}
+	owned, err := s.db.OwnedContent(ctx, ownerID, shas)
 	if err != nil {
 		return false, 0, err
+	}
+	extra := int64(0)
+	for sha, size := range sizes {
+		if !owned[sha] {
+			extra += size
+		}
 	}
 	return used+extra > quota, quota, nil
 }
@@ -309,13 +320,13 @@ func (s *Server) lfsBatch(w http.ResponseWriter, r *http.Request, route localRou
 		return
 	}
 	limit := s.currentConfig().MaxUploadFileSize()
-	var shas []string
+	sizes := map[string]int64{}
 	for _, o := range in.Objects {
 		if validOID(o.OID) && o.Size > 0 && o.Size <= limit {
-			shas = append(shas, o.OID)
+			sizes[o.OID] = o.Size
 		}
 	}
-	overQuota, quota, err := s.ownerQuotaExceeded(r.Context(), repo.OwnerID, shas)
+	overQuota, quota, err := s.ownerQuotaExceeded(r.Context(), repo.OwnerID, sizes)
 	if err != nil {
 		lfsError(w, http.StatusInternalServerError, "The storage quota could not be checked.")
 		return
@@ -550,7 +561,7 @@ func (s *Server) apiCommit(w http.ResponseWriter, r *http.Request, route localRo
 	var ops []db.CommitOp
 	var pendingCopies []struct{ Dest, Source, Revision string }
 	limit := s.currentConfig().MaxUploadFileSize()
-	seen := map[string]bool{}
+	sizes := map[string]int64{}
 	for decoder.More() {
 		var item commitItem
 		if err := decoder.Decode(&item); err != nil {
@@ -601,7 +612,7 @@ func (s *Server) apiCommit(w http.ResponseWriter, r *http.Request, route localRo
 				return
 			}
 			ops = append(ops, db.CommitOp{Kind: db.OpAdd, Path: f.Path, SHA256: sha, OID: gitBlobOID(content), Size: int64(len(content)), ContentType: contentTypeFor(f.Path)})
-			seen[sha] = true
+			sizes[sha] = int64(len(content))
 		case "lfsFile":
 			var f struct {
 				Path string `json:"path"`
@@ -619,7 +630,7 @@ func (s *Server) apiCommit(w http.ResponseWriter, r *http.Request, route localRo
 				return
 			}
 			ops = append(ops, db.CommitOp{Kind: db.OpAdd, Path: f.Path, SHA256: f.OID, OID: f.OID, Size: size, LFS: true, ContentType: contentTypeFor(f.Path)})
-			seen[f.OID] = true
+			sizes[f.OID] = size
 		case "deletedFile", "deletedFolder":
 			var f struct {
 				Path string `json:"path"`
@@ -662,11 +673,7 @@ func (s *Server) apiCommit(w http.ResponseWriter, r *http.Request, route localRo
 		hfError(w, http.StatusNotFound, "EntryNotFound", err.Error())
 		return
 	}
-	var shas []string
-	for sha := range seen {
-		shas = append(shas, sha)
-	}
-	if overQuota, quota, err := s.ownerQuotaExceeded(r.Context(), repo.OwnerID, shas); err != nil {
+	if overQuota, quota, err := s.ownerQuotaExceeded(r.Context(), repo.OwnerID, sizes); err != nil {
 		hfError(w, http.StatusInternalServerError, "", "The storage quota could not be checked.")
 		return
 	} else if overQuota {

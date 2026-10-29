@@ -1,12 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1" //nolint:gosec // Git object names are SHA-1; they identify content, they do not protect it.
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -721,20 +723,26 @@ func (s *Server) apiPathsInfo(w http.ResponseWriter, r *http.Request, route loca
 		return
 	}
 	// huggingface_hub sends the paths as a form, other clients as JSON.
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+	if err != nil {
+		hfError(w, http.StatusBadRequest, "", "The request body could not be read.")
+		return
+	}
 	var in struct {
 		Paths []string `json:"paths"`
 	}
-	if strings.Contains(r.Header.Get("Content-Type"), "json") {
-		if !decodeLenient(w, r, &in) {
+	if trimmed := bytes.TrimSpace(raw); len(trimmed) > 0 && trimmed[0] == '{' {
+		if err := json.Unmarshal(trimmed, &in); err != nil {
+			hfError(w, http.StatusBadRequest, "", "The request body is not valid JSON.")
 			return
 		}
 	} else {
-		r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
-		if err := r.ParseForm(); err != nil {
+		form, err := url.ParseQuery(string(raw))
+		if err != nil {
 			hfError(w, http.StatusBadRequest, "", "The request body is not a valid form.")
 			return
 		}
-		in.Paths = r.PostForm["paths"]
+		in.Paths = form["paths"]
 	}
 	files, err := s.db.LocalFilesAt(r.Context(), repo.ID, sha)
 	if err != nil {
