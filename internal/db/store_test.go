@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -181,7 +182,7 @@ func TestPublishArtifactRestoresMissingObjectsAndRecordsDownloads(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := PublishInput{RepoID: repo, Commit: "0123456789abcdef0123456789abcdef01234567", Path: "w.bin", SHA256: "aa", Size: 3, StorageKey: "blobs/aa", ContentType: "application/octet-stream", ETag: "e"}
+	in := PublishInput{RepoID: repo, Commit: "0123456789abcdef0123456789abcdef01234567", Path: "w.bin", SHA256: "aa", Size: 3, StorageKey: "blobs/aa", ContentType: "application/octet-stream", ETag: "e", ObjectStored: true}
 	called := false
 	if err := store.PublishArtifact(ctx, in, func(context.Context, string) error { called = true; return nil }); err != nil || called {
 		t.Fatalf("first publish: err=%v, ensureObject called=%v (a new blob needs no check)", err, called)
@@ -645,5 +646,111 @@ func TestUserQuotaAndDownloadUsage(t *testing.T) {
 	}
 	if q, u, err := store.DownloadUsage(ctx, "nobody"); err != nil || q != nil || u != 0 {
 		t.Fatalf("an unknown user's usage = %v %d %v", q, u, err)
+	}
+}
+
+// A fill that saw a blob row and therefore skipped the upload can publish after the
+// collector deleted that very blob: its lookup waits for the collector's row lock,
+// finds no row once the collector commits, and records a new one. The object the
+// collector removed must be put back, or the catalog points at nothing forever.
+func TestPublishAfterTheCollectorRemovedTheBlobRestoresTheObject(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	owner := NewID()
+	store.CreateUser(ctx, owner, "gc", "", "", "h", "admin")
+	repo, _ := store.UpsertRepository(ctx, "models", "org/gc", "public", owner)
+	commit := "0123456789abcdef0123456789abcdef01234567"
+	const key = "blobs/gc"
+	objects := map[string]bool{key: true}
+	var objectsMu sync.Mutex
+	stored := func() bool { objectsMu.Lock(); defer objectsMu.Unlock(); return objects[key] }
+
+	in := PublishInput{RepoID: repo, Commit: commit, Path: "first.bin", SHA256: "gc", Size: 3, StorageKey: key, ContentType: "x", ObjectStored: true}
+	if err := store.PublishArtifact(ctx, in, func(context.Context, string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing uses the blob any more and its grace period is over.
+	var blobID string
+	if err := store.SQL.QueryRow(`SELECT id FROM blobs WHERE sha256='gc'`).Scan(&blobID); err != nil {
+		t.Fatal(err)
+	}
+	store.SQL.Exec(`DELETE FROM artifacts WHERE blob_id=$1`, blobID)
+	store.SQL.Exec(`UPDATE blobs SET orphaned_at=now()-interval '2 hours' WHERE id=$1`, blobID)
+
+	// The collector holds the row and is busy deleting the object.
+	deleting, release := make(chan struct{}), make(chan struct{})
+	collected := make(chan error, 1)
+	go func() {
+		_, err := store.CollectOrphanedBlob(ctx, blobID, time.Hour, func(context.Context, string) error {
+			close(deleting)
+			<-release
+			objectsMu.Lock()
+			delete(objects, key)
+			objectsMu.Unlock()
+			return nil
+		})
+		collected <- err
+	}()
+	<-deleting
+
+	// The fill looks, sees the row, and so does not upload.
+	if exists, err := store.BlobExists(ctx, "gc"); err != nil || !exists {
+		t.Fatalf("the blob should still be visible to the fill: %v %v", exists, err)
+	}
+	in.Path = "again.bin"
+	in.ObjectStored = false
+	published := make(chan error, 1)
+	go func() {
+		published <- store.PublishArtifact(ctx, in, func(_ context.Context, k string) error {
+			objectsMu.Lock()
+			defer objectsMu.Unlock()
+			objects[k] = true // what the real callback does: put the object back when it is missing
+			return nil
+		})
+	}()
+	// Wait until the publication is queued behind the collector's lock.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting int
+		store.SQL.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FOR UPDATE%'`).Scan(&waiting)
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the publication never waited for the collector")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(release)
+	if err := <-collected; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-published; err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if _, err := store.FindArtifact(ctx, repo, commit, "again.bin"); err != nil {
+		t.Fatalf("the artifact was not published: %v", err)
+	}
+	if !stored() {
+		t.Fatal("the artifact is in the catalog but its object was deleted by the collector and never restored")
+	}
+}
+
+func TestPublishChecksTheObjectOnlyWhenTheCallerDidNotStoreIt(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	owner := NewID()
+	store.CreateUser(ctx, owner, "chk", "", "", "h", "admin")
+	repo, _ := store.UpsertRepository(ctx, "models", "org/chk", "public", owner)
+	commit := "0123456789abcdef0123456789abcdef01234567"
+	calls := 0
+	check := func(context.Context, string) error { calls++; return nil }
+	in := PublishInput{RepoID: repo, Commit: commit, Path: "a", SHA256: "c1", Size: 1, StorageKey: "blobs/c1", ContentType: "x", ObjectStored: true}
+	if err := store.PublishArtifact(ctx, in, check); err != nil || calls != 0 {
+		t.Fatalf("a new blob the caller uploaded needs no check: err=%v calls=%d", err, calls)
+	}
+	in.Path, in.SHA256, in.StorageKey, in.ObjectStored = "b", "c2", "blobs/c2", false
+	if err := store.PublishArtifact(ctx, in, check); err != nil || calls != 1 {
+		t.Fatalf("a new blob the caller did not upload must be checked: err=%v calls=%d", err, calls)
 	}
 }

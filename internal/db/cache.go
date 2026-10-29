@@ -22,6 +22,10 @@ type Artifact struct {
 	ETag        string
 	ContentType string
 	LastMod     sql.NullTime
+	// ObjectStored says that this fill uploaded the object itself. When it did
+	// not (it saw the blob already recorded), the object is checked before a new
+	// record is trusted.
+	ObjectStored bool
 }
 
 // Caller identifies who triggered a download, for the download log. Empty
@@ -116,6 +120,10 @@ type PublishInput struct {
 	ContentType string
 	ETag        string
 	LastMod     sql.NullTime
+	// ObjectStored says that this fill uploaded the object itself. When it did
+	// not (it saw the blob already recorded), the object is checked before a new
+	// record is trusted.
+	ObjectStored bool
 }
 
 // PublishError says which step of PublishArtifact failed.
@@ -130,9 +138,10 @@ func (e *PublishError) Error() string {
 func (e *PublishError) Unwrap() error { return e.Err }
 
 // PublishArtifact records the blob and the artifact that points to it in one
-// transaction. When the blob is already known, ensureObject is called with its
-// storage key so the caller can check or restore the object; its error is
-// returned as is (not wrapped in a PublishError).
+// transaction. ensureObject is called with the storage key so the caller can
+// check or restore the object when the blob was already known, or when the
+// caller did not upload the object itself (see PublishInput.ObjectStored); its
+// error is returned as is (not wrapped in a PublishError).
 func (s *Store) PublishArtifact(ctx context.Context, in PublishInput, ensureObject func(ctx context.Context, storageKey string) error) error {
 	tx, err := s.SQL.BeginTx(ctx, nil)
 	if err != nil {
@@ -146,6 +155,16 @@ func (s *Store) PublishArtifact(ctx context.Context, in PublishInput, ensureObje
 		err = tx.QueryRowContext(ctx, `INSERT INTO blobs(id,sha256,size_bytes,storage_key,content_type,verified_at) VALUES($1,$2,$3,$4,$5,now()) ON CONFLICT(sha256) DO UPDATE SET orphaned_at=NULL RETURNING id,storage_key`, NewID(), in.SHA256, in.Size, in.StorageKey, in.ContentType).Scan(&blobID, &existingKey)
 		if err != nil {
 			return &PublishError{"insert_blob", err}
+		}
+		// No row was found, so the caller's idea of the blob may be stale: it may
+		// have seen the row, skipped the upload, and then waited on the collector,
+		// which deleted the object and the row under the lock this lookup queued
+		// behind. A fill that uploaded the object itself has nothing to check; any
+		// other must make sure the object is there before the catalog points at it.
+		if !in.ObjectStored || existingKey != in.StorageKey {
+			if err := ensureObject(ctx, existingKey); err != nil {
+				return err
+			}
 		}
 	case err != nil:
 		return &PublishError{"read_blob", err}
