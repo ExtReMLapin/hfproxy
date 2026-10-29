@@ -596,7 +596,7 @@ func cache(args []string) error {
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		rows, err := store.SQL.QueryContext(ctx, `SELECT r.repo_type,r.repo_id,a.commit_sha,a.path,b.size_bytes,b.sha256,a.cached_at FROM artifacts a JOIN repositories r ON r.id=a.repository_id JOIN blobs b ON b.id=a.blob_id WHERE ($1='' OR r.repo_id=$1) AND ($2='' OR strpos(lower(a.path),lower($2))>0) ORDER BY a.cached_at DESC LIMIT 200`, *repo, *pathFilter)
+		rows, err := store.SQL.QueryContext(ctx, `SELECT r.repo_type,r.repo_id,a.commit_sha,a.path,b.size_bytes,b.sha256,a.cached_at FROM artifacts a JOIN repositories r ON r.id=a.repository_id JOIN blobs b ON b.id=a.blob_id WHERE r.origin='hub' AND ($1='' OR r.repo_id=$1) AND ($2='' OR strpos(lower(a.path),lower($2))>0) ORDER BY a.cached_at DESC LIMIT 200`, *repo, *pathFilter)
 		if err != nil {
 			return err
 		}
@@ -627,7 +627,7 @@ func cache(args []string) error {
 			defer cancelOperation()
 		}
 		var count, bytes int64
-		err = store.SQL.QueryRowContext(operationCtx, `SELECT COUNT(*),COALESCE(SUM(b.size_bytes),0) FROM artifacts a JOIN repositories r ON r.id=a.repository_id JOIN blobs b ON b.id=a.blob_id WHERE ($1='' OR r.repo_id=$1) AND ($2='' OR strpos(lower(a.path),lower($2))>0)`, *repo, *pathFilter).Scan(&count, &bytes)
+		err = store.SQL.QueryRowContext(operationCtx, `SELECT COUNT(*),COALESCE(SUM(b.size_bytes),0) FROM artifacts a JOIN repositories r ON r.id=a.repository_id JOIN blobs b ON b.id=a.blob_id WHERE r.origin='hub' AND ($1='' OR r.repo_id=$1) AND ($2='' OR strpos(lower(a.path),lower($2))>0)`, *repo, *pathFilter).Scan(&count, &bytes)
 		if err != nil {
 			return err
 		}
@@ -639,7 +639,7 @@ func cache(args []string) error {
 		if !*yes {
 			return fmt.Errorf("purge requires both --execute and --yes")
 		}
-		rows, err := store.SQL.QueryContext(operationCtx, `SELECT a.id FROM artifacts a JOIN repositories r ON r.id=a.repository_id WHERE ($1='' OR r.repo_id=$1) AND ($2='' OR strpos(lower(a.path),lower($2))>0)`, *repo, *pathFilter)
+		rows, err := store.SQL.QueryContext(operationCtx, `SELECT a.id FROM artifacts a JOIN repositories r ON r.id=a.repository_id WHERE r.origin='hub' AND ($1='' OR r.repo_id=$1) AND ($2='' OR strpos(lower(a.path),lower($2))>0)`, *repo, *pathFilter)
 		if err != nil {
 			return err
 		}

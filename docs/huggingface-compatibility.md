@@ -67,6 +67,10 @@ runtime.
 - Administration operations are separated under `/api/v1` and protected by
   session/bearer token, role, and CSRF checks as applicable.
 
+## Published repositories
+
+Models and datasets published on the proxy are served through the Hub's own write and read API, verified with the real `huggingface_hub` client by `scripts/hub-client-test.py`. Routes, limits and the list of what is not supported are in [Publishing models and datasets](publishing.md).
+
 ## Verified out of scope
 
 Uploads and repository write operations, native Xet/CAS, inference, Spaces
