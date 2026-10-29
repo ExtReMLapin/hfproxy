@@ -194,12 +194,24 @@ func (s *Server) recordPreloadCompletion(ctx context.Context, actorID, repositor
 }
 
 func (s *Server) serveOrAcknowledgePreload(w http.ResponseWriter, r *http.Request, artifact artifact, cacheStatus string) {
+	if s.serveOrAcknowledgePreloadReporting(w, r, artifact, cacheStatus, nil) {
+		writeProblem(w, r, 502, "Storage error", "The cached artifact is temporarily unavailable.")
+	}
+}
+
+// serveOrAcknowledgePreloadReporting is serveOrAcknowledgePreload for callers
+// that repair a missing object: it reports true, having written nothing, when
+// the file's object is gone from the bucket.
+func (s *Server) serveOrAcknowledgePreloadReporting(w http.ResponseWriter, r *http.Request, artifact artifact, cacheStatus string, served func()) bool {
 	if isPreloadFetch(r.Context()) {
+		if served != nil {
+			served()
+		}
 		w.Header().Set("X-Cache", cacheStatus)
 		w.WriteHeader(http.StatusOK)
-		return
+		return false
 	}
-	s.serveArtifact(w, r, artifact, cacheStatus)
+	return s.writeArtifact(w, r, artifact, cacheStatus, served)
 }
 
 func (s *Server) listHubFiles(ctx context.Context, repoType, repoID, revision string) ([]string, string, error) {
