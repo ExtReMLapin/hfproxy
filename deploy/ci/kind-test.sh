@@ -190,4 +190,41 @@ wait_http "$BASE/readyz" 200
 [ "$(download model.bin)" = 200 ] || fail "model.bin after a replica was killed"
 [ "$(sha256sum /tmp/kind-body | cut -d' ' -f1)" = "$expected" ] || fail "model.bin changed after a replica was killed"
 
+log "a replica is killed in the middle of a cache fill: nothing partial is served, the other one completes the file"
+slow_expected="$(python3 -c "import hashlib;print(hashlib.sha256(b'slowdata'*2097152).hexdigest())")"
+mapfile -t replicas < <(kubectl get pods -l app.kubernetes.io/name=hfproxy --field-selector=status.phase=Running -o name | sed 's#^pod/##')
+[ "${#replicas[@]}" -ge 2 ] || fail "two running replicas are needed for the fill test"
+victim="${replicas[0]}"
+survivor="${replicas[1]}"
+kubectl port-forward "pod/$victim" 18082:8080 >/dev/null 2>&1 &
+pf_victim=$!
+kubectl port-forward "pod/$survivor" 18083:8080 >/dev/null 2>&1 &
+pf_survivor=$!
+sleep 3
+wait_http http://127.0.0.1:18082/readyz 200
+wait_http http://127.0.0.1:18083/readyz 200
+curl -s -o /tmp/kind-slow-victim --max-time 90 "http://127.0.0.1:18082/org/model/resolve/main/slow.bin" &
+victim_curl=$!
+for _ in $(seq 40); do
+  case "$(hub_hits)" in *'"slow":0'*) sleep 0.5 ;; *) break ;; esac
+done
+sleep 2
+echo "the Hub has started sending the file: $(hub_hits); killing $victim"
+kubectl delete pod "$victim" --grace-period=0 --force --wait=false
+wait "$victim_curl" || true
+kill "$pf_victim" 2>/dev/null || true
+if [ "$(sha256sum /tmp/kind-slow-victim | cut -d' ' -f1)" = "$slow_expected" ]; then
+  fail "the fill finished before the replica was killed: the test proves nothing"
+fi
+echo "the interrupted client received $(stat -c %s /tmp/kind-slow-victim) of 16777216 bytes and an error, not a corrupted file"
+code="$(curl -s -o /tmp/kind-slow -w '%{http_code}' --max-time 120 "http://127.0.0.1:18083/org/model/resolve/main/slow.bin")"
+[ "$code" = 200 ] || fail "the surviving replica answered $code for the file whose fill was interrupted"
+[ "$(sha256sum /tmp/kind-slow | cut -d' ' -f1)" = "$slow_expected" ] || fail "the surviving replica served a wrong file after the interruption"
+code="$(curl -s -o /tmp/kind-slow -D /tmp/kind-slow-headers -w '%{http_code}' --max-time 60 "http://127.0.0.1:18083/org/model/resolve/main/slow.bin")"
+[ "$code" = 200 ] && grep -qi '^x-cache: hit' /tmp/kind-slow-headers || fail "the completed file was not served from the cache ($code)"
+[ "$(sha256sum /tmp/kind-slow | cut -d' ' -f1)" = "$slow_expected" ] || fail "the cached file is wrong"
+echo "the Hub served the file $(hub_hits)"
+kill "$pf_survivor" 2>/dev/null || true
+kubectl rollout status deploy/hfproxy --timeout=180s
+
 log "OK: the chart works in a real cluster"

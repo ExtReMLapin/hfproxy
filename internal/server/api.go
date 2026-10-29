@@ -174,7 +174,9 @@ func (s *Server) apiStats(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, http.StatusUnauthorized, "Authentication required", "Sign in to view cache statistics.")
 		return
 	}
-	stats, err := s.db.CacheStats(r.Context(), p.Role, p.ID)
+	stats, err := s.stats.get(r.Context(), p.Role, p.ID, func(ctx context.Context) (db.Stats, error) {
+		return s.db.CacheStats(ctx, p.Role, p.ID)
+	})
 	if err != nil {
 		s.fail(w, r, err, 500, "Database error", "Unable to read statistics.")
 		return

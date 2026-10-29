@@ -7,12 +7,17 @@ reach it (GET /_hits) so the test can tell a cache hit from a fetch.
 import hashlib
 import http.server
 import ssl
+import time
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 BIG = b"weights-" * 131072  # 1 MiB
 SHA = hashlib.sha256(BIG).hexdigest()
 SMALL = b'{"model_type":"bert"}'
-hits = {"small": 0, "big": 0}
+# A 16 MiB file sent at about 2 MiB/s, so a replica can be killed in the middle of
+# filling the cache with it.
+SLOW = b"slowdata" * 2097152
+SLOW_SHA = hashlib.sha256(SLOW).hexdigest()
+hits = {"small": 0, "big": 0, "slow": 0}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -39,7 +44,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def serve(self, send_body):
         path = self.path.split("?")[0]
         if path == "/_hits":
-            self.reply(200, {"Content-Type": "application/json"}, ('{"small":%d,"big":%d}' % (hits["small"], hits["big"])).encode())
+            self.reply(200, {"Content-Type": "application/json"}, ('{"small":%d,"big":%d,"slow":%d}' % (hits["small"], hits["big"], hits["slow"])).encode())
             return
         if path.endswith("/resolve/main/config.json") or path.endswith("/resolve/" + COMMIT + "/config.json"):
             if send_body:
@@ -49,6 +54,36 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path.endswith("/resolve/main/model.bin") or path.endswith("/resolve/" + COMMIT + "/model.bin"):
             location = "https://" + self.headers.get("Host", "fakehub:8080") + "/cdn/model.bin"
             self.reply(302, {"X-Repo-Commit": COMMIT, "X-Linked-Etag": '"' + SHA + '"', "X-Linked-Size": str(len(BIG)), "Location": location})
+            return
+        if path.endswith("/resolve/main/slow.bin") or path.endswith("/resolve/" + COMMIT + "/slow.bin"):
+            location = "https://" + self.headers.get("Host", "fakehub:8080") + "/cdn/slow.bin"
+            self.reply(302, {"X-Repo-Commit": COMMIT, "X-Linked-Etag": '"' + SLOW_SHA + '"', "X-Linked-Size": str(len(SLOW)), "Location": location})
+            return
+        if path == "/cdn/slow.bin":
+            first, last, status = 0, len(SLOW) - 1, 200
+            rng = self.headers.get("Range")
+            if rng and rng.startswith("bytes="):
+                a, b = rng[6:].split("-")
+                first = int(a)
+                last = int(b) if b else len(SLOW) - 1
+                status = 206
+            headers = {"ETag": '"slow"', "Content-Type": "application/octet-stream"}
+            if status == 206:
+                headers["Content-Range"] = "bytes %d-%d/%d" % (first, last, len(SLOW))
+            self.send_response(status)
+            for key, value in headers.items():
+                self.send_header(key, value)
+            self.send_header("Content-Length", str(last - first + 1))
+            self.end_headers()
+            if send_body:
+                hits["slow"] += 1
+                try:
+                    for at in range(first, last + 1, 262144):
+                        self.wfile.write(SLOW[at : min(at + 262144, last + 1)])
+                        self.wfile.flush()
+                        time.sleep(0.125)
+                except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
+                    pass
             return
         if path == "/cdn/model.bin":
             data, status, headers = BIG, 200, {"ETag": '"cdn"', "Content-Type": "application/octet-stream"}

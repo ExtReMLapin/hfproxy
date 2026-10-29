@@ -61,6 +61,7 @@ type Server struct {
 	preloadsMu           sync.RWMutex
 	preloads             map[string]*preloadJob
 	preloadSlots         chan struct{}
+	stats                statsCache
 	loginMu              sync.Mutex
 	loginBuckets         map[string]loginBucket
 	loginHashSlots       chan struct{}
@@ -126,6 +127,7 @@ func New(ctx context.Context, cfg config.Config, store *db.Store, objectStore *s
 		preloadSlots: make(chan struct{}, 2), loginBuckets: make(map[string]loginBucket), loginHashSlots: make(chan struct{}, 4), negative: make(map[string]negativeCacheEntry), misses: make(map[string]*cacheMiss),
 	}
 	s.runtime.Store(state)
+	s.stats.ttl = statsCacheTTL
 	if objectStore != nil {
 		objectStore.SetObserver(s.metrics)
 	}
