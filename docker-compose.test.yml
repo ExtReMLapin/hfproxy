@@ -122,6 +122,7 @@ services:
     volumes:
       - ./deploy/compose/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./docs/prometheus-alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./docs/prometheus-slo-rules.yml:/etc/prometheus/slo-rules.yml:ro
     ports:
       - "127.0.0.1:9091:9090"
     depends_on:
@@ -150,6 +151,7 @@ services:
     volumes:
       - ./deploy/compose/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./docs/grafana-observability.json:/var/lib/grafana/dashboards/hfproxy-observability.json:ro
+      - ./docs/grafana-resilience.json:/var/lib/grafana/dashboards/hfproxy-resilience.json:ro
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:

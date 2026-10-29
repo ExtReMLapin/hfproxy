@@ -14,12 +14,14 @@ All notable changes to hfproxy. The format follows [Keep a Changelog](https://ke
 - **`hfproxy_download_ttfb_seconds{cache}`**, the time to first byte of successful downloads, for latency objectives.
 - **Operations documentation**: a runbook per alert, service level objectives with burn-rate alert rules, a sizing guide, a rotation guide for every credential and certificate, and a second Grafana dashboard (resilience and limits). Every alert has a `runbook_url`.
 - **A test stack** (`docker-compose.test.yml`) with Keycloak, Prometheus and Grafana.
+- **Validation protocols and tools**: `scripts/large-file-test.py` (the real binary with a multi-gigabyte file, reporting memory and staging use), `scripts/backup-restore-drill.sh` (a restore rehearsed on a copy, timed) and [docs/validation.md](docs/validation.md) for a real cluster, the real Hub and a large model.
 - **Release pipeline**: a release is created from the tag with binaries for linux/amd64 and linux/arm64, a CycloneDX SBOM, the Helm chart, signed checksums and the notes from this file; the chart is also published as an OCI artifact. The image is checked for bit-for-bit reproducibility in CI.
 
 ### Changed
 
 - **LDAP accounts are found by their stable identifier, not by the directory's address.** Changing `ldap://` for `ldaps://`, renaming the server or changing its port used to make every user a stranger (duplicates with auto-provisioning, no sign-in without it). The recorded address now follows the configured one.
 - **Connections to the OIDC issuer and the LDAP server are filtered**: cloud metadata services, link-local, unspecified and multicast addresses (and loopback outside development) are refused on the address actually connected to. OIDC calls now have a timeout and follow at most three redirects. Private addresses stay allowed.
+- **Dashboard statistics are kept for 15 seconds** per viewer, and computed once for simultaneous requests. Counting hits and misses reads the whole downloads table (0.8 s at five million rows) and the console asked at every page.
 - A failed Hub request now logs why (without the URL, which can carry a signature).
 - The Helm chart's `appVersion` is kept in line with the latest release.
 
@@ -30,6 +32,7 @@ All notable changes to hfproxy. The format follows [Keep a Changelog](https://ke
 ### Tests and CI
 
 - The chart is installed in a real (kind) cluster and exercised: migration job, first start, cached small and large downloads, a range request, a rolling update to two replicas and a replica killed during use.
+- A replica killed in the middle of a cache fill: the interrupted client gets an error and not a corrupted file, and the other replica completes the file.
 - The LDAP sign-in is tested against a real OpenLDAP server and the OIDC sign-in against a real Keycloak.
 
 ## [0.1.0] - 2026-10-29

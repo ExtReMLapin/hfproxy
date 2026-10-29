@@ -11,8 +11,8 @@ docker compose -f docker-compose.test.yml down -v   # stop and forget everything
 | --- | --- | --- |
 | hfproxy | http://localhost:8080 | first administrator: setup code `test-setup-code-0123456789`; Keycloak users sign in with **Sign in with OIDC** |
 | Keycloak | http://localhost:8180 | console `admin` / `admin`; realm `hfproxy` with `alice`, `bob` and `erin` (password `<name>-password`; `erin`'s email is not verified) |
-| Grafana | http://localhost:3000 | `admin` / `admin`, or **Sign in with Keycloak** (`alice` is an administrator, others are viewers); the *hfproxy observability* dashboard is already there |
-| Prometheus | http://localhost:9091 | scrapes hfproxy every 5 seconds and loads [prometheus-alerts.yml](prometheus-alerts.yml) |
+| Grafana | http://localhost:3000 | `admin` / `admin`, or **Sign in with Keycloak** (`alice` is an administrator, others are viewers); the *hfproxy observability* and *hfproxy resilience and limits* dashboards are already there |
+| Prometheus | http://localhost:9091 | scrapes hfproxy every 5 seconds and loads [prometheus-alerts.yml](prometheus-alerts.yml) and [prometheus-slo-rules.yml](prometheus-slo-rules.yml) |
 
 ## Things to try
 

@@ -36,7 +36,7 @@ With a quota, the least recently used unpinned files are evicted when it is exce
 ## CPU and memory
 
 - A cache hit is a streamed copy from the bucket: negligible CPU. A cold fill hashes the file once (SHA-256), about one core per concurrent fill.
-- The chart asks for 250m CPU and 256 MiB and limits memory to 1 GiB. Memory does not grow with file size. It grows with the number of open connections and `HFPROXY_API_CACHE_MAX_BYTES` (32 MiB by default). Check it with your own load before lowering the limit (see below).
+- The chart asks for 250m CPU and 256 MiB and limits memory to 1 GiB. Memory does not grow with file size. It grows with the number of open connections and `HFPROXY_API_CACHE_MAX_BYTES` (32 MiB by default). Measured with the real binary (`scripts/large-file-test.py`: one cold fill, a cached read and a range read), a 256 MiB file and a 2 GiB file both peaked at 162 MiB of resident memory, and staging reached exactly the size of the file. That machine and object store are not yours, so check with your own load before lowering the limit (see below).
 
 ## Network
 
@@ -70,5 +70,6 @@ Everything here is arithmetic from the defaults, not a benchmark of your environ
      go test ./internal/server -run TestLoadParallelDownloads -v -count=1
    ```
    It needs the same `HFPROXY_TEST_*` variables as the other integration tests, and an S3 service that can hold the data (the `moto` test server keeps everything in RAM; use Garage or MinIO for gigabytes).
-2. **Watch the real thing** for two weeks: `hfproxy_cache_size_bytes`, `hfproxy_staging_free_bytes`, the eviction rate, the miss rate and the time-to-first-byte of cache misses ([slo.md](slo.md)). A steady eviction rate with a high miss rate means the quota is below the hot set.
-3. **Re-run the numbers** when you add a model family with larger files.
+2. **A multi-gigabyte file through the real binary.** `scripts/large-file-test.py` runs the proxy as a separate process and reports its peak memory and staging use ([validation.md](validation.md#4-a-multi-gigabyte-file-on-your-own-machine)); run it against your own object store for realistic throughput.
+3. **Watch the real thing** for two weeks: `hfproxy_cache_size_bytes`, `hfproxy_staging_free_bytes`, the eviction rate, the miss rate and the time-to-first-byte of cache misses ([slo.md](slo.md)). A steady eviction rate with a high miss rate means the quota is below the hot set.
+4. **Re-run the numbers** when you add a model family with larger files.
