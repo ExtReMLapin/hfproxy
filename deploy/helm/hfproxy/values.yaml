@@ -50,6 +50,13 @@ secrets:
   #   OIDC_CLIENT_SECRET: oidc_client_secret
   #   SESSION_SECRET_PREVIOUS: session_secret_previous
 
+# Private certificate authority for the S3 endpoint, OIDC issuer, LDAP server or
+# Hub mirror. The ConfigMap (or Secret) holds PEM files; they are added to the
+# system roots through SSL_CERT_DIR.
+trustedCA:
+  configMapName: ""
+  secretName: ""
+
 staging:
   # emptyDir is lost when the pod restarts, which only costs the resumable
   # download state in progress; use a PVC to keep it.

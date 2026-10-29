@@ -40,6 +40,10 @@ spec:
             {{- include "hfproxy.env" . | nindent 12 }}
             - name: HFPROXY_AUTO_MIGRATE
               value: {{ .Values.migrations.auto | quote }}
+            {{- if or .Values.trustedCA.configMapName .Values.trustedCA.secretName }}
+            - name: SSL_CERT_DIR
+              value: /etc/ssl/hfproxy-ca
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080
@@ -64,7 +68,19 @@ spec:
             - {name: secrets, mountPath: /run/secrets/hfproxy, readOnly: true}
             - {name: staging, mountPath: /staging}
             - {name: tmp, mountPath: /tmp}
+            {{- if or .Values.trustedCA.configMapName .Values.trustedCA.secretName }}
+            - {name: trusted-ca, mountPath: /etc/ssl/hfproxy-ca, readOnly: true}
+            {{- end }}
       volumes:
+        {{- if .Values.trustedCA.configMapName }}
+        - name: trusted-ca
+          configMap:
+            name: {{ .Values.trustedCA.configMapName }}
+        {{- else if .Values.trustedCA.secretName }}
+        - name: trusted-ca
+          secret:
+            secretName: {{ .Values.trustedCA.secretName }}
+        {{- end }}
         {{- include "hfproxy.secretVolume" . | nindent 8 }}
         - name: staging
           {{- if eq .Values.staging.type "pvc" }}

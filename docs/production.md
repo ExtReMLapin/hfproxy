@@ -43,3 +43,7 @@ Back up PostgreSQL and the S3 bucket together and restore them from the same poi
 ## Upstream ports
 
 hfproxy connects to the Hub, and to the hosts the Hub redirects to, on port 443 only (port 80 on loopback for development). The exception is the host and port of `HFPROXY_HF_BASE_URL` itself: pointing it at an internal mirror or artifact repository such as `https://mirror.example.com:8443` works, and only that exact host and port. Redirects to any other non-standard port are refused.
+
+## Private certificate authorities
+
+Outbound connections to S3, the OIDC issuer, LDAP over TLS and a Hub mirror verify certificates against the system roots. For servers signed by a private CA, put the CA certificate (PEM) in a directory and set `SSL_CERT_DIR` to it: Go adds that directory to the system roots, so public CAs keep working. The image has no shell or `update-ca-certificates`, so mount the directory instead (the Helm chart does this with `trustedCA.configMapName` or `trustedCA.secretName`). Do not set `SSL_CERT_FILE` unless the file also contains the public roots.
