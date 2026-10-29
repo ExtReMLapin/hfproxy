@@ -22,6 +22,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-ldap/ldap/v3"
+	"github.com/hfproxy/hfproxy/internal/config"
 	"github.com/hfproxy/hfproxy/internal/db"
 	"github.com/hfproxy/hfproxy/internal/keyring"
 	"golang.org/x/crypto/argon2"
@@ -214,7 +215,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login?error=invalid_state", http.StatusSeeOther)
 		return
 	}
-	token, err := s.currentOIDCConfig().Exchange(r.Context(), r.URL.Query().Get("code"), oauth2.VerifierOption(state.Verifier))
+	token, err := s.currentOIDCConfig().Exchange(s.oidcContext(r.Context()), r.URL.Query().Get("code"), oauth2.VerifierOption(state.Verifier))
 	if err != nil {
 		s.logger.Warn("OIDC code exchange failed", "request_id", requestID(r.Context()), "error", safeLogValue(err.Error(), 200))
 		http.Redirect(w, r, "/login?error=login_failed", http.StatusSeeOther)
@@ -225,7 +226,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login?error=login_failed", http.StatusSeeOther)
 		return
 	}
-	idToken, err := s.currentOIDCVerifier().Verify(r.Context(), rawIDToken)
+	idToken, err := s.currentOIDCVerifier().Verify(s.oidcContext(r.Context()), rawIDToken)
 	if err != nil {
 		s.logger.Warn("OIDC ID token validation failed", "request_id", requestID(r.Context()), "error", safeLogValue(err.Error(), 200))
 		http.Redirect(w, r, "/login?error=login_failed", http.StatusSeeOther)
@@ -290,7 +291,7 @@ func (s *Server) authenticateLDAP(ctx context.Context, username, password string
 		return "", fmt.Errorf("LDAP authentication is not available")
 	}
 	conn, err := ldap.DialURL(s.currentConfig().LDAPURL,
-		ldap.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}),
+		ldap.DialWithDialer(newIdentityDialer(5*time.Second, ldapHostIsLoopback(s.currentConfig().LDAPURL))),
 		ldap.DialWithTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12}))
 	if err != nil {
 		return "", fmt.Errorf("LDAP connection failed")
@@ -597,4 +598,11 @@ func auditText(value string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// ldapHostIsLoopback reports whether the configured directory is on loopback
+// (development), the only case where connecting to loopback is allowed.
+func ldapHostIsLoopback(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	return err == nil && config.IsLoopbackHost(u.Hostname())
 }
