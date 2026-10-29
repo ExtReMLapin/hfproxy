@@ -1,0 +1,146 @@
+name: Release
+
+# On a version tag: build the binaries from the Dockerfile (so they are exactly
+# what the image contains), list the Go dependencies (CycloneDX SBOM), package the
+# Helm chart, sign the checksums, and publish a GitHub release with the notes of
+# CHANGELOG.md or docs/releases/VERSION.md; the chart is also pushed to GHCR.
+# The image itself is built, signed and attested by publish-image.yml.
+#
+# The pipeline can be checked without a tag: "Run workflow" by hand, or a push to a
+# branch named release-dry-run/anything, does everything except publishing and
+# signing (only a tag publishes).
+on:
+  push:
+    tags:
+      - '[0-9]*.[0-9]*.[0-9]*'
+    branches:
+      - 'release-dry-run/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build as (nothing is published)
+        default: 0.0.0-dryrun
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the release
+      packages: write   # push the chart
+      id-token: write   # keyless signature
+    env:
+      VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version || '0.0.0-dryrun' }}
+      PUBLISH: ${{ github.ref_type == 'tag' }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Validate the version
+        run: |
+          core='(0|[1-9][0-9]*)'
+          prerelease='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          if [[ ! "$VERSION" =~ ^${core}\.${core}\.${core}(-${prerelease}(\.${prerelease})*)?$ ]]; then
+            echo "Versions use MAJOR.MINOR.PATCH without a leading v, optionally followed by a prerelease suffix."
+            exit 1
+          fi
+
+      - name: Release notes
+        run: |
+          # A tag without notes must not go out; a dry run checks the script on the unreleased section.
+          key="$VERSION"
+          if [ "$PUBLISH" != "true" ]; then key=Unreleased; fi
+          scripts/release-notes.sh "$key" > "$RUNNER_TEMP/notes.md"
+          wc -l "$RUNNER_TEMP/notes.md"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Build the binaries
+        run: |
+          mkdir -p dist
+          docker buildx build --target binary --platform linux/amd64,linux/arm64 \
+            --build-arg BUILD_VERSION="$VERSION" --build-arg BUILD_COMMIT="$GITHUB_SHA" \
+            --output type=local,dest="$RUNNER_TEMP/bin" .
+          epoch="$(git log -1 --format=%ct)"
+          for arch in amd64 arm64; do
+            stage="$RUNNER_TEMP/stage-$arch"
+            mkdir -p "$stage"
+            install -m 0755 "$RUNNER_TEMP/bin/linux_$arch/hfproxy" "$stage/hfproxy"
+            cp LICENSE "$stage/LICENSE"
+            tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" -C "$stage" -cf - hfproxy LICENSE \
+              | gzip -n > "dist/hfproxy_${VERSION}_linux_${arch}.tar.gz"
+          done
+          file "$RUNNER_TEMP"/bin/linux_*/hfproxy || true
+
+      - name: List the Go dependencies (SBOM)
+        run: >-
+          go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.9.0
+          app -json -licenses -main cmd/hfproxy
+          -output "dist/hfproxy_${VERSION}_sbom.cdx.json" .
+
+      - name: Package the Helm chart
+        run: >-
+          go run helm.sh/helm/v3/cmd/helm@v3.17.3
+          package deploy/helm/hfproxy --version "$VERSION" --app-version "$VERSION" --destination dist
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum -- hfproxy_* hfproxy-*.tgz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Install cosign
+        if: env.PUBLISH == 'true'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign the checksums
+        if: env.PUBLISH == 'true'
+        run: cosign sign-blob --yes --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
+
+      - name: Publish the release
+        if: env.PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          if [[ "$VERSION" == *-* ]]; then flags+=(--prerelease); fi
+          # A release created by hand for the tag is completed rather than refused.
+          if gh release view "$VERSION" > /dev/null 2>&1; then
+            gh release edit "$VERSION" --title "hfproxy $VERSION" --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"
+            gh release upload "$VERSION" dist/* --clobber
+          else
+            gh release create "$VERSION" dist/* --verify-tag --title "hfproxy $VERSION" --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"
+          fi
+
+      - name: Publish the chart
+        if: env.PUBLISH == 'true'
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: |
+          helm() { go run helm.sh/helm/v3/cmd/helm@v3.17.3 "$@"; }
+          echo "$REGISTRY_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          helm push "dist/hfproxy-${VERSION}.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"
+
+      - name: What a dry run built
+        if: env.PUBLISH != 'true'
+        run: ls -l dist

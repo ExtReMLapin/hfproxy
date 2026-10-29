@@ -37,6 +37,7 @@ Back up PostgreSQL and the S3 bucket together and restore them from the same poi
 ## More
 
 - [operations.md](operations.md): upgrades, rollbacks, incidents and service levels.
+- [releasing.md](releasing.md): cutting and verifying a release; [dependencies.md](dependencies.md): how dependencies are kept up to date.
 - [threat-model.md](threat-model.md): what hfproxy defends against.
 - [prometheus-alerts.yml](prometheus-alerts.yml): example alert rules.
 

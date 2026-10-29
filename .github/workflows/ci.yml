@@ -125,6 +125,45 @@ jobs:
       - name: Keycloak log
         if: failure()
         run: docker logs hfproxy-keycloak 2>&1 | tail -80
+  reproducible-image:
+    # The image is built twice from scratch (no cache) and the two must be the
+    # same image, digest for digest. Base images are pinned by digest and
+    # timestamps are rewritten to the commit date.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - name: Build twice and compare
+        run: |
+          epoch="$(git log -1 --format=%ct)"
+          for run in a b; do
+            docker buildx build --no-cache --platform linux/amd64 --provenance=false --sbom=false \
+              --build-arg SOURCE_DATE_EPOCH="$epoch" --build-arg BUILD_VERSION=ci --build-arg BUILD_COMMIT="$GITHUB_SHA" \
+              --output "type=oci,dest=$RUNNER_TEMP/$run.tar,rewrite-timestamp=true" .
+            mkdir "$RUNNER_TEMP/$run"
+            tar -xf "$RUNNER_TEMP/$run.tar" -C "$RUNNER_TEMP/$run"
+          done
+          python3 - "$RUNNER_TEMP" <<'PY'
+          import json, sys
+          root = sys.argv[1]
+          def load(run):
+              blobs = f"{root}/{run}/blobs/sha256/"
+              index = json.load(open(f"{root}/{run}/index.json"))
+              manifest = index["manifests"][0]["digest"].split(":")[1]
+              m = json.load(open(blobs + manifest))
+              return manifest, m["config"]["digest"], [l["digest"] for l in m["layers"]]
+          a, b = load("a"), load("b")
+          print("image a:", a[0]); print("image b:", b[0])
+          if a == b:
+              print("The two builds are identical."); sys.exit(0)
+          print("The builds differ.")
+          print("config:", a[1] == b[1] and "same" or "different")
+          for i, (x, y) in enumerate(zip(a[2], b[2])):
+              print(f"layer {i}:", "same" if x == y else f"different ({x} / {y})")
+          sys.exit(1)
+          PY
   vulncheck:
     runs-on: ubuntu-latest
     steps:
@@ -217,6 +256,8 @@ jobs:
           cache-dependency-path: |
             go.mod
             go.sum
+      - name: The release notes can be extracted from the changelog
+        run: scripts/release-notes.sh Unreleased > /dev/null
       - name: The chart's alert rules match the documented ones
         run: diff docs/prometheus-alerts.yml deploy/helm/hfproxy/files/prometheus-alerts.yml
       - name: Lint and render the chart

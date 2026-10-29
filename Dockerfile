@@ -19,6 +19,12 @@ COPY . .
 COPY --from=ui /ui/dist/hfproxy/browser ./internal/server/web/dist
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${BUILD_VERSION} -X github.com/hfproxy/hfproxy/internal/server.Version=${BUILD_VERSION} -X main.commit=${BUILD_COMMIT}" -o /out/hfproxy ./cmd/hfproxy
 
+# Only the binary, for `docker buildx build --target binary --output type=local`:
+# the release workflow ships exactly the file the image contains. Keep this stage
+# before the final one, which must stay last so a plain build still gives the image.
+FROM scratch AS binary
+COPY --from=build /out/hfproxy /hfproxy
+
 # The final image holds the static binary and CA certificates only: no shell,
 # no package manager. It runs as UID 65532 (nonroot).
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
