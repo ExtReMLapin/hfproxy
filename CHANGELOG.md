@@ -27,6 +27,8 @@ All notable changes to hfproxy. The format follows [Keep a Changelog](https://ke
 
 ### Fixed
 
+- **A file could be listed in the cache whose object was gone for good.** If a file was downloaded again at the moment the hourly collector deleted its orphaned blob, the new catalog entry could be recorded without the object being restored, and every later download of that file answered 502 until the entry was purged by hand. The object is now checked and restored when the download did not upload it itself. Present in 0.1.0; the window is a few milliseconds per orphaned blob and collection pass, so it is rare. If you suspect it, `hfproxy cache verify` lists the affected files and `hfproxy cache purge` drops their entries.
+- The log line for a cached object that cannot be read now says why, and whether the object is missing.
 - **A race in the download limiter could crash the instance.** When a user reached their simultaneous-download limit at the moment another of their downloads finished, the refusal read a map without its lock, which Go treats as a fatal error that takes down every stream of the instance. Introduced with the download limits (unreleased), never in a release.
 - Documentation said a Hub mirror "works" without mentioning that private addresses were refused; it now describes the option above.
 

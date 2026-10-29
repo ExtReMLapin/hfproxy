@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hfproxy/hfproxy/internal/storage"
 )
 
 func (s *Server) setArtifactHeaders(w http.ResponseWriter, a artifact, upstream http.Header) {
@@ -111,7 +113,10 @@ func (s *Server) serveArtifact(w http.ResponseWriter, r *http.Request, a artifac
 	}
 	out, err := s.currentStorage().Get(r.Context(), a.StorageKey, byteRange)
 	if err != nil {
-		s.logger.Error("cache object read failed", "sha256", a.SHA256)
+		// A missing object (as opposed to an unreachable store) means the catalog
+		// and the bucket disagree for this file: it stays that way until the entry
+		// is purged (hfproxy cache verify, then hfproxy cache purge).
+		s.logger.Error("cache object read failed", "request_id", requestID(r.Context()), "sha256", a.SHA256, "object_missing", storage.IsNotFound(err), "error", safeLogValue(err.Error(), 200))
 		writeProblem(w, r, 502, "Storage error", "The cached artifact is temporarily unavailable.")
 		return
 	}

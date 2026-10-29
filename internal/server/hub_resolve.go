@@ -569,6 +569,9 @@ func (s *Server) publishDownload(fill *cacheFill) {
 	err = s.db.PublishArtifact(publishCtx, db.PublishInput{
 		RepoID: res.repoPK, Commit: res.commit, Path: res.parsed.FilePath, SHA256: fill.digest, Size: fill.size,
 		StorageKey: key, ContentType: contentType, ETag: meta.ETag, LastMod: meta.LastMod,
+		// Whether this fill put the object there, or relied on a blob row that may
+		// have been collected since it was looked at.
+		ObjectStored: !blobExists,
 	}, func(ctx context.Context, existingKey string) error {
 		if _, headErr := objectStore.Head(ctx, existingKey); headErr != nil {
 			if !storage.IsNotFound(headErr) {
