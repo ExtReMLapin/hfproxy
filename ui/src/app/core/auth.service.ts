@@ -45,7 +45,9 @@ export class AuthService {
       const loginDocument = new DOMParser().parseFromString(html, 'text/html');
       const csrf = loginDocument.querySelector<HTMLInputElement>('input[name="csrf_token"]')?.value;
       if (!csrf)
-        throw new Error('Could not start a secure sign-in. Refresh the page and try again.');
+        throw new Error(
+          $localize`Could not start a secure sign-in. Refresh the page and try again.`,
+        );
       const form = new URLSearchParams({ csrf_token: csrf, username, password });
       await firstValueFrom(
         this.http.post('/login', form.toString(), {
@@ -59,7 +61,7 @@ export class AuthService {
       this.error.set(
         AdminApiService.errorMessage(
           error,
-          'Sign-in failed. Check your credentials and try again.',
+          $localize`Sign-in failed. Check your credentials and try again.`,
         ),
       );
     } finally {
@@ -86,12 +88,15 @@ export class AuthService {
           responseType: 'text',
         }),
       );
-	  this.principal.set(null);
+      this.principal.set(null);
     } catch (error) {
       if (error instanceof HttpErrorResponse && error.status === 401) {
         this.principal.set(null);
       } else {
-        const message = AdminApiService.errorMessage(error, 'Sign-out failed. Please retry.');
+        const message = AdminApiService.errorMessage(
+          error,
+          $localize`Sign-out failed. Please retry.`,
+        );
         this.error.set(message);
         this.feedback.showError(message);
       }
@@ -103,7 +108,7 @@ export class AuthService {
 
   expireSession(): void {
     this.principal.set(null);
-    this.error.set('Your session has expired. Please sign in again.');
+    this.error.set($localize`Your session has expired. Please sign in again.`);
   }
 
   private async loadProviders(): Promise<void> {

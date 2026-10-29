@@ -29,7 +29,9 @@ export class AuditPageComponent implements OnInit {
         (await this.api.get<{ items: AuditItem[] }>('/api/v1/audit-events?limit=100')).items,
       );
     } catch (error) {
-      this.feedback.showError(AdminApiService.errorMessage(error, 'Unable to load audit events.'));
+      this.feedback.showError(
+        AdminApiService.errorMessage(error, $localize`Unable to load audit events.`),
+      );
     } finally {
       this.loading.set(false);
     }

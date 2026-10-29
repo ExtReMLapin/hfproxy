@@ -26,7 +26,8 @@
                 "input": "public"
               }
             ],
-            "styles": ["src/styles.css"]
+            "styles": ["src/styles.css"],
+            "polyfills": ["src/polyfills-i18n.ts"]
           },
           "configurations": {
             "production": {
@@ -77,7 +78,18 @@
           "options": {
             "lintFilePatterns": ["src/**/*.ts", "src/**/*.html"]
           }
+        },
+        "extract-i18n": {
+          "builder": "@angular/build:extract-i18n",
+          "options": {
+            "buildTarget": "hfproxy:build:development",
+            "format": "json",
+            "outputPath": "src/locale"
+          }
         }
+      },
+      "i18n": {
+        "sourceLocale": "en"
       }
     }
   }

@@ -23,5 +23,5 @@ import { Component, Input } from '@angular/core';
 export class PageHeadingComponent {
   @Input({ required: true }) title = '';
   @Input() subtitle = '';
-  @Input() eyebrow = 'Workspace';
+  @Input() eyebrow = $localize`Workspace`;
 }

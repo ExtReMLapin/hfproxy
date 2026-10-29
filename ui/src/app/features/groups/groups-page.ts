@@ -3,6 +3,7 @@ import { Component, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { AdminApiService } from '../../core/admin-api.service';
 import { FeedbackService } from '../../core/feedback.service';
+import { roleLabel, sourceLabel } from '../../core/labels';
 import { AdminGroup, GroupMember } from '../../core/admin.types';
 import { IconComponent } from '../../shared/icon/icon';
 import { PageHeadingComponent } from '../../shared/page-heading/page-heading';
@@ -14,6 +15,8 @@ import { PageHeadingComponent } from '../../shared/page-heading/page-heading';
   templateUrl: './groups-page.html',
 })
 export class GroupsPageComponent implements OnInit {
+  protected readonly roleLabel = roleLabel;
+  protected readonly sourceLabel = sourceLabel;
   private readonly api = inject(AdminApiService);
   private readonly feedback = inject(FeedbackService);
   protected readonly loading = signal(true);
@@ -32,7 +35,9 @@ export class GroupsPageComponent implements OnInit {
     try {
       this.groups.set(await this.api.listAll<AdminGroup>('/api/v1/groups'));
     } catch (error) {
-      this.feedback.showError(AdminApiService.errorMessage(error, 'Unable to load groups.'));
+      this.feedback.showError(
+        AdminApiService.errorMessage(error, $localize`Unable to load groups.`),
+      );
     } finally {
       this.loading.set(false);
     }
@@ -51,7 +56,9 @@ export class GroupsPageComponent implements OnInit {
       this.editingGroupId = group.id;
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (error) {
-      this.feedback.showError(AdminApiService.errorMessage(error, 'Unable to load group members.'));
+      this.feedback.showError(
+        AdminApiService.errorMessage(error, $localize`Unable to load group members.`),
+      );
     }
   }
 
@@ -74,15 +81,17 @@ export class GroupsPageComponent implements OnInit {
           name,
           members,
         });
-        this.feedback.showSuccess('Group membership updated.');
+        this.feedback.showSuccess($localize`Group membership updated.`);
       } else {
         await this.api.post('/api/v1/groups', { name, members });
-        this.feedback.showSuccess('Group created.');
+        this.feedback.showSuccess($localize`Group created.`);
       }
       this.cancelEdit();
       await this.load();
     } catch (error) {
-      this.feedback.showError(AdminApiService.errorMessage(error, 'Unable to save this group.'));
+      this.feedback.showError(
+        AdminApiService.errorMessage(error, $localize`Unable to save this group.`),
+      );
     } finally {
       this.busy.set(false);
     }

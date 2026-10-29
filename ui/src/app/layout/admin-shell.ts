@@ -4,7 +4,9 @@ import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } fro
 import { filter } from 'rxjs';
 import { AuthService } from '../core/auth.service';
 import { FeedbackService } from '../core/feedback.service';
+import { roleLabel } from '../core/labels';
 import { IconComponent } from '../shared/icon/icon';
+import { LanguageSwitcherComponent } from '../shared/language-switcher/language-switcher';
 
 interface NavItem {
   path: string;
@@ -16,7 +18,7 @@ interface NavItem {
 @Component({
   selector: 'app-admin-shell',
   standalone: true,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, IconComponent],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, IconComponent, LanguageSwitcherComponent],
   templateUrl: './admin-shell.html',
 })
 export class AdminShellComponent {
@@ -26,14 +28,14 @@ export class AdminShellComponent {
   protected readonly path = signal('/overview');
 
   protected readonly navItems: NavItem[] = [
-    { path: '/overview', label: 'Overview', icon: 'grid', personal: true },
-    { path: '/tokens', label: 'Access tokens', icon: 'shield', personal: true },
-    { path: '/repositories', label: 'Repositories', icon: 'box' },
-    { path: '/cache', label: 'Cache', icon: 'database' },
-    { path: '/users', label: 'Users', icon: 'users' },
-    { path: '/groups', label: 'Groups', icon: 'layers' },
-    { path: '/audit', label: 'Audit log', icon: 'shield' },
-    { path: '/settings', label: 'Settings', icon: 'settings' },
+    { path: '/overview', label: $localize`Overview`, icon: 'grid', personal: true },
+    { path: '/tokens', label: $localize`Access tokens`, icon: 'shield', personal: true },
+    { path: '/repositories', label: $localize`Repositories`, icon: 'box' },
+    { path: '/cache', label: $localize`Cache`, icon: 'database' },
+    { path: '/users', label: $localize`Users`, icon: 'users' },
+    { path: '/groups', label: $localize`Groups`, icon: 'layers' },
+    { path: '/audit', label: $localize`Audit log`, icon: 'shield' },
+    { path: '/settings', label: $localize`Settings`, icon: 'settings' },
   ];
 
   constructor() {
@@ -52,13 +54,15 @@ export class AdminShellComponent {
 
   protected get currentTitle(): string {
     const route = this.path();
-    return this.navItems.find((item) => route.startsWith(item.path))?.label ?? 'Overview';
+    return this.navItems.find((item) => route.startsWith(item.path))?.label ?? $localize`Overview`;
   }
 
   protected get initials(): string {
     const name = this.auth.principal()?.display_name || this.auth.principal()?.username || 'H';
     return name.slice(0, 1).toUpperCase();
   }
+
+  protected readonly roleLabel = roleLabel;
 
   protected signOut(): void {
     void this.auth.signOut();

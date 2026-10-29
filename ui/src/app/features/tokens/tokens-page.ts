@@ -47,7 +47,9 @@ export class TokensPageComponent implements OnInit, OnDestroy {
       const result = await this.api.get<{ items: AccessToken[] }>('/api/v1/me/tokens');
       if (!this.destroyed) this.tokens.set(result.items);
     } catch (error) {
-      this.feedback.showError(AdminApiService.errorMessage(error, 'Unable to load your tokens.'));
+      this.feedback.showError(
+        AdminApiService.errorMessage(error, $localize`Unable to load your tokens.`),
+      );
     } finally {
       this.loading.set(false);
     }
@@ -77,7 +79,9 @@ export class TokensPageComponent implements OnInit, OnDestroy {
       this.draft.name = '';
       await this.load();
     } catch (error) {
-      this.feedback.showError(AdminApiService.errorMessage(error, 'Unable to create a token.'));
+      this.feedback.showError(
+        AdminApiService.errorMessage(error, $localize`Unable to create a token.`),
+      );
     } finally {
       this.busy.set(false);
     }
@@ -90,9 +94,11 @@ export class TokensPageComponent implements OnInit, OnDestroy {
       await this.api.delete(`/api/v1/me/tokens/${encodeURIComponent(token.id)}`);
       this.tokens.update((items) => items.filter((item) => item.id !== token.id));
       this.confirming.set('');
-      this.feedback.showSuccess('Token revoked. It can no longer access hfproxy.');
+      this.feedback.showSuccess($localize`Token revoked. It can no longer access hfproxy.`);
     } catch (error) {
-      this.feedback.showError(AdminApiService.errorMessage(error, 'Unable to revoke this token.'));
+      this.feedback.showError(
+        AdminApiService.errorMessage(error, $localize`Unable to revoke this token.`),
+      );
     } finally {
       this.busy.set(false);
     }

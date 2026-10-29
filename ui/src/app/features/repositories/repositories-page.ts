@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { AdminApiService } from '../../core/admin-api.service';
 import { AuthService } from '../../core/auth.service';
 import { FeedbackService } from '../../core/feedback.service';
+import { permissionLabel, subjectLabel } from '../../core/labels';
 import { Grant, Policy, PreloadJob, RepoType, Repository } from '../../core/admin.types';
 import { IconComponent } from '../../shared/icon/icon';
 import { PageHeadingComponent } from '../../shared/page-heading/page-heading';
@@ -15,6 +16,8 @@ import { PageHeadingComponent } from '../../shared/page-heading/page-heading';
   templateUrl: './repositories-page.html',
 })
 export class RepositoriesPageComponent implements OnInit, OnDestroy {
+  protected readonly permissionLabel = permissionLabel;
+  protected readonly subjectLabel = subjectLabel;
   private readonly api = inject(AdminApiService);
   private readonly auth = inject(AuthService);
   private readonly feedback = inject(FeedbackService);
@@ -52,10 +55,11 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
       const repositories = await this.api.listAll<Repository>('/api/v1/repos');
       this.repositories.set(repositories);
       this.savedPolicies.clear();
-      for (const repository of repositories) this.savedPolicies.set(repository.id, repository.access_policy);
+      for (const repository of repositories)
+        this.savedPolicies.set(repository.id, repository.access_policy);
     } catch (error) {
       this.feedback.showError(
-        AdminApiService.errorMessage(error, 'Unable to load repository policies.'),
+        AdminApiService.errorMessage(error, $localize`Unable to load repository policies.`),
       );
     } finally {
       this.loading.set(false);
@@ -69,7 +73,7 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
       await this.api.post('/api/v1/repos', { ...this.repoDraft, repo_id: repoID });
       this.repoDraft.repo_id = '';
       await this.load();
-      this.feedback.showSuccess('Repository access policy saved.');
+      this.feedback.showSuccess($localize`Repository access policy saved.`);
     });
   }
 
@@ -81,7 +85,9 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
           access_policy: repo.access_policy,
         });
         this.savedPolicies.set(repo.id, repo.access_policy);
-        this.feedback.showSuccess(`Access policy updated for ${repo.repo_id}.`);
+        this.feedback.showSuccess(
+          $localize`Access policy updated for ${repo.repo_id}:REPOSITORY:.`,
+        );
         await this.load();
       }, true);
     } catch (error) {
@@ -89,7 +95,9 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
       this.repositories.update((items) =>
         items.map((item) => (item.id === repo.id ? { ...item, access_policy: previous } : item)),
       );
-      this.feedback.showError(AdminApiService.errorMessage(error, 'Unable to update this policy.'));
+      this.feedback.showError(
+        AdminApiService.errorMessage(error, $localize`Unable to update this policy.`),
+      );
     }
   }
 
@@ -99,9 +107,13 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
     this.feedback.clear();
     try {
       await this.api.post(`/api/v1/repos/${encodeURIComponent(repo.id)}/preload`, {});
-      this.feedback.showSuccess(`Preloading started for ${repo.repo_id}. Follow progress on Overview.`);
+      this.feedback.showSuccess(
+        $localize`Preloading started for ${repo.repo_id}:REPOSITORY:. Follow progress on Overview.`,
+      );
     } catch (error) {
-      this.feedback.showError(AdminApiService.errorMessage(error, 'Unable to preload this repository.'));
+      this.feedback.showError(
+        AdminApiService.errorMessage(error, $localize`Unable to preload this repository.`),
+      );
     } finally {
       this.preloading.update((items) => ({ ...items, [repo.id]: false }));
     }
@@ -138,14 +150,14 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
   protected async deleteRepository(repo: Repository): Promise<void> {
     if (
       !window.confirm(
-        `Remove the access policy for ${repo.repo_id}? Cached artifacts will remain in storage.`,
+        $localize`Remove the access policy for ${repo.repo_id}:REPOSITORY:? Cached artifacts will remain in storage.`,
       )
     )
       return;
     await this.mutate(async () => {
       await this.api.delete(`/api/v1/repos/${encodeURIComponent(repo.id)}`);
       await this.load();
-      this.feedback.showSuccess('Repository policy removed.');
+      this.feedback.showSuccess($localize`Repository policy removed.`);
     });
   }
 
@@ -170,7 +182,7 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
       });
       this.grantDraft.subject_id = '';
       await this.loadGrants(repo);
-      this.feedback.showSuccess('Repository grant saved.');
+      this.feedback.showSuccess($localize`Repository grant saved.`);
     });
   }
 
@@ -184,20 +196,24 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
       });
       await this.api.delete(`/api/v1/repos/${encodeURIComponent(repo.id)}/grants?${query}`);
       await this.loadGrants(repo);
-      this.feedback.showSuccess('Repository grant removed.');
+      this.feedback.showSuccess($localize`Repository grant removed.`);
     });
   }
 
   protected typeLabel(type: string): string {
-    return type === 'datasets' ? 'Dataset' : type === 'spaces' ? 'Space' : 'Model';
+    if (type === 'datasets') return $localize`Dataset`;
+    if (type === 'spaces') return $localize`Space`;
+    return $localize`Model`;
+  }
+
+  protected grantsLabel(repo: Repository): string {
+    return $localize`Access grants for ${repo.repo_id}:REPOSITORY:`;
   }
 
   protected policyLabel(policy: string): string {
-    return policy === 'admin_only'
-      ? 'Admins only'
-      : policy === 'allowlist'
-        ? 'Allowlist'
-        : 'Public';
+    if (policy === 'admin_only') return $localize`Admins only`;
+    if (policy === 'allowlist') return $localize`Allowlist`;
+    return $localize`Public`;
   }
 
   private async loadGrants(repo: Repository): Promise<void> {
@@ -211,7 +227,7 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
       );
     } catch (error) {
       this.feedback.showError(
-        AdminApiService.errorMessage(error, 'Unable to load repository grants.'),
+        AdminApiService.errorMessage(error, $localize`Unable to load repository grants.`),
       );
     }
   }
@@ -240,7 +256,9 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
       await action();
     } catch (error) {
       if (propagateError) throw error;
-      this.feedback.showError(AdminApiService.errorMessage(error, 'The repository update failed.'));
+      this.feedback.showError(
+        AdminApiService.errorMessage(error, $localize`The repository update failed.`),
+      );
     } finally {
       this.busy.set(false);
     }

@@ -47,7 +47,9 @@ export class OverviewPageComponent implements OnInit, OnDestroy {
       this.repositories.set(repositories);
       this.feedback.clear();
     } catch (error) {
-      this.feedback.showError(AdminApiService.errorMessage(error, 'Unable to load your overview.'));
+      this.feedback.showError(
+        AdminApiService.errorMessage(error, $localize`Unable to load your overview.`),
+      );
     } finally {
       this.loading.set(false);
     }
@@ -70,15 +72,15 @@ export class OverviewPageComponent implements OnInit, OnDestroy {
   }
 
   protected typeLabel(type: string): string {
-    return type === 'datasets' ? 'Dataset' : type === 'spaces' ? 'Space' : 'Model';
+    if (type === 'datasets') return $localize`Dataset`;
+    if (type === 'spaces') return $localize`Space`;
+    return $localize`Model`;
   }
 
   protected policyLabel(policy: string): string {
-    return policy === 'admin_only'
-      ? 'Admins only'
-      : policy === 'allowlist'
-        ? 'Allowlist'
-        : 'Public';
+    if (policy === 'admin_only') return $localize`Admins only`;
+    if (policy === 'allowlist') return $localize`Allowlist`;
+    return $localize`Public`;
   }
 
   protected bytes(value: number): string {
@@ -97,9 +99,22 @@ export class OverviewPageComponent implements OnInit, OnDestroy {
   }
 
   protected preloadStatus(status: PreloadJob['status']): string {
-    if (status === 'completed_with_errors') return 'Completed with errors';
-    if (status === 'incomplete') return 'Cache incomplete';
-    return status.charAt(0).toUpperCase() + status.slice(1);
+    switch (status) {
+      case 'queued':
+        return $localize`Queued`;
+      case 'running':
+        return $localize`Running`;
+      case 'completed':
+        return $localize`Completed`;
+      case 'completed_with_errors':
+        return $localize`Completed with errors`;
+      case 'failed':
+        return $localize`Failed`;
+      case 'interrupted':
+        return $localize`Interrupted`;
+      case 'incomplete':
+        return $localize`Cache incomplete`;
+    }
   }
 
   private compact(value: number): string {

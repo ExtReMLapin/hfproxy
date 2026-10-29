@@ -2,15 +2,18 @@
   title="Access tokens"
   subtitle="Connect scripts and download tools to hfproxy using your own credentials."
   eyebrow="Your account"
+  i18n-title
+  i18n-subtitle
+  i18n-eyebrow
 />
 
 @if (secret()) {
   <section role="status" class="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-6">
-    <h2 class="text-sm font-semibold text-amber-950">Save your new token</h2>
-    <p class="mt-2 text-sm text-amber-900">
+    <h2 class="text-sm font-semibold text-amber-950" i18n>Save your new token</h2>
+    <p class="mt-2 text-sm text-amber-900" i18n>
       This secret is shown only once. Copy it now and keep it somewhere safe.
     </p>
-    <label class="mt-4 block text-xs font-semibold text-amber-950" for="new-token"
+    <label class="mt-4 block text-xs font-semibold text-amber-950" for="new-token" i18n
       >New access token</label
     >
     <input
@@ -26,6 +29,7 @@
       type="button"
       (click)="secret.set('')"
       class="mt-4 rounded-lg bg-amber-900 px-4 py-2 text-xs font-semibold text-white"
+      i18n
     >
       I have saved my token
     </button>
@@ -33,8 +37,8 @@
 }
 
 <section class="mb-6 rounded-2xl border border-slate-200 bg-white p-6">
-  <h2 class="text-sm font-semibold text-slate-900">Create an access token</h2>
-  <p class="mt-2 text-sm text-slate-500">
+  <h2 class="text-sm font-semibold text-slate-900" i18n>Create an access token</h2>
+  <p class="mt-2 text-sm text-slate-500" i18n>
     Tokens created here are read-only and can download from repositories your account is allowed to
     access.
   </p>
@@ -43,7 +47,7 @@
     (ngSubmit)="tokenForm.valid && create()"
     class="mt-5 flex flex-wrap items-end gap-4"
   >
-    <label class="flex-1 text-xs font-semibold text-slate-600"
+    <label class="flex-1 text-xs font-semibold text-slate-600" i18n
       >Name
       <input
         name="tokenName"
@@ -54,7 +58,7 @@
         class="mt-2 block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm"
       />
     </label>
-    <label class="text-xs font-semibold text-slate-600"
+    <label class="text-xs font-semibold text-slate-600" i18n
       >Expires in
       <select
         name="expiration"
@@ -71,48 +75,63 @@
       type="submit"
       [disabled]="busy() || loading() || !!secret() || !tokenForm.valid || !draft.name.trim()"
       class="rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+      i18n
     >
       Create token
     </button>
   </form>
-  <p class="mt-4 text-xs leading-6 text-slate-500">
+  <p class="mt-4 text-xs leading-6 text-slate-500" i18n>
     Use the token as <code>HF_TOKEN</code> with <code>HF_ENDPOINT</code> set to this hfproxy
     instance, or send it in an <code>Authorization: Bearer</code> header.
   </p>
 </section>
 
 <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-  <h2 class="border-b border-slate-100 px-6 py-4 text-sm font-semibold">Your tokens</h2>
+  <h2 class="border-b border-slate-100 px-6 py-4 text-sm font-semibold" i18n>Your tokens</h2>
   @if (loading()) {
-    <p class="p-6 text-sm text-slate-500">Loading tokens…</p>
+    <p class="p-6 text-sm text-slate-500" i18n>Loading tokens…</p>
   } @else {
     <div class="overflow-x-auto">
       <table class="w-full text-left text-sm">
         <thead class="bg-slate-50 text-xs text-slate-500">
           <tr>
-            <th class="p-4">Token</th>
-            <th class="p-4">Scope</th>
-            <th class="p-4">Expires</th>
-            <th class="p-4">Last used</th>
-            <th class="p-4">Action</th>
+            <th class="p-4" i18n>Token</th>
+            <th class="p-4" i18n>Scope</th>
+            <th class="p-4" i18n>Expires</th>
+            <th class="p-4" i18n>Last used</th>
+            <th class="p-4" i18n>Action</th>
           </tr>
         </thead>
         <tbody>
           @for (token of tokens(); track token.id) {
             <tr class="border-t border-slate-100">
               <td class="p-4">
-                <div class="font-semibold">{{ token.name || 'Unnamed token' }}</div>
+                <div class="font-semibold">
+                  @if (token.name) {
+                    {{ token.name }}
+                  } @else {
+                    <ng-container i18n>Unnamed token</ng-container>
+                  }
+                </div>
                 <code class="text-xs text-slate-500">{{ token.prefix }}…</code>
               </td>
               <td class="p-4">{{ token.scopes.join(', ') }}</td>
               <td class="p-4">
-                {{ token.expires_at ? (token.expires_at | date: 'mediumDate') : 'Never' }}
+                @if (token.expires_at) {
+                  {{ token.expires_at | date: 'mediumDate' }}
+                } @else {
+                  <ng-container i18n>Never</ng-container>
+                }
                 @if (expired(token)) {
-                  <span class="text-rose-700">(expired)</span>
+                  <span class="text-rose-700" i18n>(expired)</span>
                 }
               </td>
               <td class="p-4">
-                {{ token.last_used_at ? (token.last_used_at | date: 'medium') : 'Never' }}
+                @if (token.last_used_at) {
+                  {{ token.last_used_at | date: 'medium' }}
+                } @else {
+                  <ng-container i18n>Never</ng-container>
+                }
               </td>
               <td class="p-4">
                 @if (confirming() === token.id) {
@@ -121,6 +140,7 @@
                     [disabled]="busy()"
                     (click)="revoke(token)"
                     class="rounded-lg bg-rose-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                    i18n
                   >
                     Confirm revocation
                   </button>
@@ -129,6 +149,7 @@
                     [disabled]="busy()"
                     (click)="confirming.set('')"
                     class="ml-2 text-xs"
+                    i18n
                   >
                     Cancel
                   </button>
@@ -138,6 +159,7 @@
                     [disabled]="busy()"
                     (click)="confirming.set(token.id)"
                     class="rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 disabled:opacity-50"
+                    i18n
                   >
                     Revoke
                   </button>
@@ -146,7 +168,7 @@
             </tr>
           } @empty {
             <tr>
-              <td colspan="5" class="p-8 text-center text-slate-500">
+              <td colspan="5" class="p-8 text-center text-slate-500" i18n>
                 You have no access tokens. Create one to connect your tools.
               </td>
             </tr>
