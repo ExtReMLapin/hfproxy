@@ -27,6 +27,7 @@ All notable changes to hfproxy. The format follows [Keep a Changelog](https://ke
 
 ### Fixed
 
+- **A clean stop exited with code 1.** After a successful drain `hfproxy serve` reported `http: Server closed` as an error, so every rolling update looked like a crash to a supervisor; a stop that had to cut long downloads did the same. A stop now exits 0 and logs how many requests were cut. The grace is configurable with `HFPROXY_SHUTDOWN_GRACE` (default 30s) and the chart derives it from `terminationGracePeriodSeconds`.
 - **A race in the download limiter could crash the instance.** When a user reached their simultaneous-download limit at the moment another of their downloads finished, the refusal read a map without its lock, which Go treats as a fatal error that takes down every stream of the instance. Introduced with the download limits (unreleased), never in a release.
 - Documentation said a Hub mirror "works" without mentioning that private addresses were refused; it now describes the option above.
 

@@ -42,6 +42,12 @@ Preloads started by an administrator are never limited. A refusal is logged at `
 - `/healthz` answers while the process runs. `hfproxy healthcheck` probes it and is the container health check.
 - `/readyz` answers 200 only when PostgreSQL is reachable, the schema is at the version this build expects, and the object-storage bucket is reachable. Route traffic on `/readyz`.
 
+## Stopping and rolling updates
+
+On SIGTERM or SIGINT the instance stops accepting connections and lets requests in progress finish for `HFPROXY_SHUTDOWN_GRACE` (default `30s`), then cuts what is left and logs `shutdown grace expired` with `requests_cut`. A stop is a success: the exit code is 0 whether or not requests were cut.
+
+A download that takes longer than the grace is cut at a rolling update, and the client has to resume it (`Range`; the Hub clients do). If your files take hours to download, raise both `HFPROXY_SHUTDOWN_GRACE` and the pod's grace period. The chart sets `HFPROXY_SHUTDOWN_GRACE` to `terminationGracePeriodSeconds` minus ten seconds (60 by default), so raising `terminationGracePeriodSeconds` is enough. Outside Kubernetes, keep the supervisor's stop timeout (`docker stop -t`, `TimeoutStopSec`) above the grace.
+
 ## Upgrades and rollbacks
 
 1. Back up PostgreSQL (see below).

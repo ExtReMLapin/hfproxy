@@ -38,6 +38,10 @@ spec:
           securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
           env:
             {{- include "hfproxy.env" . | nindent 12 }}
+            # Leave the pod ten seconds after the drain to close; otherwise the kubelet
+            # kills it with SIGKILL before the process can log and exit.
+            - name: HFPROXY_SHUTDOWN_GRACE
+              value: {{ printf "%ds" (max 1 (sub (int .Values.terminationGracePeriodSeconds) 10)) | quote }}
             - name: HFPROXY_AUTO_MIGRATE
               value: {{ .Values.migrations.auto | quote }}
             {{- if or .Values.trustedCA.configMapName .Values.trustedCA.secretName }}

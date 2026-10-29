@@ -107,6 +107,7 @@ type Config struct {
 	RetentionDownloads time.Duration
 	RetentionAudit     time.Duration
 	MetricsAddr        string
+	ShutdownGrace      time.Duration
 
 	// UpstreamBreakerThreshold is how many consecutive failures of one
 	// upstream host open its circuit (0 disables it); UpstreamBreakerCooldown
@@ -222,6 +223,7 @@ func Load() (Config, error) {
 	c.RetentionDownloads = duration("RETENTION_DOWNLOADS", 90*24*time.Hour)
 	c.RetentionAudit = duration("RETENTION_AUDIT", 365*24*time.Hour)
 	c.MetricsAddr = value("METRICS_ADDR", "")
+	c.ShutdownGrace = duration("SHUTDOWN_GRACE", 30*time.Second)
 	c.UpstreamBreakerThreshold = number("UPSTREAM_BREAKER_THRESHOLD", 5)
 	c.UpstreamBreakerCooldown = duration("UPSTREAM_BREAKER_COOLDOWN", 30*time.Second)
 	c.APICacheMaxBytes = int64(number("API_CACHE_MAX_BYTES", 32<<20))
@@ -331,6 +333,9 @@ func (c Config) Validate() error {
 	}
 	if c.UpstreamBreakerThreshold > 0 && c.UpstreamBreakerCooldown == 0 {
 		return fmt.Errorf("HFPROXY_UPSTREAM_BREAKER_COOLDOWN must be positive when the breaker is enabled")
+	}
+	if c.ShutdownGrace < 0 {
+		return fmt.Errorf("HFPROXY_SHUTDOWN_GRACE must not be negative")
 	}
 	if c.MetricsAddr != "" {
 		if _, _, err := net.SplitHostPort(c.MetricsAddr); err != nil {
