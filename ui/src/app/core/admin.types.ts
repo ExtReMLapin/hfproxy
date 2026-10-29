@@ -70,8 +70,66 @@ export interface Repository {
   repo_type: RepoType;
   repo_id: string;
   access_policy: Policy;
+  /** "hub" for a repository cached from the Hub, "local" for one published here. */
+  origin?: 'hub' | 'local';
   created_at: string;
   updated_at: string;
+}
+
+export interface PublishedRepo {
+  id: string;
+  repo_type: 'models' | 'datasets';
+  repo_id: string;
+  namespace: string;
+  name: string;
+  private: boolean;
+  owner: string;
+  bytes: number;
+  created_at: string;
+  updated_at: string;
+  can_write: boolean;
+}
+
+export interface PublishedList {
+  items: PublishedRepo[];
+  enabled: boolean;
+  namespaces: string[];
+  max_file: number;
+  quota: number;
+}
+
+export interface PublishedReadme {
+  content?: string;
+  card?: Record<string, unknown>;
+  card_error?: string;
+  size: number;
+  truncated?: boolean;
+}
+
+export interface PublishedDetail {
+  repository: PublishedRepo;
+  revision: string;
+  branches: string[];
+  tags: string[];
+  head: { sha: string; summary: string; author: string; date: string };
+  files_url: string;
+  readme?: PublishedReadme;
+}
+
+export interface PublishedEntry {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  size: number;
+  lfs: boolean;
+}
+
+export interface PublishedCommit {
+  sha: string;
+  summary: string;
+  description: string;
+  author: string;
+  date: string;
 }
 
 export interface CacheEntry {
@@ -150,6 +208,9 @@ export interface ManagedSettings {
   download_max_concurrent: number;
   download_rate_limit: number;
   download_daily_quota: number;
+  custom_repositories: boolean;
+  upload_max_file_size: number;
+  upload_user_quota: number;
   cache_ref_ttl: string;
   cache_negative_ttl: string;
   cache_gc_grace: string;

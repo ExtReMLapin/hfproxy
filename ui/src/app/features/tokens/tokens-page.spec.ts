@@ -34,6 +34,7 @@ describe('Personal access tokens', () => {
     const fixture = TestBed.createComponent(TokensPageComponent);
     fixture.detectChanges();
     http.expectOne('/api/v1/me/tokens').flush({ items: [] });
+    http.expectOne('/api/v1/settings/public').flush({ custom_repositories: false });
     await fixture.whenStable();
     fixture.detectChanges();
     const form = fixture.nativeElement.querySelector('form') as HTMLFormElement;
@@ -46,7 +47,11 @@ describe('Personal access tokens', () => {
     fixture.detectChanges();
     form.dispatchEvent(new Event('submit'));
     const create = http.expectOne((req) => req.method === 'POST');
-    expect(create.request.body).toEqual({ name: 'Workstation', expires_in_days: 90 });
+    expect(create.request.body).toEqual({
+      name: 'Workstation',
+      expires_in_days: 90,
+      scope: 'read',
+    });
     const token = {
       id: 't1',
       name: 'Workstation',
@@ -72,6 +77,46 @@ describe('Personal access tokens', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('tbody').textContent).not.toContain('Workstation');
+    fixture.destroy();
+  });
+
+  it('offers a publish token only when publishing is on', async () => {
+    const fixture = TestBed.createComponent(TokensPageComponent);
+    fixture.detectChanges();
+    http.expectOne('/api/v1/me/tokens').flush({ items: [] });
+    http.expectOne('/api/v1/settings/public').flush({ custom_repositories: true });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const select = fixture.nativeElement.querySelector('select[name="scope"]') as HTMLSelectElement;
+    expect(select).not.toBeNull();
+    await fixture.whenStable(); // the form registers its controls after the first render
+    select.value = 'publish';
+    select.dispatchEvent(new Event('change'));
+    const form = fixture.nativeElement.querySelector('form') as HTMLFormElement;
+    const name = form.querySelector('input')!;
+    name.value = 'Uploader';
+    name.dispatchEvent(new Event('input'));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    form.dispatchEvent(new Event('submit'));
+    const create = http.expectOne((req) => req.method === 'POST');
+    expect(create.request.body).toEqual({
+      name: 'Uploader',
+      expires_in_days: 90,
+      scope: 'publish',
+    });
+    create.flush({
+      id: 't2',
+      name: 'Uploader',
+      prefix: 'hfpx_x',
+      scopes: ['publish'],
+      expires_at: null,
+      last_used_at: null,
+      token: 'hfpx_secret',
+    });
+    await Promise.resolve();
+    http.expectOne('/api/v1/me/tokens').flush({ items: [] });
+    await fixture.whenStable();
     fixture.destroy();
   });
 });

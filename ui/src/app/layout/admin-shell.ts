@@ -29,6 +29,7 @@ export class AdminShellComponent {
 
   protected readonly navItems: NavItem[] = [
     { path: '/overview', label: $localize`Overview`, icon: 'grid', personal: true },
+    { path: '/published', label: $localize`Models & datasets`, icon: 'layers', personal: true },
     { path: '/tokens', label: $localize`Access tokens`, icon: 'shield', personal: true },
     { path: '/repositories', label: $localize`Repositories`, icon: 'box' },
     { path: '/cache', label: $localize`Cache`, icon: 'database' },

@@ -8,7 +8,7 @@ import { IconComponent } from '../../shared/icon/icon';
 import { PageHeadingComponent } from '../../shared/page-heading/page-heading';
 
 type SettingsSection =
-  'connections' | 'storage' | 'access' | 'oidc' | 'ldap' | 'cache' | 'observability';
+  'connections' | 'storage' | 'access' | 'oidc' | 'ldap' | 'cache' | 'publishing' | 'observability';
 
 @Component({
   selector: 'app-settings-page',
@@ -38,6 +38,7 @@ export class SettingsPageComponent implements OnInit {
     { id: 'oidc', label: $localize`OIDC / SSO`, icon: 'key' },
     { id: 'ldap', label: $localize`LDAP`, icon: 'users' },
     { id: 'cache', label: $localize`Cache rules`, icon: 'layers' },
+    { id: 'publishing', label: $localize`Publishing`, icon: 'box' },
     { id: 'observability', label: $localize`Observability`, icon: 'layers' },
   ];
 

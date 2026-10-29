@@ -53,7 +53,9 @@ describe('AuditUI pages', () => {
     const page = TestBed.runInInjectionContext(() => new OverviewPageComponent());
     page.ngOnInit();
     http.expectOne('/api/v1/stats').flush(problem401, unauthorized);
-    http.expectOne((request) => request.urlWithParams.split('?')[0] === '/api/v1/repos').flush(problem401, unauthorized);
+    http
+      .expectOne((request) => request.urlWithParams.split('?')[0] === '/api/v1/repos')
+      .flush(problem401, unauthorized);
     http.expectOne('/api/v1/downloads/active').flush(problem401, unauthorized);
     await flushMicrotasks();
 
@@ -73,7 +75,9 @@ describe('AuditUI pages', () => {
   it('AuditUI: users page does not submit the create form when required fields are empty / password < 12 chars', async () => {
     const fixture = TestBed.createComponent(UsersPageComponent);
     fixture.detectChanges();
-    http.expectOne((request) => request.urlWithParams.split('?')[0] === '/api/v1/users').flush({ items: [] });
+    http
+      .expectOne((request) => request.urlWithParams.split('?')[0] === '/api/v1/users')
+      .flush({ items: [] });
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -105,12 +109,13 @@ describe('AuditUI pages', () => {
     page.users.set([user]);
     page.setRole(user, 'admin'); // what [(ngModel)]="user.role" does when the select changes
     const pending = page.save(user);
-    http
-      .expectOne('/api/v1/users/u2')
-      .flush({ title: 'Database error', status: 500, detail: 'Unable to update user.' }, {
+    http.expectOne('/api/v1/users/u2').flush(
+      { title: 'Database error', status: 500, detail: 'Unable to update user.' },
+      {
         status: 500,
         statusText: 'Server Error',
-      });
+      },
+    );
     await pending;
     // Expected: the list shows the role actually stored on the server ("reader").
     // Actual: the select keeps showing "admin" although the update was rejected.
@@ -147,4 +152,3 @@ describe('AuditUI pages', () => {
     expect(shell.path()).toBe('/overview');
   });
 });
-
