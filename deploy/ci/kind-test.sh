@@ -64,6 +64,12 @@ kind_image_load() { "$KIND" load docker-image "$IMAGE" --name "$CLUSTER"; }
 kind_image_load
 
 log "start PostgreSQL, S3 and the Hub stand-in"
+# A self-signed certificate for the Hub stand-in; the chart trusts it as a CA.
+CERTS="$(mktemp -d)"
+openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=fakehub" -addext "subjectAltName=DNS:fakehub" \
+  -keyout "$CERTS/tls.key" -out "$CERTS/tls.crt" 2>/dev/null
+kubectl create secret generic fakehub-tls --from-file=tls.crt="$CERTS/tls.crt" --from-file=tls.key="$CERTS/tls.key"
+kubectl create secret generic fakehub-ca --from-file=ca.crt="$CERTS/tls.crt"
 kubectl create configmap fakehub-script --from-file=fakehub.py="$HERE/fakehub.py"
 kubectl apply -f "$HERE/dependencies.yaml"
 kubectl rollout status deploy/postgres --timeout=180s
@@ -80,7 +86,7 @@ values=(
   --set image.repository="$REPO" --set image.tag="$TAG" --set image.pullPolicy=Never
   --set secrets.existingSecret=hfproxy --set secrets.files.SETUP_TOKEN=setup_token
   --set config.PUBLIC_URL=http://localhost:8080
-  --set config.HF_BASE_URL=http://fakehub:8080 --set config.HF_ALLOWED_REDIRECT_HOSTS=fakehub
+  --set config.HF_BASE_URL=https://fakehub:8080 --set trustedCA.secretName=fakehub-ca --set config.HF_ALLOWED_REDIRECT_HOSTS=fakehub
   --set config.S3_ENDPOINT=http://moto:5000 --set config.S3_REGION=us-east-1 --set config.S3_BUCKET=hfproxy
   --set config.S3_FORCE_PATH_STYLE=true --set config.S3_SERVER_SIDE_ENCRYPTION=false
   --set config.ANONYMOUS_PUBLIC_READ=true --set config.LOG_LEVEL=debug
@@ -118,7 +124,7 @@ csrf="$(awk '$6=="hfproxy_csrf"{print $7}' /tmp/kind-cookies)"
 code="$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/kind-cookies -H "X-CSRF-Token: $csrf" -H 'Content-Type: application/json' -d '{"repo_type":"models","repo_id":"org/model","access_policy":"public"}' "$BASE/api/v1/repos")"
 [ "$code" = 201 ] || [ "$code" = 200 ] || fail "adding the repository answered $code"
 
-hub_hits() { curl -s "http://127.0.0.1:$HUB_PORT/_hits"; }
+hub_hits() { curl -sk "https://127.0.0.1:$HUB_PORT/_hits"; }
 
 download() { # path expected-status
   curl -s -o /tmp/kind-body -w '%{http_code}' "$BASE/org/model/resolve/main/$1"

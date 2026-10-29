@@ -6,6 +6,7 @@ reach it (GET /_hits) so the test can tell a cache hit from a fetch.
 """
 import hashlib
 import http.server
+import ssl
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 BIG = b"weights-" * 131072  # 1 MiB
@@ -46,7 +47,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.reply(200, {"X-Repo-Commit": COMMIT, "ETag": '"cfg-etag"', "Content-Type": "application/json"}, SMALL, send_body)
             return
         if path.endswith("/resolve/main/model.bin") or path.endswith("/resolve/" + COMMIT + "/model.bin"):
-            location = "http://" + self.headers.get("Host", "fakehub:8080") + "/cdn/model.bin"
+            location = "https://" + self.headers.get("Host", "fakehub:8080") + "/cdn/model.bin"
             self.reply(302, {"X-Repo-Commit": COMMIT, "X-Linked-Etag": '"' + SHA + '"', "X-Linked-Size": str(len(BIG)), "Location": location})
             return
         if path == "/cdn/model.bin":
@@ -65,4 +66,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.reply(404, {"X-Error-Code": "EntryNotFound"})
 
 
-http.server.ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+# The proxy refuses a plain-HTTP Hub outside loopback, so the stand-in speaks
+# TLS with a certificate the chart is told to trust (trustedCA).
+server = http.server.ThreadingHTTPServer(("0.0.0.0", 8080), Handler)
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain("/tls/tls.crt", "/tls/tls.key")
+server.socket = context.wrap_socket(server.socket, server_side=True)
+server.serve_forever()
