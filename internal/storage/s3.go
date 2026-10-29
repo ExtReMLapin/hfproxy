@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	"github.com/aws/smithy-go/logging"
 )
 
 type S3 struct {
@@ -53,7 +54,10 @@ func IsNotFound(err error) bool {
 }
 
 func New(ctx context.Context, endpoint, region, bucket, prefix, accessKey, secretKey string, pathStyle, serverSideEncryption bool) (*S3, error) {
-	options := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}
+	// The SDK's default logger writes unstructured DEBUG lines to stderr (one per
+	// object read without a checksum, which includes every cache hit on stores
+	// such as Garage). hfproxy reports storage problems through its own logs.
+	options := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region), awsconfig.WithLogger(logging.Nop{})}
 	if accessKey != "" {
 		options = append(options, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")))
 	}
