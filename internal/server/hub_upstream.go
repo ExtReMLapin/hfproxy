@@ -392,7 +392,7 @@ func (b *countingBody) Close() error {
 	return err
 }
 
-func newEgressDialer(allowLoopback bool, proxy *url.URL) func(context.Context, string, string) (net.Conn, error) {
+func newEgressDialer(policy egressPolicy, proxy *url.URL) func(context.Context, string, string) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
@@ -402,7 +402,7 @@ func newEgressDialer(allowLoopback bool, proxy *url.URL) func(context.Context, s
 		if proxy != nil {
 			proxyScheme := strings.ToLower(proxy.Scheme)
 			if strings.HasPrefix(proxyScheme, "socks4") || strings.HasPrefix(proxyScheme, "socks5") {
-				return dialSOCKS(ctx, network, address, dialer, proxy, allowLoopback)
+				return dialSOCKS(ctx, network, address, dialer, proxy, policy)
 			}
 			proxyPort := proxy.Port()
 			if proxyPort == "" {
@@ -425,7 +425,7 @@ func newEgressDialer(allowLoopback bool, proxy *url.URL) func(context.Context, s
 		}
 		checkAndDial := func(ip netip.Addr) (net.Conn, error) {
 			ip = ip.Unmap()
-			allowed := egressIPAllowed(ip, allowLoopback)
+			allowed := policy.allows(ip)
 			if !allowed {
 				return nil, fmt.Errorf("egress to non-public IP is blocked")
 			}
@@ -474,7 +474,7 @@ func newHFHTTPClient(cfg config.Config) *http.Client {
 		// was explicitly configured for Hugging Face.
 		transport.Proxy = nil
 	}
-	transport.DialContext = newEgressDialer(config.IsLoopbackHost(base.Hostname()), proxy)
+	transport.DialContext = newEgressDialer(egressPolicy{allowLoopback: config.IsLoopbackHost(base.Hostname()), private: cfg.HFAllowedPrivateNets}, proxy)
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	transport.ResponseHeaderTimeout = cfg.HFTimeout
 	return &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

@@ -21,13 +21,17 @@ type Config struct {
 	LogLevel       string
 	// SetupToken is the code asked for to create the first administrator from
 	// the console. Empty means a random one is generated and printed at start-up.
-	SetupToken             string
-	DatabaseURL            string
-	AutoMigrate            bool
-	HFBaseURL              string
-	HFProxyURL             string
-	HFToken                string
-	HFAllowedHosts         []string
+	SetupToken     string
+	DatabaseURL    string
+	AutoMigrate    bool
+	HFBaseURL      string
+	HFProxyURL     string
+	HFToken        string
+	HFAllowedHosts []string
+	// HFAllowedPrivateNets lists private networks the service may call (a Hub
+	// mirror inside the company network). Empty by default: only public
+	// addresses are reachable. Set by the environment only, never from the console.
+	HFAllowedPrivateNets   []netip.Prefix
 	HFTimeout              time.Duration
 	S3Endpoint             string
 	S3Region               string
@@ -143,6 +147,10 @@ func Load() (Config, error) {
 	c.HFProxyURL = secret("HF_PROXY_URL", "")
 	c.HFToken = secret("HF_TOKEN", "")
 	c.HFAllowedHosts, err = NormalizeAllowedHosts(split(value("HF_ALLOWED_REDIRECT_HOSTS", "huggingface.co,hf.co,*.huggingface.co,*.hf.co,*.xethub.hf.co")))
+	if err != nil {
+		return Config{}, err
+	}
+	c.HFAllowedPrivateNets, err = ParsePrivateNets(split(value("HF_ALLOWED_PRIVATE_CIDRS", "")))
 	if err != nil {
 		return Config{}, err
 	}
@@ -560,6 +568,39 @@ func parsePrefixes(values []string) ([]netip.Prefix, error) {
 		prefixes = append(prefixes, prefix.Masked())
 	}
 	return prefixes, nil
+}
+
+// privateRanges are the only networks HFPROXY_HF_ALLOWED_PRIVATE_CIDRS may
+// name: RFC 1918 and unique-local addresses, carrier-grade NAT (used by many
+// clouds and clusters) and the benchmarking range. Anything public is reachable
+// anyway, and link-local addresses (instance metadata) can never be allowed.
+var privateRanges = []netip.Prefix{
+	netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("172.16.0.0/12"), netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("fc00::/7"),
+}
+
+// ParsePrivateNets parses a list of CIDRs, each of which must lie entirely
+// inside a private range.
+func ParsePrivateNets(values []string) ([]netip.Prefix, error) {
+	var nets []netip.Prefix
+	for _, value := range values {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(value))
+		if err != nil {
+			return nil, fmt.Errorf("HFPROXY_HF_ALLOWED_PRIVATE_CIDRS: %q is not a CIDR such as 10.20.0.0/16", value)
+		}
+		prefix = prefix.Masked()
+		inside := false
+		for _, private := range privateRanges {
+			if private.Bits() <= prefix.Bits() && private.Contains(prefix.Addr()) {
+				inside = true
+			}
+		}
+		if !inside {
+			return nil, fmt.Errorf("HFPROXY_HF_ALLOWED_PRIVATE_CIDRS: %s is not inside a private range (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 198.18.0.0/15, fc00::/7)", prefix)
+		}
+		nets = append(nets, prefix)
+	}
+	return nets, nil
 }
 
 func NormalizeAllowedHosts(values []string) ([]string, error) {

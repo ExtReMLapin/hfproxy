@@ -42,7 +42,25 @@ Back up PostgreSQL and the S3 bucket together and restore them from the same poi
 
 ## Upstream ports
 
-hfproxy connects to the Hub, and to the hosts the Hub redirects to, on port 443 only (port 80 on loopback for development). The exception is the host and port of `HFPROXY_HF_BASE_URL` itself: pointing it at an internal mirror or artifact repository such as `https://mirror.example.com:8443` works, and only that exact host and port. Redirects to any other non-standard port are refused.
+hfproxy connects to the Hub, and to the hosts the Hub redirects to, on port 443 only (port 80 on loopback for development). The exception is the host and port of `HFPROXY_HF_BASE_URL` itself: pointing it at an internal mirror or artifact repository such as `https://mirror.example.com:8443` allows that exact host and port. Redirects to any other non-standard port are refused. A mirror on a private network also needs its addresses listed, see [Upstream addresses](#upstream-addresses).
+
+
+## Upstream addresses
+
+hfproxy refuses to connect to non-public addresses on behalf of a request: private networks (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, fc00::/7), carrier-grade NAT, link-local addresses (cloud metadata services) and loopback. This is what stops a redirect from the Hub, or a poisoned DNS answer, from reaching services inside your network. The check is made on the address actually dialled, after name resolution.
+
+A Hub mirror or artifact repository inside your network is on a private address, so name its network explicitly:
+
+```bash
+HFPROXY_HF_BASE_URL=https://hub-mirror.corp.example:8443
+HFPROXY_HF_ALLOWED_PRIVATE_CIDRS=10.20.0.0/16
+```
+
+- Only networks inside the private ranges above are accepted (`10.20.0.0/16`, `192.168.7.5/32`, `fd12:3456::/32`...). A public network, a range wider than a private one, `0.0.0.0/0` and anything link-local or loopback are rejected at startup, so a typo cannot open the protection.
+- List the smallest network that holds the mirror. Everything in it becomes reachable from hfproxy, for the Hub URL and for the redirect hosts you allow.
+- The setting comes from the environment only (with the Helm chart, `config.HF_ALLOWED_PRIVATE_CIDRS`); it cannot be changed from the console.
+- Alternatively, set `HFPROXY_HF_PROXY_URL` to an egress proxy that can reach the mirror: the proxy itself is not subject to this check.
+- A mirror with a certificate signed by a private CA also needs `trustedCA` (see above).
 
 ## Private certificate authorities
 
