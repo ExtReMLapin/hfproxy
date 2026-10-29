@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/hfproxy/hfproxy/internal/db"
@@ -105,7 +106,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil || userID == "" {
 		s.recordLoginFailure(r.Context(), username)
-		s.audit(r.Context(), "", "auth.login_failed", "user", username, map[string]any{"provider": provider})
+		s.audit(r.Context(), "", "auth.login_failed", "user", auditText(username), map[string]any{"provider": provider})
 		data.Error = "Identifiant ou mot de passe incorrect."
 		s.renderLogin(w, data, http.StatusUnauthorized)
 		return
@@ -590,4 +591,23 @@ func constantEqual(a, b string) bool {
 func usernameFromEmail(email string) string {
 	local, _, _ := strings.Cut(email, "@")
 	return usernameFromLogin(local)
+}
+
+// auditText makes text supplied by an unauthenticated client safe to store in an
+// audit row: control characters (a NUL would make PostgreSQL refuse the row)
+// are dropped and the length is capped, so failed sign-ins cannot fill the table
+// with arbitrarily large values.
+func auditText(value string) string {
+	var b strings.Builder
+	count := 0
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f || r == utf8.RuneError {
+			continue
+		}
+		if count++; count > 128 {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }

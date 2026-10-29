@@ -316,6 +316,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	server := &http.Server{
 		Addr: s.currentConfig().ListenAddr, Handler: s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second,
+		// hfproxy accepts no large uploads, only small JSON and form bodies, so a
+		// client that trickles a body in is cut off. There is deliberately no
+		// WriteTimeout: downloads of many gigabytes are streamed responses.
+		ReadTimeout:    5 * time.Minute,
 		MaxHeaderBytes: 1 << 20,
 	}
 	// Hit events are flushed after the HTTP server has drained, so requests that

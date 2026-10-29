@@ -127,3 +127,12 @@ func TestUpstreamPortsAreLimitedToStandardOnesAndTheConfiguredHub(t *testing.T) 
 		t.Error("a Hub URL without a port must not open other ports")
 	}
 }
+
+func TestAuditTextBoundsWhatAnonymousClientsCanStore(t *testing.T) {
+	if got := auditText("ali\x00ce\n"); got != "alice" {
+		t.Fatalf("control characters kept: %q", got)
+	}
+	if got := auditText(strings.Repeat("é", 1000)); len([]rune(got)) != 128 {
+		t.Fatalf("length not capped: %d runes", len([]rune(got)))
+	}
+}
