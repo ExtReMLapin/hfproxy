@@ -44,6 +44,7 @@ type runtimeState struct {
 	oidcProvider *oidc.Provider
 	oidcConfig   *oauth2.Config
 	oidcVerifier *oidc.IDTokenVerifier
+	oidcClient   *http.Client
 	ring         *keyring.Ring
 }
 
@@ -200,11 +201,13 @@ func makeRuntimeState(ctx context.Context, cfg config.Config, objectStore *stora
 	state := &runtimeState{config: cfg, storage: objectStore, httpClient: newHFHTTPClient(cfg), ring: keyring.NewRing(cfg.SessionSecret, cfg.PreviousSessionSecrets...)}
 	if cfg.OIDCIssuer != "" {
 		var provider *oidc.Provider
-		if previous != nil && previous.config.OIDCIssuer == cfg.OIDCIssuer {
+		state.oidcClient = newOIDCHTTPClient(cfg.OIDCIssuer)
+		if previous != nil && previous.config.OIDCIssuer == cfg.OIDCIssuer && previous.oidcClient != nil {
 			provider = previous.oidcProvider
+			state.oidcClient = previous.oidcClient
 		} else {
 			var err error
-			provider, err = oidc.NewProvider(ctx, cfg.OIDCIssuer)
+			provider, err = oidc.NewProvider(oidc.ClientContext(ctx, state.oidcClient), cfg.OIDCIssuer)
 			if err != nil {
 				return nil, fmt.Errorf("discover OIDC provider: %w", err)
 			}
@@ -236,6 +239,15 @@ func (s *Server) currentStorage() *storage.S3                { return s.runtime.
 func (s *Server) currentHTTPClient() *http.Client            { return s.runtime.Load().httpClient }
 func (s *Server) currentOIDCConfig() *oauth2.Config          { return s.runtime.Load().oidcConfig }
 func (s *Server) currentOIDCVerifier() *oidc.IDTokenVerifier { return s.runtime.Load().oidcVerifier }
+
+// oidcContext carries the identity provider HTTP client (timeouts, address
+// filter) for the calls made with ctx.
+func (s *Server) oidcContext(ctx context.Context) context.Context {
+	if client := s.runtime.Load().oidcClient; client != nil {
+		return oidc.ClientContext(ctx, client)
+	}
+	return ctx
+}
 
 func (s *Server) applyConfig(ctx context.Context, cfg config.Config, actorID string) error {
 	if err := cfg.Validate(); err != nil {
