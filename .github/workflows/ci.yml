@@ -50,6 +50,12 @@ jobs:
             sleep 1
           done
           curl -sS -f -X PUT http://127.0.0.1:5055/hfproxy
+      - name: Start a directory server (OpenLDAP)
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq slapd ldap-utils >/dev/null
+          sudo systemctl stop slapd || true
+          # The environment the directory tests read (host, CA bundle).
+          deploy/ci/ldap-up.sh "$RUNNER_TEMP/ldap" | sed 's/^export //' >> "$GITHUB_ENV"
       - name: Test
         env:
           HFPROXY_TEST_S3_ENDPOINT: http://127.0.0.1:5055
