@@ -106,9 +106,12 @@ BASE="http://127.0.0.1:$PORT"
 log "probes"
 wait_http "$BASE/healthz" 200
 wait_http "$BASE/readyz" 200
-# Metrics are not served on the public port to anonymous callers.
+# Metrics live on their own port; the public port must not expose them. The
+# console answers unknown paths with its page, so look at the body, not only
+# at the status code.
+curl -s "$BASE/metrics" | grep -Eq '^# (HELP|TYPE) ' && fail "/metrics on the public port serves Prometheus metrics to an anonymous caller"
 code="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/metrics")"
-[ "$code" = 401 ] || [ "$code" = 403 ] || [ "$code" = 404 ] || fail "/metrics answered $code to an anonymous caller"
+[ "$code" != 200 ] || echo "(the public port answers /metrics with the console page, not metrics)"
 
 log "first start: the setup page is offered and the configured code works"
 [ "$(curl -s "$BASE/api/v1/setup/status")" = '{"required":true}' ] || fail "setup should be required on a new instance"
