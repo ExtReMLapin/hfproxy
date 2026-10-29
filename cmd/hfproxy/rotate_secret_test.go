@@ -51,7 +51,7 @@ func TestRotateSecretReportsWhatStillUsesThePreviousSecret(t *testing.T) {
 	const newSecret = "cli-new-secret-0123456789abcdef0123456789ab"
 	sqlDB := rotationDatabase(t)
 	ctx := context.Background()
-	if err := config.SavePersisted(ctx, sqlDB, config.Config{SessionSecret: oldSecret, HFBaseURL: "https://huggingface.co", S3Bucket: "bucket"}, ""); err != nil {
+	if _, err := config.SavePersisted(ctx, sqlDB, config.Config{SessionSecret: oldSecret, HFBaseURL: "https://huggingface.co", S3Bucket: "bucket"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	userID := db.NewID()

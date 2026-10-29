@@ -35,6 +35,12 @@ func scanResumption(row rowScanner) (*Resumption, error) {
 	return r, err
 }
 
+// resumeLockKey names the advisory lock of one file; fills and the cleanup of
+// stale resumptions must use the same one.
+func resumeLockKey(repositoryID, commit, filePath string) string {
+	return repositoryID + "|" + commit + "|" + filePath
+}
+
 // LockResume takes the cluster-wide lock that serialises every fill of one
 // file, whichever replica runs it. The returned function releases it; closing
 // the session releases it too if the explicit unlock fails.
@@ -43,7 +49,7 @@ func (s *Store) LockResume(ctx context.Context, repositoryID, commit, filePath s
 	if err != nil {
 		return nil, fmt.Errorf("acquire download resume connection: %w", err)
 	}
-	lockKey := repositoryID + "|" + commit + "|" + filePath
+	lockKey := resumeLockKey(repositoryID, commit, filePath)
 	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtextextended($1, 0))`, lockKey); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("lock download resume: %w", err)
@@ -133,9 +139,10 @@ func (s *Store) CleanupStaleResumption(ctx context.Context, candidate *Resumptio
 		return false, err
 	}
 	defer tx.Rollback()
-	lockKey := candidate.RepositoryID + ":" + candidate.CommitSHA + ":" + candidate.Path
+	// The same key as LockResume, so a fill in progress keeps the cleanup away.
+	lockKey := resumeLockKey(candidate.RepositoryID, candidate.CommitSHA, candidate.Path)
 	var locked bool
-	if err := tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock(hashtext($1))`, lockKey).Scan(&locked); err != nil || !locked {
+	if err := tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))`, lockKey).Scan(&locked); err != nil || !locked {
 		return false, err
 	}
 	current, err := scanResumption(tx.QueryRowContext(ctx, `SELECT `+resumptionColumns+`

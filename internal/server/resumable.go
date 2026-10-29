@@ -25,6 +25,10 @@ const (
 // downloadResume is the saved state of a chunked download.
 type downloadResume = db.Resumption
 
+// fillLockWait bounds the wait for the cluster-wide lock of a file; a variable
+// so tests can shorten it.
+var fillLockWait = time.Minute
+
 func (s *Server) lockDownloadResume(ctx context.Context, repositoryID, commit, filePath string) (func(), error) {
 	return s.db.LockResume(ctx, repositoryID, commit, filePath)
 }

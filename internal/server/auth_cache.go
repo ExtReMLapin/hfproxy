@@ -17,6 +17,9 @@ type authCache struct {
 	ttl     time.Duration
 	max     int
 	entries map[[32]byte]authCacheEntry
+	// generation counts purges: a lookup that began before a purge must not put
+	// its answer back afterwards, or it would outlive the revocation.
+	generation uint64
 }
 
 type authCacheEntry struct {
@@ -53,12 +56,27 @@ func (c *authCache) get(key [32]byte) (*Principal, bool) {
 	return &p, true
 }
 
-func (c *authCache) put(key [32]byte, p *Principal) {
+// currentGeneration is read before a database lookup and passed to put.
+func (c *authCache) currentGeneration() uint64 {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.generation
+}
+
+// put remembers a lookup made while the cache was at generation gen; it is
+// ignored when a purge has happened since.
+func (c *authCache) put(key [32]byte, p *Principal, gen uint64) {
 	if c == nil || c.ttl <= 0 || p == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if gen != c.generation {
+		return
+	}
 	now := time.Now()
 	if len(c.entries) >= c.max {
 		for k, e := range c.entries {
@@ -83,5 +101,6 @@ func (c *authCache) purge() {
 	}
 	c.mu.Lock()
 	c.entries = map[[32]byte]authCacheEntry{}
+	c.generation++
 	c.mu.Unlock()
 }

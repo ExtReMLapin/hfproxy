@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/aws/smithy-go"
+	"github.com/hfproxy/hfproxy/internal/bytesize"
 	"github.com/hfproxy/hfproxy/internal/config"
 	"github.com/hfproxy/hfproxy/internal/db"
 	"github.com/hfproxy/hfproxy/internal/keyring"
@@ -323,6 +324,10 @@ func admin(args []string) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=$1`, userID); err != nil {
 			return fmt.Errorf("revoke admin sessions: %w", err)
 		}
+		// A stolen token must not survive the reset an operator makes to react.
+		if _, err := tx.ExecContext(ctx, `UPDATE access_tokens SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, userID); err != nil {
+			return fmt.Errorf("revoke admin tokens: %w", err)
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO audit_events(id,action,target_type,target_id) VALUES($1,'admin.password.reset','user',$2)`, db.NewID(), userID); err != nil {
 			return fmt.Errorf("record password reset: %w", err)
 		}
@@ -330,7 +335,7 @@ func admin(args []string) error {
 			return fmt.Errorf("save admin password: %w", err)
 		}
 		tellInstances(ctx, store)
-		fmt.Printf("Reset password for admin user %q. Existing web sessions were revoked.\n", *username)
+		fmt.Printf("Reset password for admin user %q. Its web sessions and access tokens were revoked.\n", *username)
 		return nil
 	}
 	if args[0] == "token" {
@@ -626,7 +631,7 @@ func cache(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Purge impact: %d entries, %s.\n", count, humanBytes(bytes))
+		fmt.Printf("Purge impact: %d entries, %s.\n", count, bytesize.Format(bytes))
 		if !*execute {
 			fmt.Println("Dry run only. Add --execute --yes to purge.")
 			return nil
@@ -647,7 +652,7 @@ func cache(args []string) error {
 		}
 		rows.Close()
 		for _, id := range ids {
-			if err := purgeCLI(operationCtx, store, objects, id); err != nil {
+			if err := purgeCLI(operationCtx, store, id); err != nil {
 				return err
 			}
 		}
@@ -728,30 +733,12 @@ func cache(args []string) error {
 func newCacheOperationContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
-func purgeCLI(ctx context.Context, store *db.Store, objects *storage.S3, id string) error {
-	tx, err := store.SQL.BeginTx(ctx, nil)
-	if err != nil {
+func purgeCLI(ctx context.Context, store *db.Store, id string) error {
+	if err := store.PurgeArtifact(ctx, id); err != nil {
 		return err
 	}
-	defer tx.Rollback()
-	var blobID string
-	if err := tx.QueryRowContext(ctx, `SELECT b.id FROM artifacts a JOIN blobs b ON b.id=a.blob_id WHERE a.id=$1 FOR UPDATE OF a`, id).Scan(&blobID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM artifacts WHERE id=$1`, id); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE blobs SET orphaned_at=now() WHERE id=$1`, blobID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO audit_events(id,action,target_type,target_id,metadata_json) VALUES($1,'cache.entry.purge','artifact',$2,'{\"source\":\"cli\"}'::jsonb)", db.NewID(), id); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	_ = objects // retained for the CLI's storage lifecycle and future GC hooks
-	return nil
+	_, err := store.SQL.ExecContext(ctx, "INSERT INTO audit_events(id,action,target_type,target_id,metadata_json) VALUES($1,'cache.entry.purge','artifact',$2,'{\"source\":\"cli\"}'::jsonb)", db.NewID(), id)
+	return err
 }
 
 func randomToken() (string, error) {
@@ -790,19 +777,6 @@ func validUsername(value string) bool {
 		}
 	}
 	return true
-}
-func humanBytes(n int64) string {
-	if n < 1024 {
-		return fmt.Sprintf("%d B", n)
-	}
-	v := float64(n)
-	for _, unit := range []string{"KiB", "MiB", "GiB", "TiB"} {
-		v /= 1024
-		if v < 1024 || unit == "TiB" {
-			return fmt.Sprintf("%.1f %s", v, unit)
-		}
-	}
-	return "0 B"
 }
 
 // healthcheck probes the local /healthz endpoint and exits non-zero on failure.
@@ -962,7 +936,7 @@ func listPins(ctx context.Context, out io.Writer, sqlDB *sql.DB) error {
 		case commit != "":
 			target = "commit " + commit
 		}
-		fmt.Fprintf(out, "%s/%s  %s  %s cached  pinned %s\n", repoType, repoID, target, humanBytes(size), created.Format(time.RFC3339))
+		fmt.Fprintf(out, "%s/%s  %s  %s cached  pinned %s\n", repoType, repoID, target, bytesize.Format(size), created.Format(time.RFC3339))
 		count++
 	}
 	if err := rows.Err(); err != nil {

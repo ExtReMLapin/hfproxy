@@ -64,7 +64,11 @@ export class AdminShellComponent {
 
   protected readonly roleLabel = roleLabel;
 
-  protected signOut(): void {
-    void this.auth.signOut();
+  protected async signOut(): Promise<void> {
+    await this.auth.signOut();
+    // The router outlet is recreated at the next sign-in and would show the page
+    // the previous user was on, whatever role the next one has; guards only run
+    // during a navigation.
+    if (!this.auth.principal()) await this.router.navigateByUrl('/overview');
   }
 }

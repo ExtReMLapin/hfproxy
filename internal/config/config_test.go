@@ -111,13 +111,14 @@ func TestValidateRejectsInvalidOperationalLimits(t *testing.T) {
 		t.Fatalf("baseline config invalid: %v", err)
 	}
 	for name, mutate := range map[string]func(*Config){
-		"negative total quota":     func(c *Config) { c.CacheMaxTotalSize = -1 },
-		"negative concurrency":     func(c *Config) { c.CacheFillConcurrency = -1 },
-		"negative download period": func(c *Config) { c.RetentionDownloads = -1 },
-		"negative audit period":    func(c *Config) { c.RetentionAudit = -1 },
-		"metrics address":          func(c *Config) { c.MetricsAddr = "no-port" },
-		"shutdown grace":           func(c *Config) { c.ShutdownGrace = -time.Second },
-		"negative staging minimum": func(c *Config) { c.StagingMinFreeBytes = -1 },
+		"negative total quota":             func(c *Config) { c.CacheMaxTotalSize = -1 },
+		"negative concurrency":             func(c *Config) { c.CacheFillConcurrency = -1 },
+		"negative download period":         func(c *Config) { c.RetentionDownloads = -1 },
+		"negative audit period":            func(c *Config) { c.RetentionAudit = -1 },
+		"metrics address":                  func(c *Config) { c.MetricsAddr = "no-port" },
+		"cache file size beyond multipart": func(c *Config) { c.CacheMaxFileSize = MaxCacheFileSize + 1 },
+		"shutdown grace":                   func(c *Config) { c.ShutdownGrace = -time.Second },
+		"negative staging minimum":         func(c *Config) { c.StagingMinFreeBytes = -1 },
 	} {
 		c := base()
 		mutate(&c)

@@ -72,6 +72,7 @@ func (s *Server) startRepoPreload(w http.ResponseWriter, r *http.Request, reposi
 	if s.preloads == nil {
 		s.preloads = make(map[string]*preloadJob)
 	}
+	pruneFinishedPreloads(s.preloads, now)
 	for _, existing := range s.preloads {
 		if existing.RepoType == repoType && existing.RepoID == repoID && (existing.Status == "queued" || existing.Status == "running") {
 			snapshot := *existing
@@ -89,6 +90,21 @@ func (s *Server) startRepoPreload(w http.ResponseWriter, r *http.Request, reposi
 	snapshot := *job
 	go s.runRepoPreload(job.ID, repositoryID, repoType, repoID, principal)
 	writeJSON(w, http.StatusAccepted, snapshot)
+}
+
+// finishedPreloadTTL is how long a finished job stays in memory; its outcome is
+// in the audit log, which the console falls back on.
+const finishedPreloadTTL = 24 * time.Hour
+
+// pruneFinishedPreloads forgets jobs that ended long ago, so a long-running
+// instance does not accumulate one per preload ever started. The caller holds
+// the lock.
+func pruneFinishedPreloads(jobs map[string]*preloadJob, now time.Time) {
+	for id, job := range jobs {
+		if job.Status != "queued" && job.Status != "running" && now.Sub(job.UpdatedAt) > finishedPreloadTTL {
+			delete(jobs, id)
+		}
+	}
 }
 
 func (s *Server) runRepoPreload(jobID, repositoryPK, repoType, repoID string, principal *Principal) {
@@ -274,15 +290,17 @@ func (s *Server) preloadSnapshots(ctx context.Context, principal *Principal) ([]
 	s.preloadsMu.RLock()
 	items := make([]preloadJob, 0, len(s.preloads))
 	known := make(map[string]bool, len(s.preloads))
+	ours := make(map[string]bool, len(s.preloads))
 	fallback := make(map[string]preloadJob, len(s.preloads))
 	for _, job := range s.preloads {
 		key := job.RepoType + "/" + job.RepoID
 		if job.Status == "queued" || job.Status == "running" {
 			items = append(items, *job)
 			known[key] = true
-		} else {
+		} else if previous, ok := fallback[key]; !ok || job.StartedAt.After(previous.StartedAt) {
 			fallback[key] = *job
 		}
+		ours[job.ID] = true
 	}
 	s.preloadsMu.RUnlock()
 	records, err := s.db.LastPreloads(ctx)
@@ -305,6 +323,12 @@ func (s *Server) preloadSnapshots(ctx context.Context, principal *Principal) ([]
 			Error          string `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(encodedMetadata), &metadata); err != nil {
+			continue
+		}
+		if action == "repository.preload.started" && ours[metadata.JobID] {
+			// A job this process ran that has ended but whose completion is not in
+			// the log yet: the process knows better than a start record, which
+			// would read as "interrupted by a restart".
 			continue
 		}
 		status := metadata.Status

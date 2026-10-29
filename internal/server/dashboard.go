@@ -2,7 +2,6 @@ package server
 
 import (
 	"net/http"
-	"strconv"
 	"strings"
 )
 
@@ -47,21 +46,3 @@ func validRepoID(repoID string) bool {
 	}
 	return true
 }
-
-func formatBytes(n int64) string {
-	if n < 1024 {
-		return formatInt(n) + " B"
-	}
-	units := []string{"KiB", "MiB", "GiB", "TiB"}
-	value := float64(n)
-	for _, unit := range units {
-		value /= 1024
-		if value < 1024 || unit == "TiB" {
-			return formatFloat(value) + " " + unit
-		}
-	}
-	return "0 B"
-}
-
-func formatInt(v int64) string     { return strconv.FormatInt(v, 10) }
-func formatFloat(v float64) string { return strconv.FormatFloat(v, 'f', 1, 64) }

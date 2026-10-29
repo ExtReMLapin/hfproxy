@@ -175,8 +175,8 @@ func (s *Server) apiRepoGrants(w http.ResponseWriter, r *http.Request, repoID st
 		if !decodeJSON(w, r, &input) {
 			return
 		}
-		if (input.SubjectType != "user" && input.SubjectType != "group") || input.SubjectID == "" || (input.Permission != "read" && input.Permission != "write" && input.Permission != "admin") {
-			writeProblem(w, r, 400, "Invalid grant", "Provide a user or group subject and a valid permission.")
+		if (input.SubjectType != "user" && input.SubjectType != "group") || input.SubjectID == "" || input.Permission != "read" {
+			writeProblem(w, r, 400, "Invalid grant", "Provide a user or group subject; the only permission is \"read\" (the proxy never writes to a repository).")
 			return
 		}
 		repositoryExists, err := s.db.RepositoryExists(r.Context(), repoID)

@@ -16,7 +16,7 @@ func TestAuthCacheServesRepeatedLookupsAndForgetsOnPurge(t *testing.T) {
 	if _, ok := cache.get(key); ok {
 		t.Fatal("an empty cache returned a principal")
 	}
-	cache.put(key, &Principal{ID: "u1", Role: "reader", Scopes: []string{"read"}})
+	cache.put(key, &Principal{ID: "u1", Role: "reader", Scopes: []string{"read"}}, cache.currentGeneration())
 	got, ok := cache.get(key)
 	if !ok || got.ID != "u1" {
 		t.Fatalf("get after put = %v %v", got, ok)
@@ -33,7 +33,7 @@ func TestAuthCacheServesRepeatedLookupsAndForgetsOnPurge(t *testing.T) {
 		t.Fatal("a zero TTL must disable the cache")
 	}
 	short := newAuthCache(10 * time.Millisecond)
-	short.put(key, &Principal{ID: "u1"})
+	short.put(key, &Principal{ID: "u1"}, short.currentGeneration())
 	time.Sleep(30 * time.Millisecond)
 	if _, ok := short.get(key); ok {
 		t.Fatal("an expired entry was returned")
@@ -169,5 +169,22 @@ func BenchmarkAuthenticateToken(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// A lookup that began before a revocation must not put its answer back after
+// the revocation emptied the cache.
+func TestALookupStartedBeforeARevocationIsNotCached(t *testing.T) {
+	cache := newAuthCache(time.Minute)
+	key := authCacheKey("token", "t")
+	generation := cache.currentGeneration()
+	cache.purge() // the token is revoked while the lookup is in flight
+	cache.put(key, &Principal{ID: "u1"}, generation)
+	if _, ok := cache.get(key); ok {
+		t.Fatal("a credential looked up before its revocation was cached after it")
+	}
+	cache.put(key, &Principal{ID: "u1"}, cache.currentGeneration())
+	if _, ok := cache.get(key); !ok {
+		t.Fatal("a lookup made after the purge must be cached")
 	}
 }

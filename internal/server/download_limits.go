@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/hfproxy/hfproxy/internal/bytesize"
 )
 
 // Download limits keep one client from taking all the bandwidth or storage
@@ -113,10 +115,13 @@ func (s *Server) admitDownload(w http.ResponseWriter, r *http.Request, p *Princi
 func (s *Server) anyUserQuota() bool {
 	l := s.downloadLimits()
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	if entry, ok := l.usage["*any"]; ok && time.Since(entry.fetched) < usageCacheTTL {
+	entry, ok := l.usage["*any"]
+	l.mu.Unlock()
+	if ok && time.Since(entry.fetched) < usageCacheTTL {
 		return entry.used > 0
 	}
+	// The query runs outside the lock: under it, every admission would wait
+	// for the database each time the answer expires.
 	exists, err := s.db.AnyUserDailyQuota(context.Background())
 	if err != nil {
 		return false
@@ -125,7 +130,9 @@ func (s *Server) anyUserQuota() bool {
 	if exists {
 		used = 1
 	}
+	l.mu.Lock()
 	l.usage["*any"] = usageEntry{used: used, fetched: time.Now()}
+	l.mu.Unlock()
 	return exists
 }
 
@@ -165,7 +172,7 @@ func (s *Server) rejectDownload(w http.ResponseWriter, r *http.Request, reason, 
 	s.logger.Warn("download refused: limit reached", "request_id", requestID(r.Context()), "user_id", userID, "client_ip", s.loginClientIP(r), "reason", reason, "limit", limit, "current", used)
 	w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 	if reason == "quota" {
-		writeProblem(w, r, http.StatusTooManyRequests, "Daily download quota reached", fmt.Sprintf("This account has downloaded its daily allowance (%s). Try again later or ask an administrator.", formatBytes(limit)))
+		writeProblem(w, r, http.StatusTooManyRequests, "Daily download quota reached", fmt.Sprintf("This account has downloaded its daily allowance (%s). Try again later or ask an administrator.", bytesize.Format(limit)))
 		return
 	}
 	writeProblem(w, r, http.StatusTooManyRequests, "Too many downloads at once", fmt.Sprintf("At most %d downloads can run at the same time for one account. Wait for one to finish.", limit))

@@ -48,6 +48,10 @@ On SIGTERM or SIGINT the instance stops accepting connections and lets requests 
 
 A download that takes longer than the grace is cut at a rolling update, and the client has to resume it (`Range`; the Hub clients do). If your files take hours to download, raise both `HFPROXY_SHUTDOWN_GRACE` and the pod's grace period. The chart sets `HFPROXY_SHUTDOWN_GRACE` to `terminationGracePeriodSeconds` minus ten seconds (60 by default), so raising `terminationGracePeriodSeconds` is enough. Outside Kubernetes, keep the supervisor's stop timeout (`docker stop -t`, `TimeoutStopSec`) above the grace.
 
+## Settings edited by several people
+
+The console sends back the revision of the settings it read. If the settings were saved in the meantime (by another administrator, or through another instance), the save is refused with `409 Settings changed` and nothing is overwritten: reload the page and apply the change again. An instance adopts the saved settings when the settings page is opened, so a replica that missed a change catches up; settings locked by `HFPROXY_*` variables always keep the environment's value. Rotating the session secret (`hfproxy admin rotate-secret`) re-seals the settings and changes their revision.
+
 ## Upgrades and rollbacks
 
 1. Back up PostgreSQL (see below).
