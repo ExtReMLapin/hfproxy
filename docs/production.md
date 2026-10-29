@@ -41,6 +41,8 @@ Back up PostgreSQL and the S3 bucket together and restore them from the same poi
 - [slo.md](slo.md): service level objectives and burn-rate alerts.
 - [sizing.md](sizing.md): staging, storage, database and network sizing.
 - [rotation.md](rotation.md): rotating credentials and certificates.
+- [validation.md](validation.md): what to check on your own cluster, Hub and backups before relying on a deployment.
+- [releasing.md](releasing.md): cutting and verifying a release; [dependencies.md](dependencies.md): how dependencies are kept up to date.
 - [threat-model.md](threat-model.md): what hfproxy defends against.
 - [prometheus-alerts.yml](prometheus-alerts.yml): example alert rules.
 
