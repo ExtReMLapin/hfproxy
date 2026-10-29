@@ -125,6 +125,48 @@ jobs:
       - name: Keycloak log
         if: failure()
         run: docker logs hfproxy-keycloak 2>&1 | tail -80
+  publishing:
+    # Publishes models and datasets with the real huggingface_hub client.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 15
+    strategy:
+      matrix:
+        hub: ["0.30.2", "2.4.0"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+      - name: Build
+        run: go build -o hfproxy ./cmd/hfproxy
+      - name: Install the client
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install "huggingface_hub==${{ matrix.hub }}" requests "moto[server]"
+      - name: Publish and read back
+        env:
+          PY: ${{ runner.temp }}/venv/bin/python
+          HFPROXY_BIN: ${{ github.workspace }}/hfproxy
+        run: deploy/ci/publish-test.sh
+
   reproducible-image:
     # The image is built twice from scratch (no cache) and the two must be the
     # same image, digest for digest. Base images are pinned by digest and

@@ -62,6 +62,7 @@ The README.md at the root is the model card. Its YAML header (license, tags, pip
 ### What is not supported
 
 - **Xet storage**: the proxy never announces it, so clients fall back to Git LFS. Files are sent through LFS's `basic` transfer (one request per file), not multipart: a file as big as the limit goes in one request.
+  `huggingface_hub` 1.x and later uses Xet by default when `hf_xet` is installed, and the proxy answers 404 to its token request. Uploading from such a client needs `HF_HUB_DISABLE_XET=1` (or `pip uninstall hf_xet`); downloads are not affected.
 - **Git itself** (`git clone`, `git push`, `git lfs`): only the HTTP API. To get a copy of a repository, use `snapshot_download` or `hf download`.
 - **Pull requests** (`create_pr`), discussions, likes, gated access, renaming or moving a repository (`move_repo`), squashing history, Spaces, inference.
 - **Download statistics on a model** (the "downloads" counter of the Hub) are not kept per repository, and tags are only those of the card.

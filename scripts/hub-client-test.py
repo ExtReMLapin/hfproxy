@@ -29,6 +29,7 @@ from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 from huggingface_hub.errors import (
     EntryNotFoundError,
     HfHubHTTPError,
+    LocalEntryNotFoundError,
     RepositoryNotFoundError,
     RevisionNotFoundError,
 )
@@ -234,7 +235,7 @@ def main():
     api("carol").upload_file(path_or_fileobj=b"group file\n", path_in_repo="notes.txt", repo_id="research/shared-model")
     check("another member writes to it too", "notes.txt" in api("bob").list_repo_files("research/shared-model"))
     expect_error("a private repository is hidden from others", RepositoryNotFoundError, api("dave").model_info, "research/shared-model")
-    expect_error("and cannot be read through resolve", (RepositoryNotFoundError, HfHubHTTPError), hf_hub_download, "research/shared-model", "notes.txt", endpoint=ENDPOINT, token=TOKENS["dave"], cache_dir=cache)
+    expect_error("and cannot be read through resolve", (RepositoryNotFoundError, HfHubHTTPError, LocalEntryNotFoundError), hf_hub_download, "research/shared-model", "notes.txt", endpoint=ENDPOINT, token=TOKENS["dave"], cache_dir=cache)
     check("an administrator can read it", api("alice").model_info("research/shared-model").private is True)
     api("bob").update_repo_settings("research/shared-model", private=False)
     check("making it public", api("dave").model_info("research/shared-model").private is False)

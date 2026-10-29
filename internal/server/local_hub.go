@@ -324,7 +324,27 @@ type createRepoRequest struct {
 	Name         string  `json:"name"`
 	Organization *string `json:"organization"`
 	Private      *bool   `json:"private"`
+	Visibility   *string `json:"visibility"`
 	Type         string  `json:"type"`
+}
+
+// requestedPrivacy reads the visibility a request asks for: newer clients send
+// "visibility" ("public" or "private") where older ones send "private".
+func requestedPrivacy(private *bool, visibility *string) (value, set, ok bool) {
+	if visibility != nil {
+		switch *visibility {
+		case "public":
+			return false, true, true
+		case "private":
+			return true, true, true
+		default:
+			return false, false, false
+		}
+	}
+	if private != nil {
+		return *private, true, true
+	}
+	return false, false, true
 }
 
 // repoTarget reads the repository a create or delete request names.
@@ -372,7 +392,11 @@ func (s *Server) apiCreateRepo(w http.ResponseWriter, r *http.Request) {
 	if namespace == "" {
 		namespace = p.Username
 	}
-	private := in.Private != nil && *in.Private
+	private, _, valid := requestedPrivacy(in.Private, in.Visibility)
+	if !valid {
+		hfError(w, http.StatusBadRequest, "", "Only public and private repositories are supported.")
+		return
+	}
 	id, status, message := s.createPublishedRepo(r.Context(), p, repoType, namespace, name, private, "hub-api")
 	if status == http.StatusConflict {
 		// The Hub's clients read the address from the conflict, for exist_ok.
@@ -520,23 +544,29 @@ func (s *Server) apiRepoSettings(w http.ResponseWriter, r *http.Request, route l
 		return
 	}
 	var in struct {
-		Private *bool `json:"private"`
+		Private    *bool   `json:"private"`
+		Visibility *string `json:"visibility"`
 	}
 	if !decodeLenient(w, r, &in) {
 		return
 	}
-	if in.Private != nil {
+	private, set, valid := requestedPrivacy(in.Private, in.Visibility)
+	if !valid {
+		hfError(w, http.StatusBadRequest, "", "Only public and private repositories are supported.")
+		return
+	}
+	if set {
 		ns, status, message := s.authorizeNamespace(r.Context(), p, route.Namespace)
 		if status != 0 {
 			hfError(w, status, "", message)
 			return
 		}
-		if err := s.applyVisibility(r.Context(), repo.ID, *in.Private, ns, repo.OwnerID); err != nil {
+		if err := s.applyVisibility(r.Context(), repo.ID, private, ns, repo.OwnerID); err != nil {
 			hfError(w, http.StatusInternalServerError, "", "The visibility could not be changed.")
 			return
 		}
 		s.forgetCredentials(r.Context())
-		s.audit(r.Context(), p.ID, "repository.visibility", "repository", repo.ID, map[string]any{"private": *in.Private, "source": "hub-api"})
+		s.audit(r.Context(), p.ID, "repository.visibility", "repository", repo.ID, map[string]any{"private": private, "source": "hub-api"})
 	}
 	w.WriteHeader(http.StatusOK)
 }
