@@ -29,6 +29,8 @@ All notable changes to hfproxy. The format follows [Keep a Changelog](https://ke
 
 ### Fixed
 
+- **The console no longer polls every two seconds when nothing is happening.** The overview and repositories pages asked for the active downloads at that pace forever. They now do so only while a download or a preload is in progress; the overview checks every 15 seconds otherwise, the repositories page only when the tab is shown again, and a hidden tab does not poll.
+- **Clicking Preload shows the new attempt at once**, not the previous failure and its error until the next poll.
 - **A cached file whose object vanished from the bucket repairs itself.** The request that finds the object missing drops the catalog entry and fetches the file again (no more `502` until an operator purges it); the repair is logged and counted in `hfproxy_cache_object_repairs_total`.
 - **A purge could deadlock with a fill of the same file.** The purge (console and `hfproxy cache purge`) locked the catalog entry then the blob, a fill the other way round; PostgreSQL ended one of them, sometimes a fill after hours of download. Both now lock the blob first. The CLI purge shares the code of the console's.
 - **The cleanup of abandoned resumptions never respected a fill in progress.** It used another lock key than the fill, so a fill stuck on a dead connection could have its stored blocks deleted under it after seven days. They now share one key.
