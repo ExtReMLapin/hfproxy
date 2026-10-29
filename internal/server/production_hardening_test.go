@@ -145,8 +145,10 @@ func TestMetricsListenerReplacesPublicEndpoint(t *testing.T) {
 	s.runtime.Store(&runtimeState{config: cfg})
 	shared := httptest.NewRecorder()
 	s.Handler().ServeHTTP(shared, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if !strings.Contains(shared.Body.String(), "# HELP") {
-		t.Fatal("metrics should stay on the main listener when no dedicated address is set")
+	// Still routed to the metrics endpoint (not the console), but now behind
+	// operator authentication: see TestMetricsOnThePublicPortNeedAnOperator.
+	if shared.Code != http.StatusUnauthorized {
+		t.Fatalf("metrics on the main listener without credentials = %d, want 401", shared.Code)
 	}
 }
 

@@ -294,7 +294,7 @@ func (s *Server) Handler() http.Handler {
 			metricsPath = "/metrics"
 		}
 		if cfg.MetricsEnabled && metricsOnMainListener(cfg.MetricsAddr) && r.URL.Path == metricsPath {
-			s.metrics.handler().ServeHTTP(w, r)
+			s.serveMainListenerMetrics(w, r)
 			return
 		}
 		mux.ServeHTTP(w, r)
@@ -390,6 +390,18 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
+// serveMainListenerMetrics serves /metrics on the public port. Metrics describe
+// traffic and capacity, so here they need an operator or administrator
+// (a token with write scope, which Prometheus sends as a bearer token). A
+// dedicated HFPROXY_METRICS_ADDR listener, meant for an internal network,
+// serves them without credentials.
+func (s *Server) serveMainListenerMetrics(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireOperator(w, r); !ok {
+		return
+	}
+	s.metrics.handler().ServeHTTP(w, r)
+}
+
 func (s *Server) dashboardOrResolve(w http.ResponseWriter, r *http.Request) {
 	cfg := s.currentConfig()
 	metricsPath := cfg.MetricsPath
@@ -397,7 +409,7 @@ func (s *Server) dashboardOrResolve(w http.ResponseWriter, r *http.Request) {
 		metricsPath = "/metrics"
 	}
 	if cfg.MetricsEnabled && metricsOnMainListener(cfg.MetricsAddr) && r.URL.Path == metricsPath {
-		s.metrics.handler().ServeHTTP(w, r)
+		s.serveMainListenerMetrics(w, r)
 		return
 	}
 	if r.URL.Path == "/" {

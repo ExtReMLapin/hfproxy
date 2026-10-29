@@ -63,3 +63,40 @@ func TestFrontendIndexGetsAFreshNonce(t *testing.T) {
 		t.Fatal("each response needs its own nonce")
 	}
 }
+
+func TestMetricsOnThePublicPortNeedAnOperator(t *testing.T) {
+	store := auditAPIFreshStore(t)
+	cfg := auditAPIConfig()
+	cfg.MetricsEnabled, cfg.MetricsPath = true, "/metrics"
+	s := auditAPINewServer(t, store, cfg)
+	handler := s.Handler()
+
+	anonymous := httptest.NewRecorder()
+	handler.ServeHTTP(anonymous, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous GET /metrics = %d, want 401", anonymous.Code)
+	}
+
+	_, reader := auditAPICreateUser(t, store, "metrics-reader", "reader")
+	asReader := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	asReader.Header.Set("Authorization", "Bearer "+reader)
+	readerRec := httptest.NewRecorder()
+	handler.ServeHTTP(readerRec, asReader)
+	if readerRec.Code != http.StatusForbidden {
+		t.Fatalf("reader GET /metrics = %d, want 403", readerRec.Code)
+	}
+
+	operatorID, _ := auditAPICreateUser(t, store, "metrics-operator", "operator")
+	rec := auditAPIDoAs(s, &Principal{ID: operatorID, Role: "operator", Authenticated: true, TokenID: "t", Scopes: []string{"write"}}, http.MethodGet, "/metrics", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "hfproxy_") {
+		t.Fatalf("operator GET /metrics = %d", rec.Code)
+	}
+
+	// On a dedicated listener the endpoint stays credential-free: that port is
+	// meant for an internal network.
+	dedicated := httptest.NewRecorder()
+	s.metricsHandler().ServeHTTP(dedicated, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if dedicated.Code != http.StatusOK {
+		t.Fatalf("dedicated metrics listener = %d, want 200", dedicated.Code)
+	}
+}
