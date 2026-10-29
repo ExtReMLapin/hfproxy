@@ -77,6 +77,8 @@ All of them are settings of the **Publishing** section of the console (or `HFPRO
 | Largest file | `HFPROXY_UPLOAD_MAX_FILE_SIZE` | 50 GiB | At most 625 GiB: the object store accepts 10 000 parts of 64 MiB per file. |
 | Storage quota per user | `HFPROXY_UPLOAD_USER_QUOTA` | 0 (none) | Counted over the repositories a user created, each distinct file once, history included. |
 
+With the [safe-formats setting](safe-formats.md) on, a file that can run code when loaded (`.bin`, `.pt`, `.pth`, `.ckpt`, `.pkl`...) is refused with a 422 and a file named `.safetensors` must have a valid safetensors header.
+
 Files bigger than 10 MiB, and the usual weight formats (`.safetensors`, `.bin`, `.gguf`, `.parquet`, `.h5`, archives...), travel through Git LFS; the others are sent inside the commit (at most 32 MiB each). A commit request is capped at 512 MiB.
 
 ## How it is stored

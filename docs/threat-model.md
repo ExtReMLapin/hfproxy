@@ -45,4 +45,4 @@ hfproxy sits between internal clients and Hugging Face. It authenticates clients
 
 ## Out of scope
 
-hfproxy does not terminate TLS, does not scan model files for malicious content (for example unsafe pickle files), and does not isolate tenants from each other beyond repository policies. Treat downloaded models as untrusted code, exactly as you would when downloading them directly.
+hfproxy does not terminate TLS, does not scan model files for malicious content, although the [safe-formats setting](safe-formats.md) can refuse the pickle-based types outright, and does not isolate tenants from each other beyond repository policies. Treat downloaded models as untrusted code, exactly as you would when downloading them directly.

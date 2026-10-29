@@ -33,6 +33,7 @@ const settings: ManagedSettings = {
   download_rate_limit: 0,
   download_daily_quota: 0,
   custom_repositories: true,
+  safe_formats_only: false,
   upload_max_file_size: 53687091200,
   upload_user_quota: 0,
   oidc_issuer: '',

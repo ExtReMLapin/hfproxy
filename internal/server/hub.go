@@ -222,7 +222,10 @@ func (e accessError) Error() string { return e.detail }
 
 // repositoryGrant is what the access check found out about a repository the
 // caller may read.
-type repositoryGrant struct{ ID, Policy, Origin, OwnerID string }
+type repositoryGrant struct {
+	ID, Policy, Origin, OwnerID string
+	AllowUnsafeFormats          bool
+}
 
 func (s *Server) repositoryAccess(ctx context.Context, p *Principal, authErr error, repoType, repoID string) (string, string, error) {
 	grant, err := s.repositoryAccessInfo(ctx, p, authErr, repoType, repoID)
@@ -238,7 +241,7 @@ func (s *Server) repositoryAccessInfo(ctx context.Context, p *Principal, authErr
 		return repositoryGrant{}, err
 	}
 	id, policy := repo.ID, repo.Policy
-	granted := repositoryGrant{ID: id, Policy: policy, Origin: repo.Origin, OwnerID: repo.OwnerID}
+	granted := repositoryGrant{ID: id, Policy: policy, Origin: repo.Origin, OwnerID: repo.OwnerID, AllowUnsafeFormats: repo.AllowUnsafeFormats}
 	if p == nil {
 		if authErr != errNoCredentials || !s.currentConfig().AnonymousPublicRead || policy != "public" {
 			return repositoryGrant{}, accessError{http.StatusUnauthorized, "Authentication required", "Sign in to access this repository."}

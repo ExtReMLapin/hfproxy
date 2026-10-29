@@ -39,6 +39,7 @@ type settingsResponse struct {
 	DownloadRateLimit      int64    `json:"download_rate_limit"`
 	DownloadDailyQuota     int64    `json:"download_daily_quota"`
 	CustomRepos            bool     `json:"custom_repositories"`
+	SafeFormatsOnly        bool     `json:"safe_formats_only"`
 	UploadMaxFileSize      int64    `json:"upload_max_file_size"`
 	UploadUserQuota        int64    `json:"upload_user_quota"`
 	CacheRefTTL            string   `json:"cache_ref_ttl"`
@@ -99,6 +100,7 @@ type settingsInput struct {
 	DownloadRateLimit      *int64   `json:"download_rate_limit"`
 	DownloadDailyQuota     *int64   `json:"download_daily_quota"`
 	CustomRepos            *bool    `json:"custom_repositories"`
+	SafeFormatsOnly        *bool    `json:"safe_formats_only"`
 	UploadMaxFileSize      *int64   `json:"upload_max_file_size"`
 	UploadUserQuota        *int64   `json:"upload_user_quota"`
 	CacheRefTTL            string   `json:"cache_ref_ttl"`
@@ -137,7 +139,7 @@ func settingsView(cfg config.Config) settingsResponse {
 		PublicURL: cfg.PublicURL, HFBaseURL: cfg.HFBaseURL, HFProxySet: cfg.HFProxyURL != "", HFAllowedHosts: cfg.HFAllowedHosts, HFTimeout: cfg.HFTimeout.String(), HFTokenSet: cfg.HFToken != "",
 		S3Endpoint: cfg.S3Endpoint, S3Region: cfg.S3Region, S3Bucket: cfg.S3Bucket, S3Prefix: cfg.S3Prefix, S3ForcePathStyle: cfg.S3ForcePathStyle, S3ServerSideEncryption: cfg.S3ServerSideEncryption,
 		S3AccessKeySet: cfg.S3AccessKey != "", S3SecretKeySet: cfg.S3SecretKey != "", AuthMode: cfg.AuthMode, AnonymousPublicRead: cfg.AnonymousPublicRead,
-		SessionIdleTTL: cfg.SessionIdleTTL.String(), SessionAbsoluteTTL: cfg.SessionAbsoluteTTL.String(), CacheMaxFileSize: cfg.CacheMaxFileSize, CacheMaxTotalSize: cfg.CacheMaxTotalSize, DownloadMaxConcurrent: cfg.DownloadMaxConcurrent, DownloadRateLimit: cfg.DownloadRateLimit, DownloadDailyQuota: cfg.DownloadDailyQuota, CustomRepos: cfg.CustomRepos, UploadMaxFileSize: cfg.MaxUploadFileSize(), UploadUserQuota: cfg.UploadUserQuota,
+		SessionIdleTTL: cfg.SessionIdleTTL.String(), SessionAbsoluteTTL: cfg.SessionAbsoluteTTL.String(), CacheMaxFileSize: cfg.CacheMaxFileSize, CacheMaxTotalSize: cfg.CacheMaxTotalSize, DownloadMaxConcurrent: cfg.DownloadMaxConcurrent, DownloadRateLimit: cfg.DownloadRateLimit, DownloadDailyQuota: cfg.DownloadDailyQuota, CustomRepos: cfg.CustomRepos, SafeFormatsOnly: cfg.SafeFormatsOnly, UploadMaxFileSize: cfg.MaxUploadFileSize(), UploadUserQuota: cfg.UploadUserQuota,
 		CacheRefTTL: cfg.CacheRefTTL.String(), CacheNegativeTTL: cfg.CacheNegativeTTL.String(), CacheGCGrace: cfg.CacheGCGrace.String(),
 		OIDCIssuer: cfg.OIDCIssuer, OIDCClientID: cfg.OIDCClientID, OIDCClientSecretSet: cfg.OIDCClientSecret != "", OIDCRedirectURL: cfg.OIDCRedirectURL,
 		OIDCAutoProvision: cfg.OIDCAutoProvision, LDAPURL: cfg.LDAPURL, LDAPStartTLS: cfg.LDAPStartTLS, LDAPBindDN: cfg.LDAPBindDN,
@@ -294,6 +296,9 @@ func (in settingsInput) apply(cfg config.Config) (config.Config, error) {
 	}
 	if in.CustomRepos != nil {
 		cfg.CustomRepos = *in.CustomRepos
+	}
+	if in.SafeFormatsOnly != nil {
+		cfg.SafeFormatsOnly = *in.SafeFormatsOnly
 	}
 	if in.UploadMaxFileSize != nil {
 		if *in.UploadMaxFileSize < 0 || *in.UploadMaxFileSize > config.MaxCacheFileSize {

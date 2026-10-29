@@ -149,6 +149,18 @@ func TestRepositoriesGrantsStatsAndAuditAPI(t *testing.T) {
 	if rec := do(admin, http.MethodPatch, "/api/v1/repos/missing", `{"access_policy":"public"}`); rec.Code != http.StatusNotFound {
 		t.Fatalf("policy of unknown repo = %d", rec.Code)
 	}
+	if rec := do(admin, http.MethodPatch, "/api/v1/repos/"+repo, `{}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("an empty change = %d", rec.Code)
+	}
+	if rec := do(admin, http.MethodPatch, "/api/v1/repos/"+repo, `{"allow_unsafe_formats":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("exempting from the safe formats = %d", rec.Code)
+	}
+	if got := apiJSON(t, do(admin, http.MethodGet, "/api/v1/repos/"+repo, "").Body.String()); got["allow_unsafe_formats"] != true || got["access_policy"] != "public" {
+		t.Fatalf("repository after the exemption = %v", got)
+	}
+	if rec := do(admin, http.MethodPatch, "/api/v1/repos/missing", `{"allow_unsafe_formats":true}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("exemption of an unknown repo = %d", rec.Code)
+	}
 
 	// Grants.
 	body := `{"subject_type":"user","subject_id":"` + admin.ID + `","permission":"read"}`

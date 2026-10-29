@@ -69,6 +69,13 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repoPK, policy := grant.ID, grant.Policy
+	if refusal := s.formatRefusal(grant.AllowUnsafeFormats, parsed.FilePath); refusal != "" {
+		s.countRefusedFormat("read")
+		// A missing file, so clients that have an alternative (safetensors next
+		// to a .bin) fall back to it instead of failing.
+		hfError(w, http.StatusNotFound, "EntryNotFound", refusal)
+		return
+	}
 	if grant.Origin == "local" {
 		s.serveLocalFile(w, r, parsed, grant, p)
 		return

@@ -669,6 +669,21 @@
                     placeholder="1h"
                 /></label>
               </div>
+              <h3 class="mt-8 text-sm font-semibold text-slate-900" i18n>Safe formats</h3>
+              <p class="mt-1 max-w-2xl text-xs leading-5 text-slate-500" i18n>
+                Pickle-based files (.bin, .pt, .pth, .ckpt, .pkl, .joblib) can run code when a
+                client loads them. When this is on, they are not served, preloaded or published, and
+                clients that also find a safetensors file use that one. A file named .safetensors
+                must really be one. A repository can be exempted from the Repositories page.
+              </p>
+              <label class="toggle-row mt-4"
+                ><input
+                  type="checkbox"
+                  name="safeFormatsOnly"
+                  [(ngModel)]="settings.safe_formats_only"
+                  [disabled]="isLocked('safe_formats_only')"
+                /><span i18n>Only serve safe model formats</span></label
+              >
               <h3 class="mt-8 text-sm font-semibold text-slate-900" i18n>Download limits</h3>
               <p class="mt-1 max-w-2xl text-xs leading-5 text-slate-500" i18n>
                 Keep one client from taking all the bandwidth. 0 turns a limit off. Preloads started

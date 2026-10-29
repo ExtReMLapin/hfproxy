@@ -25,6 +25,7 @@ HTTP route labels are normalized templates. No metric labels contain repository 
 | `hfproxy_cache_object_repairs_total` | Counter | — | Cached files whose object was missing from the bucket and were fetched again |
 | `hfproxy_published_bytes_total` | Counter | — | Bytes received for new content in published repositories |
 | `hfproxy_published_commits_total` | Counter | — | Commits recorded in published repositories |
+| `hfproxy_unsafe_format_refused_total` | Counter | where | Files refused by the safe-formats setting: `read` (a client asked for one), `preload` (skipped), `publish` (an upload refused) |
 | `hfproxy_cache_objects` | Gauge | — | Blob object count from database metadata |
 | `hfproxy_cache_size_bytes` | Gauge | — | Blob size sum from database metadata |
 | `hfproxy_upstream_requests_total` | Counter | operation, status_class | Actual upstream HTTP attempts; operations are metadata, resolve, download, other |
