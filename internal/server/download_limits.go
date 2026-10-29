@@ -70,9 +70,13 @@ func (s *Server) admitDownload(w http.ResponseWriter, r *http.Request, p *Princi
 	if max := cfg.DownloadMaxConcurrent; max > 0 {
 		l := s.downloadLimits()
 		l.mu.Lock()
-		if int64(l.active[key]) >= max {
+		// The count is read while the lock is held: another request giving its
+		// slot back changes the map under the same lock, and reading a map while
+		// it is written is a fatal error that takes the whole instance down.
+		running := int64(l.active[key])
+		if running >= max {
 			l.mu.Unlock()
-			s.rejectDownload(w, r, "concurrency", userID, max, int64(l.active[key]), 5)
+			s.rejectDownload(w, r, "concurrency", userID, max, running, 5)
 			return r, w, nothing, false
 		}
 		l.active[key]++

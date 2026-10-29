@@ -6,9 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -308,5 +310,52 @@ func TestASlotIsGivenBackWhenTheBodyIsComplete(t *testing.T) {
 	w.Write([]byte("67890"))
 	if released != 1 {
 		t.Fatalf("the slot must be given back with the last byte, released %d times", released)
+	}
+}
+
+// A refused download reads how many are running to tell the user. Reading the
+// count after the lock was released raced with the slots being given back: Go
+// reports that on a map as a fatal error that cannot be recovered and takes the
+// whole instance down. Run with -race; the old code is flagged immediately.
+func TestRefusingADownloadDoesNotRaceWithSlotsBeingReleased(t *testing.T) {
+	cfg := auditAPIConfig()
+	cfg.DownloadMaxConcurrent = 2
+	s := auditAPINewServer(t, auditAPIFreshStore(t), cfg)
+	user := &Principal{ID: "busy-user", Role: "reader", Authenticated: true}
+
+	var refused, admitted atomic.Int64
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 400; i++ {
+				w := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodGet, "/models/org/m/resolve/main/f.bin", nil)
+				_, _, release, ok := s.admitDownload(w, req, user)
+				if !ok {
+					refused.Add(1)
+					if w.Code != http.StatusTooManyRequests {
+						t.Errorf("a refusal answered %d, want 429", w.Code)
+						return
+					}
+					continue
+				}
+				admitted.Add(1)
+				runtime.Gosched()
+				release()
+			}
+		}()
+	}
+	wg.Wait()
+	if refused.Load() == 0 || admitted.Load() == 0 {
+		t.Fatalf("the test must exercise both paths: %d refused, %d admitted", refused.Load(), admitted.Load())
+	}
+	l := s.downloadLimits()
+	l.mu.Lock()
+	left := len(l.active)
+	l.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("%d slots were never given back", left)
 	}
 }
