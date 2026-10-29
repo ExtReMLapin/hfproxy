@@ -513,3 +513,34 @@ func TestValidRepoID(t *testing.T) {
 		})
 	}
 }
+
+func TestEgressPolicyOpensOnlyTheListedPrivateNetworks(t *testing.T) {
+	listed := egressPolicy{private: []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16"), netip.MustParsePrefix("fd12::/32")}}
+	for _, value := range []string{"10.20.3.4", "::ffff:10.20.3.4", "fd12::5"} {
+		if !listed.allows(netip.MustParseAddr(value)) {
+			t.Errorf("%s is inside a listed network but was refused", value)
+		}
+	}
+	for _, value := range []string{"10.21.0.1", "10.0.0.1", "192.168.1.1", "100.64.0.1", "fd13::1", "2002:0a14:0301::1"} {
+		if listed.allows(netip.MustParseAddr(value)) {
+			t.Errorf("%s is outside the listed networks but was allowed", value)
+		}
+	}
+	if !listed.allows(netip.MustParseAddr("13.33.33.33")) {
+		t.Error("a public address must stay reachable")
+	}
+	if (egressPolicy{}).allows(netip.MustParseAddr("10.20.3.4")) {
+		t.Error("nothing private may be reachable by default")
+	}
+	// A listing can never reach link-local, loopback or unspecified addresses,
+	// even if it is built by hand with such a prefix.
+	wide := egressPolicy{private: []netip.Prefix{netip.MustParsePrefix("169.254.0.0/16"), netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")}}
+	for _, value := range []string{"169.254.169.254", "127.0.0.1", "0.0.0.0", "::1", "fe80::1", "224.0.0.1"} {
+		if wide.allows(netip.MustParseAddr(value)) {
+			t.Errorf("%s was allowed through a hand-built listing", value)
+		}
+	}
+	if !(egressPolicy{allowLoopback: true}).allows(netip.MustParseAddr("127.0.0.1")) {
+		t.Error("development loopback must still work")
+	}
+}

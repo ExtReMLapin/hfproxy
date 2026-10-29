@@ -59,18 +59,7 @@ wait_http() { # url expected-status [tries]
 }
 
 log "create the cluster"
-# The proxy refuses to call private addresses (its protection against being
-# used to reach internal services), and a real Hub is public. Give the cluster's
-# Services public-looking addresses (a documentation range, never routed) so the
-# Hub stand-in is reachable without weakening that rule.
-KIND_CONFIG="$(mktemp)"
-cat >"$KIND_CONFIG" <<'EOF'
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-networking:
-  serviceSubnet: "198.51.100.0/24"
-EOF
-"$KIND" create cluster --name "$CLUSTER" --config "$KIND_CONFIG" --wait 120s
+"$KIND" create cluster --name "$CLUSTER" --wait 120s
 kind_image_load() { "$KIND" load docker-image "$IMAGE" --name "$CLUSTER"; }
 kind_image_load
 
@@ -97,7 +86,8 @@ values=(
   --set image.repository="$REPO" --set image.tag="$TAG" --set image.pullPolicy=Never
   --set secrets.existingSecret=hfproxy --set secrets.files.SETUP_TOKEN=setup_token
   --set config.PUBLIC_URL=http://localhost:8080
-  --set config.HF_BASE_URL=https://fakehub:8080 --set trustedCA.secretName=fakehub-ca --set config.HF_ALLOWED_REDIRECT_HOSTS=fakehub
+  --set config.HF_BASE_URL=https://fakehub:8080 --set trustedCA.secretName=fakehub-ca
+  --set config.HF_ALLOWED_PRIVATE_CIDRS=10.96.0.0/16 --set config.HF_ALLOWED_REDIRECT_HOSTS=fakehub
   --set config.S3_ENDPOINT=http://moto:5000 --set config.S3_REGION=us-east-1 --set config.S3_BUCKET=hfproxy
   --set config.S3_FORCE_PATH_STYLE=true --set config.S3_SERVER_SIDE_ENCRYPTION=false
   --set config.ANONYMOUS_PUBLIC_READ=true --set config.LOG_LEVEL=debug

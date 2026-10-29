@@ -50,7 +50,7 @@ func dialConfiguredProxy(ctx context.Context, network string, dialer *net.Dialer
 	return nil, lastErr
 }
 
-func dialSOCKS(ctx context.Context, network, targetAddress string, dialer *net.Dialer, proxy *url.URL, allowLoopback bool) (net.Conn, error) {
+func dialSOCKS(ctx context.Context, network, targetAddress string, dialer *net.Dialer, proxy *url.URL, policy egressPolicy) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(targetAddress)
 	if err != nil {
 		return nil, err
@@ -59,7 +59,7 @@ func dialSOCKS(ctx context.Context, network, targetAddress string, dialer *net.D
 	if err != nil || portNumber < 1 || portNumber > 65535 {
 		return nil, fmt.Errorf("invalid SOCKS destination port")
 	}
-	if ip, parseErr := netip.ParseAddr(host); parseErr == nil && !egressIPAllowed(ip, allowLoopback) {
+	if ip, parseErr := netip.ParseAddr(host); parseErr == nil && !policy.allows(ip) {
 		return nil, fmt.Errorf("egress to non-public IP is blocked")
 	}
 
@@ -89,7 +89,7 @@ func dialSOCKS(ctx context.Context, network, targetAddress string, dialer *net.D
 
 	switch strings.ToLower(proxy.Scheme) {
 	case "socks4", "socks4a":
-		err = negotiateSOCKS4(ctx, conn, proxy, host, uint16(portNumber), allowLoopback, strings.EqualFold(proxy.Scheme, "socks4a"))
+		err = negotiateSOCKS4(ctx, conn, proxy, host, uint16(portNumber), policy, strings.EqualFold(proxy.Scheme, "socks4a"))
 	case "socks5", "socks5h":
 		err = negotiateSOCKS5(conn, proxy, host, uint16(portNumber))
 	default:
@@ -197,7 +197,7 @@ func negotiateSOCKS5(conn net.Conn, proxy *url.URL, targetHost string, targetPor
 	return nil
 }
 
-func negotiateSOCKS4(ctx context.Context, conn net.Conn, proxy *url.URL, targetHost string, targetPort uint16, allowLoopback, socks4a bool) error {
+func negotiateSOCKS4(ctx context.Context, conn net.Conn, proxy *url.URL, targetHost string, targetPort uint16, policy egressPolicy, socks4a bool) error {
 	var address [4]byte
 	useDomain := false
 	if ip, err := netip.ParseAddr(targetHost); err == nil {
@@ -211,7 +211,7 @@ func negotiateSOCKS4(ctx context.Context, conn net.Conn, proxy *url.URL, targetH
 		address = [4]byte{0, 0, 0, 1}
 		useDomain = true
 	} else {
-		ip, err := resolveSOCKS4Host(ctx, targetHost, allowLoopback)
+		ip, err := resolveSOCKS4Host(ctx, targetHost, policy)
 		if err != nil {
 			return err
 		}
@@ -244,7 +244,7 @@ func negotiateSOCKS4(ctx context.Context, conn net.Conn, proxy *url.URL, targetH
 	return nil
 }
 
-func resolveSOCKS4Host(ctx context.Context, host string, allowLoopback bool) (netip.Addr, error) {
+func resolveSOCKS4Host(ctx context.Context, host string, policy egressPolicy) (netip.Addr, error) {
 	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		return netip.Addr{}, err
@@ -255,11 +255,37 @@ func resolveSOCKS4Host(ctx context.Context, host string, allowLoopback bool) (ne
 			continue
 		}
 		ip = ip.Unmap()
-		if egressIPAllowed(ip, allowLoopback) {
+		if policy.allows(ip) {
 			return ip, nil
 		}
 	}
 	return netip.Addr{}, fmt.Errorf("SOCKS4 destination did not resolve to an allowed IPv4 address")
+}
+
+// egressPolicy decides which addresses the service may call on behalf of a
+// request: public ones, loopback in development, and the private networks an
+// operator listed (a Hub mirror inside the company network).
+type egressPolicy struct {
+	allowLoopback bool
+	private       []netip.Prefix
+}
+
+func (p egressPolicy) allows(ip netip.Addr) bool {
+	if egressIPAllowed(ip, p.allowLoopback) {
+		return true
+	}
+	ip = ip.Unmap()
+	// Never reachable, whatever is listed: link-local (cloud metadata services),
+	// loopback outside development, unspecified and multicast addresses.
+	if !ip.IsGlobalUnicast() || ip.IsLinkLocalUnicast() {
+		return false
+	}
+	for _, prefix := range p.private {
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func egressIPAllowed(ip netip.Addr, allowLoopback bool) bool {
