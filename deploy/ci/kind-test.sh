@@ -144,11 +144,26 @@ download() { # path expected-status
   curl -s -o /tmp/kind-body -w '%{http_code}' "$BASE/org/model/resolve/main/$1"
 }
 
-log "a small file is fetched once, then served from the cache"
+# A small file is streamed to the first client while it is filled; the cache
+# entry is published a moment after that response ends, and a read in between
+# is deliberately served straight from the Hub. So wait for the entry.
+wait_cached() { # path
+  for _ in $(seq 1 40); do
+    [ "$(curl -s -o /dev/null -D - "$BASE/org/model/resolve/main/$1" | tr -d '\r' | awk 'tolower($1)=="x-cache:"{print $2}')" = HIT ] && return 0
+    sleep 0.5
+  done
+  fail "$1 never became a cache hit"
+}
+
+log "a small file is fetched from the Hub, then served from the cache"
 [ "$(download config.json)" = 200 ] || fail "config.json (miss)"
 grep -q bert /tmp/kind-body || fail "config.json has the wrong content"
+wait_cached config.json
+small_hits="$(hub_hits)"
 [ "$(download config.json)" = 200 ] || fail "config.json (hit)"
-[ "$(hub_hits)" = '{"small":1,"big":0}' ] || fail "the Hub saw $(hub_hits) after two reads of config.json"
+[ "$(download config.json)" = 200 ] || fail "config.json (second hit)"
+grep -q bert /tmp/kind-body || fail "cached config.json has the wrong content"
+[ "$(hub_hits)" = "$small_hits" ] || fail "reads of a cached config.json reached the Hub ($small_hits -> $(hub_hits))"
 
 log "a large file behind a redirect keeps its content, and is cached too"
 expected="$(python3 -c "import hashlib;print(hashlib.sha256(b'weights-'*131072).hexdigest())")"
