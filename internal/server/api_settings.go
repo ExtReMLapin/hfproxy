@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hfproxy/hfproxy/internal/config"
+	"github.com/hfproxy/hfproxy/internal/logging"
 	"github.com/hfproxy/hfproxy/internal/storage"
 )
 
@@ -56,6 +57,7 @@ type settingsResponse struct {
 	TracingSamplingRatio   float64  `json:"tracing_sampling_ratio"`
 	OTLPEndpoint           string   `json:"otlp_endpoint"`
 	CacheInventoryRefresh  string   `json:"cache_inventory_refresh"`
+	LogLevel               string   `json:"log_level"`
 	// Locked lists the settings pinned to the environment (read-only here).
 	Locked []string `json:"locked"`
 }
@@ -108,6 +110,7 @@ type settingsInput struct {
 	TracingSamplingRatio   float64  `json:"tracing_sampling_ratio"`
 	OTLPEndpoint           string   `json:"otlp_endpoint"`
 	CacheInventoryRefresh  string   `json:"cache_inventory_refresh"`
+	LogLevel               string   `json:"log_level"`
 	// Locked is part of what the console reads back; it is ignored on input.
 	Locked []string `json:"locked"`
 }
@@ -122,7 +125,7 @@ func settingsView(cfg config.Config) settingsResponse {
 		OIDCIssuer: cfg.OIDCIssuer, OIDCClientID: cfg.OIDCClientID, OIDCClientSecretSet: cfg.OIDCClientSecret != "", OIDCRedirectURL: cfg.OIDCRedirectURL,
 		OIDCAutoProvision: cfg.OIDCAutoProvision, LDAPURL: cfg.LDAPURL, LDAPStartTLS: cfg.LDAPStartTLS, LDAPBindDN: cfg.LDAPBindDN,
 		LDAPBindPasswordSet: cfg.LDAPBindPassword != "", LDAPBaseDN: cfg.LDAPBaseDN, LDAPUserFilter: cfg.LDAPUserFilter, LDAPAutoProvision: cfg.LDAPAutoProvision,
-		MetricsEnabled: cfg.MetricsEnabled, MetricsPath: cfg.MetricsPath, TracingEnabled: cfg.TracingEnabled, TracingServiceName: cfg.TracingServiceName, TracingSamplingRatio: cfg.TracingSamplingRatio, OTLPEndpoint: cfg.OTLPEndpoint, CacheInventoryRefresh: cfg.CacheInventoryRefresh.String(),
+		MetricsEnabled: cfg.MetricsEnabled, MetricsPath: cfg.MetricsPath, TracingEnabled: cfg.TracingEnabled, TracingServiceName: cfg.TracingServiceName, TracingSamplingRatio: cfg.TracingSamplingRatio, OTLPEndpoint: cfg.OTLPEndpoint, CacheInventoryRefresh: cfg.CacheInventoryRefresh.String(), LogLevel: cfg.LogLevel,
 		Locked: config.LockedNames(cfg.LockedSettings),
 	}
 }
@@ -151,11 +154,12 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.applyConfig(r.Context(), cfg, p.ID); err != nil {
-			s.logger.Warn("settings update failed", "request_id", requestID(r.Context()))
+			s.logger.Warn("settings update failed", "request_id", requestID(r.Context()), "actor_id", p.ID, "error", safeLogValue(err.Error(), 300))
 			writeProblem(w, r, http.StatusBadRequest, "Settings could not be applied", "Check provider availability and configuration, then retry.")
 			return
 		}
-		fields := []string{"public_url", "huggingface", "s3", "authentication", "cache", "observability"}
+		s.logger.Info("settings applied", "request_id", requestID(r.Context()), "actor_id", p.ID, "changed", config.OverriddenFields(current, cfg))
+		fields := []string{"public_url", "huggingface", "s3", "authentication", "cache", "observability", "logging"}
 		s.audit(r.Context(), p.ID, "settings.update", "settings", "runtime", map[string]any{"updated_sections": fields})
 		writeJSON(w, http.StatusOK, settingsView(cfg))
 	case http.MethodDelete:
@@ -184,6 +188,14 @@ func (in settingsInput) apply(cfg config.Config) (config.Config, error) {
 		cfg.CacheInventoryRefresh = 5 * time.Minute
 	} else if err != nil {
 		return config.Config{}, fmt.Errorf("cache inventory refresh must be a valid Go duration")
+	}
+	// Leaving the level out keeps the current one.
+	if strings.TrimSpace(in.LogLevel) != "" {
+		level, levelErr := logging.Normalize(in.LogLevel)
+		if levelErr != nil {
+			return config.Config{}, fmt.Errorf("log level must be debug, info, warn, or error")
+		}
+		cfg.LogLevel = level
 	}
 	parseDuration := func(name, value string, current time.Duration) (time.Duration, error) {
 		if value == "" {
@@ -323,7 +335,7 @@ func (s *Server) apiTestS3(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	if err := objects.Ready(ctx); err != nil {
-		writeProblem(w, r, http.StatusBadGateway, "S3 connection failed", "Check the endpoint, bucket, region, and credentials.")
+		s.fail(w, r, err, http.StatusBadGateway, "S3 connection failed", "Check the endpoint, bucket, region, and credentials.")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "s3"})
@@ -374,7 +386,7 @@ func (s *Server) apiTestHub(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := newHFHTTPClient(cfg).Do(req)
 	if err != nil {
-		writeProblem(w, r, http.StatusBadGateway, "Hugging Face connection failed", "Check the Hub URL, proxy scheme and credentials, network access, and token.")
+		s.fail(w, r, err, http.StatusBadGateway, "Hugging Face connection failed", "Check the Hub URL, proxy scheme and credentials, network access, and token.")
 		return
 	}
 	defer resp.Body.Close()
@@ -383,15 +395,15 @@ func (s *Server) apiTestHub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		writeProblem(w, r, http.StatusBadGateway, "Hugging Face rejected the token", "The Hub is reachable, but the configured token is missing or does not have access.")
+		s.fail(w, r, err, http.StatusBadGateway, "Hugging Face rejected the token", "The Hub is reachable, but the configured token is missing or does not have access.")
 		return
 	}
 	if resp.StatusCode == http.StatusProxyAuthRequired {
-		writeProblem(w, r, http.StatusBadGateway, "Proxy authentication failed", "Check the configured proxy credentials.")
+		s.fail(w, r, err, http.StatusBadGateway, "Proxy authentication failed", "Check the configured proxy credentials.")
 		return
 	}
 	if resp.StatusCode >= 500 {
-		writeProblem(w, r, http.StatusBadGateway, "Hugging Face is unavailable", "The Hub returned a server error.")
+		s.fail(w, r, err, http.StatusBadGateway, "Hugging Face is unavailable", "The Hub returned a server error.")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "huggingface"})

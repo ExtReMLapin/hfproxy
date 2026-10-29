@@ -64,11 +64,13 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	csrfCookie, err := r.Cookie("hfproxy_login_csrf")
 	if err != nil || !constantEqual(csrfCookie.Value, r.FormValue("csrf_token")) {
+		s.logger.Warn("sign-in refused: the form token is missing or does not match", "request_id", requestID(r.Context()), "client_ip", s.loginClientIP(r))
 		data.Error = "La requête a expiré. Rechargez la page puis réessayez."
 		s.renderLogin(w, data, http.StatusForbidden)
 		return
 	}
 	if retryAfter, ok := s.allowLoginAttempt(r, r.FormValue("username")); !ok {
+		s.logger.Warn("sign-in refused: too many attempts", "request_id", requestID(r.Context()), "client_ip", s.loginClientIP(r), "retry_after_seconds", retryAfter)
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 		writeProblem(w, r, http.StatusTooManyRequests, "Too many login attempts", "Retry later before attempting to sign in again.")
 		return
@@ -106,6 +108,9 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		err = authErr
 	}
 	if err != nil || userID == "" {
+		// The name typed is not logged: people sometimes type their password in
+		// that field. The audit table keeps a capped copy for investigations.
+		s.logger.Warn("sign-in failed", "request_id", requestID(r.Context()), "client_ip", s.loginClientIP(r), "provider", provider)
 		s.recordLoginFailure(r.Context(), username)
 		s.audit(r.Context(), "", "auth.login_failed", "user", auditText(username), map[string]any{"provider": provider})
 		data.Error = "Identifiant ou mot de passe incorrect."
@@ -113,7 +118,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := s.createSession(r.Context(), userID, w, r); err != nil {
-		writeProblem(w, r, http.StatusInternalServerError, "Session error", "Unable to create a session.")
+		s.fail(w, r, err, http.StatusInternalServerError, "Session error", "Unable to create a session.")
 		return
 	}
 	s.audit(r.Context(), userID, "auth.login", "user", userID, map[string]any{"provider": provider})
@@ -211,7 +216,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := s.currentOIDCConfig().Exchange(r.Context(), r.URL.Query().Get("code"), oauth2.VerifierOption(state.Verifier))
 	if err != nil {
-		s.logger.Warn("OIDC code exchange failed")
+		s.logger.Warn("OIDC code exchange failed", "request_id", requestID(r.Context()), "error", safeLogValue(err.Error(), 200))
 		http.Redirect(w, r, "/login?error=login_failed", http.StatusSeeOther)
 		return
 	}
@@ -222,7 +227,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	idToken, err := s.currentOIDCVerifier().Verify(r.Context(), rawIDToken)
 	if err != nil {
-		s.logger.Warn("OIDC ID token validation failed")
+		s.logger.Warn("OIDC ID token validation failed", "request_id", requestID(r.Context()), "error", safeLogValue(err.Error(), 200))
 		http.Redirect(w, r, "/login?error=login_failed", http.StatusSeeOther)
 		return
 	}

@@ -25,6 +25,7 @@ import (
 	"github.com/hfproxy/hfproxy/internal/config"
 	"github.com/hfproxy/hfproxy/internal/db"
 	"github.com/hfproxy/hfproxy/internal/keyring"
+	"github.com/hfproxy/hfproxy/internal/logging"
 	"github.com/hfproxy/hfproxy/internal/server"
 	"github.com/hfproxy/hfproxy/internal/storage"
 )
@@ -97,17 +98,8 @@ Secrets are read from HFPROXY_*_FILE or protected mounted files; never pass them
 `)
 }
 
-func logger(cfg config.Config) *slog.Logger {
-	level := slog.LevelInfo
-	switch cfg.LogLevel {
-	case "debug":
-		level = slog.LevelDebug
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	}
-	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
+func logger(cfg config.Config) (*slog.Logger, *slog.LevelVar) {
+	return logging.New(os.Stdout, cfg.LogLevel)
 }
 
 func configCommand(args []string) error {
@@ -190,11 +182,13 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
+	// The level saved in the console, if any, applies from the first line.
+	log, level := logger(cfg)
 	if overridden := config.OverriddenFields(environment, cfg); len(overridden) > 0 {
-		logger(cfg).Warn("settings saved in the console override these environment values; change them in the console or reset the saved settings", "settings", overridden)
+		log.Warn("settings saved in the console override these environment values; change them in the console or reset the saved settings", "settings", overridden)
 	}
 	if locked := config.LockedNames(cfg.LockedSettings); len(locked) > 0 {
-		logger(cfg).Info("settings locked to the environment; the console cannot change them", "settings", locked)
+		log.Info("settings locked to the environment; the console cannot change them", "settings", locked)
 	}
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -206,10 +200,11 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
-	app, err := server.New(ctx, cfg, store, objects, logger(cfg))
+	app, err := server.New(ctx, cfg, store, objects, log)
 	if err != nil {
 		return err
 	}
+	app.SetLogLevelVariable(level)
 	return app.ListenAndServe(ctx)
 }
 

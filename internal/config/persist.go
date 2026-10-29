@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hfproxy/hfproxy/internal/keyring"
+	"github.com/hfproxy/hfproxy/internal/logging"
 )
 
 type managedSettings struct {
@@ -57,6 +58,7 @@ type managedSettings struct {
 	TracingSamplingRatio   float64       `json:"tracing_sampling_ratio"`
 	OTLPEndpoint           string        `json:"otlp_endpoint"`
 	CacheInventoryRefresh  time.Duration `json:"cache_inventory_refresh"`
+	LogLevel               string        `json:"log_level"`
 }
 
 func LoadPersisted(ctx context.Context, sqlDB *sql.DB, base Config) (Config, error) {
@@ -154,7 +156,7 @@ func managedFromConfig(c Config) managedSettings {
 		OIDCIssuer: c.OIDCIssuer, OIDCClientID: c.OIDCClientID, OIDCClientSecret: c.OIDCClientSecret, OIDCRedirectURL: c.OIDCRedirectURL,
 		OIDCAutoProvision: c.OIDCAutoProvision, LDAPURL: c.LDAPURL, LDAPStartTLS: c.LDAPStartTLS, LDAPBindDN: c.LDAPBindDN,
 		LDAPBindPassword: c.LDAPBindPassword, LDAPBaseDN: c.LDAPBaseDN, LDAPUserFilter: c.LDAPUserFilter, LDAPAutoProvision: c.LDAPAutoProvision,
-		MetricsEnabled: c.MetricsEnabled, MetricsPath: c.MetricsPath, TracingEnabled: c.TracingEnabled, TracingServiceName: c.TracingServiceName, TracingSamplingRatio: c.TracingSamplingRatio, OTLPEndpoint: c.OTLPEndpoint, CacheInventoryRefresh: c.CacheInventoryRefresh,
+		MetricsEnabled: c.MetricsEnabled, MetricsPath: c.MetricsPath, TracingEnabled: c.TracingEnabled, TracingServiceName: c.TracingServiceName, TracingSamplingRatio: c.TracingSamplingRatio, OTLPEndpoint: c.OTLPEndpoint, CacheInventoryRefresh: c.CacheInventoryRefresh, LogLevel: c.LogLevel,
 	}
 }
 
@@ -182,6 +184,11 @@ func (s managedSettings) apply(c Config) Config {
 	c.TracingEnabled, c.TracingServiceName, c.TracingSamplingRatio, c.OTLPEndpoint = s.TracingEnabled, s.TracingServiceName, s.TracingSamplingRatio, s.OTLPEndpoint
 	if s.CacheInventoryRefresh > 0 {
 		c.CacheInventoryRefresh = s.CacheInventoryRefresh
+	}
+	// Settings saved before the level was editable leave it empty, so the
+	// value from the environment is kept.
+	if level, err := logging.Normalize(s.LogLevel); err == nil && s.LogLevel != "" {
+		c.LogLevel = level
 	}
 	return c
 }

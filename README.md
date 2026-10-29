@@ -108,7 +108,8 @@ Environment variables use the `HFPROXY_` prefix. Common settings for local Compo
 
 | Area | Main variables |
 | --- | --- |
-| HTTP and database | LISTEN_ADDR, PUBLIC_URL, DATABASE_URL, AUTO_MIGRATE, LOG_LEVEL |
+| HTTP and database | LISTEN_ADDR, PUBLIC_URL, DATABASE_URL, AUTO_MIGRATE |
+| Logging | LOG_LEVEL (`debug`, `info`, `warn`, `error`; also editable in the console, see [Logging](docs/operations.md#logging)) |
 | Hugging Face | HF_BASE_URL, HF_PROXY_URL, HF_TOKEN, HF_ALLOWED_REDIRECT_HOSTS, HF_TIMEOUT |
 | S3 | S3_ENDPOINT, S3_REGION, S3_BUCKET, S3_PREFIX, S3_FORCE_PATH_STYLE, S3_SERVER_SIDE_ENCRYPTION, S3_ACCESS_KEY, S3_SECRET_KEY |
 | Authentication | AUTH_MODE=local or oidc, SESSION_SECRET, SESSION_SECRET_PREVIOUS, SESSION_IDLE_TTL, SESSION_ABSOLUTE_TTL, ANONYMOUS_PUBLIC_READ |

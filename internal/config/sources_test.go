@@ -119,3 +119,46 @@ func TestPoolSizeStaysAboveTheFillConcurrency(t *testing.T) {
 		t.Fatal("a pool smaller than the fill concurrency plus headroom must be rejected")
 	}
 }
+
+func TestLogLevelNamesAndSavedLevel(t *testing.T) {
+	for _, name := range []string{"debug", "info", "warn", "warning", "error"} {
+		cfg := validBaseConfig()
+		cfg.LogLevel = name
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("level %q rejected: %v", name, err)
+		}
+	}
+	cfg := validBaseConfig()
+	cfg.LogLevel = "verbose"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("an unknown level was accepted")
+	}
+
+	t.Setenv("HFPROXY_LOG_LEVEL", "Warning")
+	t.Setenv("HFPROXY_SESSION_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("HFPROXY_DATABASE_URL", "postgres://u:p@db/app")
+	loaded, err := Load()
+	if err != nil || loaded.LogLevel != "warn" {
+		t.Fatalf("HFPROXY_LOG_LEVEL=Warning loaded as %q (%v), want warn", loaded.LogLevel, err)
+	}
+
+	// The level saved in the console wins over the environment; settings saved
+	// before the level was editable leave it as it is.
+	environment := validBaseConfig()
+	saved := managedFromConfig(environment)
+	saved.LogLevel = "debug"
+	if got := saved.apply(environment).LogLevel; got != "debug" {
+		t.Fatalf("saved level = %q, want debug", got)
+	}
+	saved.LogLevel = ""
+	if got := saved.apply(environment).LogLevel; got != "info" {
+		t.Fatalf("settings saved without a level changed it to %q", got)
+	}
+	locked := managedFromConfig(environment)
+	locked.LogLevel = "debug"
+	environment.LockedSettings = []string{"log_level"}
+	locked.pinToEnvironment(environment)
+	if got := locked.apply(environment).LogLevel; got != "info" {
+		t.Fatalf("a locked level followed the saved value: %q", got)
+	}
+}

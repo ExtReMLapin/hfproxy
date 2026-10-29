@@ -16,7 +16,7 @@ func (s *Server) apiRepoPins(w http.ResponseWriter, r *http.Request, repositoryI
 	}
 	exists, err := s.db.RepositoryExists(r.Context(), repositoryID)
 	if err != nil {
-		writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to load the repository.")
+		s.fail(w, r, err, http.StatusInternalServerError, "Database error", "Unable to load the repository.")
 		return
 	}
 	if !exists {
@@ -27,7 +27,7 @@ func (s *Server) apiRepoPins(w http.ResponseWriter, r *http.Request, repositoryI
 	case http.MethodGet:
 		stored, err := s.db.ListPins(r.Context(), repositoryID)
 		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to list pins.")
+			s.fail(w, r, err, http.StatusInternalServerError, "Database error", "Unable to list pins.")
 			return
 		}
 		type pin struct {
@@ -55,7 +55,7 @@ func (s *Server) apiRepoPins(w http.ResponseWriter, r *http.Request, repositoryI
 		}
 		added, err := s.db.AddPin(r.Context(), repositoryID, input.Commit, input.Ref, p.ID)
 		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to pin.")
+			s.fail(w, r, err, http.StatusInternalServerError, "Database error", "Unable to pin.")
 			return
 		}
 		if added {
@@ -70,7 +70,7 @@ func (s *Server) apiRepoPins(w http.ResponseWriter, r *http.Request, repositoryI
 		}
 		removed, err := s.db.RemovePin(r.Context(), repositoryID, commit, ref)
 		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to unpin.")
+			s.fail(w, r, err, http.StatusInternalServerError, "Database error", "Unable to unpin.")
 			return
 		}
 		if !removed {

@@ -25,7 +25,7 @@ func (s *Server) apiGroups(w http.ResponseWriter, r *http.Request) {
 		}
 		groups, err := s.db.ListGroups(r.Context(), after, limit+1)
 		if err != nil {
-			writeProblem(w, r, 500, "Database error", "Unable to list groups.")
+			s.fail(w, r, err, 500, "Database error", "Unable to list groups.")
 			return
 		}
 		items := make([]map[string]any, 0, len(groups))
@@ -77,7 +77,7 @@ func (s *Server) apiGroups(w http.ResponseWriter, r *http.Request) {
 					detail = "Unable to save group."
 				}
 			}
-			writeProblem(w, r, 500, "Database error", detail)
+			s.fail(w, r, err, 500, "Database error", detail)
 		}
 		return
 	}
@@ -102,9 +102,9 @@ func (s *Server) apiGroup(w http.ResponseWriter, r *http.Request, id string) {
 			case errors.Is(err, db.ErrNotFound):
 				writeProblem(w, r, http.StatusNotFound, "Group not found", "The group does not exist.")
 			case errors.As(err, &stage) && stage.Stage == "members":
-				writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to list group members.")
+				s.fail(w, r, err, http.StatusInternalServerError, "Database error", "Unable to list group members.")
 			default:
-				writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to load the group.")
+				s.fail(w, r, err, http.StatusInternalServerError, "Database error", "Unable to load the group.")
 			}
 			return
 		}
@@ -157,9 +157,9 @@ func (s *Server) apiGroup(w http.ResponseWriter, r *http.Request, id string) {
 			if detail == "" {
 				detail = "Unable to update the group."
 			}
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", detail)
+			s.fail(w, r, err, http.StatusInternalServerError, "Database error", detail)
 		default:
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to update the group.")
+			s.fail(w, r, err, http.StatusInternalServerError, "Database error", "Unable to update the group.")
 		}
 		return
 	}

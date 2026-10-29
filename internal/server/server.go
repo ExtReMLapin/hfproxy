@@ -26,6 +26,7 @@ import (
 	"github.com/hfproxy/hfproxy/internal/config"
 	"github.com/hfproxy/hfproxy/internal/db"
 	"github.com/hfproxy/hfproxy/internal/keyring"
+	"github.com/hfproxy/hfproxy/internal/logging"
 	"github.com/hfproxy/hfproxy/internal/storage"
 	"golang.org/x/oauth2"
 )
@@ -50,6 +51,7 @@ type Server struct {
 	runtime              atomic.Pointer[runtimeState]
 	db                   *db.Store
 	logger               *slog.Logger
+	logLevel             *slog.LevelVar
 	preloadsMu           sync.RWMutex
 	preloads             map[string]*preloadJob
 	preloadSlots         chan struct{}
@@ -256,6 +258,7 @@ func (s *Server) applyConfig(ctx context.Context, cfg config.Config, actorID str
 		return err
 	}
 	s.runtime.Store(state)
+	s.applyLogLevel(cfg.LogLevel)
 	activatePreparedTracing(ctx, traceProcessor, cfg)
 	select {
 	case s.inventoryRefreshWake <- struct{}{}:
@@ -576,8 +579,16 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 		if status == 0 {
 			status = http.StatusOK
 		}
-		s.logger.Info("http request", "request_id", rid, "method", r.Method, "route", safeRoute(r.URL.Path), "status", status, "duration_ms", time.Since(start).Milliseconds(), "bytes", recorder.bytes,
-			"client_ip", info.ClientIP, "user_id", info.UserID, "user_agent", safeLogValue(r.UserAgent(), 200))
+		route := safeRoute(r.URL.Path)
+		attrs := []any{"request_id", rid, "method", r.Method, "route", route, "status", status, "duration_ms", time.Since(start).Milliseconds(), "bytes", recorder.bytes,
+			"client_ip", info.ClientIP, "user_id", info.UserID, "user_agent", safeLogValue(r.UserAgent(), 200)}
+		if info.TokenID != "" {
+			attrs = append(attrs, "token_id", info.TokenID)
+		}
+		if info.Problem != "" {
+			attrs = append(attrs, "problem", info.Problem)
+		}
+		s.logger.Log(r.Context(), requestLogLevel(route, status), "http request", attrs...)
 	})
 }
 
@@ -589,6 +600,29 @@ type requestInfo struct {
 	ClientIP string
 	UserID   string
 	TokenID  string
+	// Problem is the title and detail of the error document sent to the
+	// client, so the access log can say why a request was refused.
+	Problem string
+}
+
+// requestLogLevel decides how loudly a finished request is logged: server
+// errors are errors, refused or invalid requests are warnings, ordinary
+// traffic is info, and the probes and static files that orchestrators and
+// browsers hit constantly are only visible at debug level.
+func requestLogLevel(route string, status int) slog.Level {
+	switch {
+	case status >= 500:
+		return slog.LevelError
+	case status == http.StatusUnauthorized || status == http.StatusNotFound:
+		// Routine: an unauthenticated visit asks who it is, and clients probe
+		// for files that do not exist.
+		return slog.LevelInfo
+	case status >= 400:
+		return slog.LevelWarn
+	case route == "/healthz" || route == "/readyz" || strings.HasPrefix(route, "/assets/") || route == "/favicon.svg":
+		return slog.LevelDebug
+	}
+	return slog.LevelInfo
 }
 
 type requestInfoKey struct{}
@@ -675,6 +709,9 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func writeProblem(w http.ResponseWriter, r *http.Request, status int, title, detail string) {
+	if info := requestInfoFrom(r.Context()); info != nil {
+		info.Problem = safeLogValue(title+": "+detail, 300)
+	}
 	w.Header().Set("Content-Type", "application/problem+json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -706,8 +743,13 @@ func (s *Server) audit(ctx context.Context, actorID, action, targetType, targetI
 	}
 	err = s.db.InsertAudit(ctx, actorID, action, targetType, targetID, string(encoded), requestID(ctx))
 	if err != nil {
-		s.logger.Error("audit write failed", "action", action)
+		s.logger.Error("audit write failed", "request_id", requestID(ctx), "action", action, "error", safeLogValue(err.Error(), 300))
+		return
 	}
+	if action == "auth.login_failed" {
+		targetID = "" // the name that was typed is kept in the audit table only
+	}
+	s.logger.Info("audit event", "request_id", requestID(ctx), "actor_id", actorID, "action", action, "target_type", targetType, "target_id", safeLogValue(targetID, 128))
 }
 
 func (s *Server) authenticate(r *http.Request) (*Principal, error) {
@@ -716,6 +758,11 @@ func (s *Server) authenticate(r *http.Request) (*Principal, error) {
 		if info := requestInfoFrom(r.Context()); info != nil {
 			info.UserID, info.TokenID = p.ID, p.TokenID
 		}
+		via := "session"
+		if p.TokenID != "" {
+			via = "token"
+		}
+		s.logger.Debug("request authenticated", "request_id", requestID(r.Context()), "user_id", p.ID, "role", p.Role, "via", via)
 	}
 	return p, err
 }
@@ -864,15 +911,18 @@ func (s *Server) requireOperator(w http.ResponseWriter, r *http.Request) (*Princ
 func (s *Server) requireRole(w http.ResponseWriter, r *http.Request, denied string, roles ...string) (*Principal, bool) {
 	p, err := s.authenticate(r)
 	if err != nil {
+		s.logger.Debug("administration request without valid credentials", "request_id", requestID(r.Context()), "route", safeRoute(r.URL.Path), "reason", err.Error())
 		w.Header().Set("WWW-Authenticate", `Bearer realm="hfproxy"`)
 		writeProblem(w, r, http.StatusUnauthorized, "Authentication required", "Provide a valid hfproxy token or sign in.")
 		return nil, false
 	}
 	if !slices.Contains(roles, p.Role) {
+		s.logger.Warn("access denied: role not allowed", "request_id", requestID(r.Context()), "user_id", p.ID, "role", p.Role, "required", roles, "method", r.Method, "route", safeRoute(r.URL.Path))
 		writeProblem(w, r, http.StatusForbidden, "Forbidden", denied)
 		return nil, false
 	}
 	if !tokenAllowsAdministration(p) {
+		s.logger.Warn("access denied: read-only token", "request_id", requestID(r.Context()), "user_id", p.ID, "token_id", p.TokenID, "method", r.Method, "route", safeRoute(r.URL.Path))
 		writeProblem(w, r, http.StatusForbidden, "Forbidden", "This token is read-only and cannot use the administration API.")
 		return nil, false
 	}
@@ -888,3 +938,38 @@ func tokenAllowsAdministration(p *Principal) bool {
 
 var errUnauthenticated = errors.New("unauthenticated")
 var errNoCredentials = errors.New("no credentials")
+
+// fail answers with a problem document and records the cause, which the client
+// never sees. Server errors are logged at error level, upstream failures such
+// as an unreachable Hub or object store at warn level.
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, cause error, status int, title, detail string) {
+	attrs := []any{"request_id", requestID(r.Context()), "method", r.Method, "route", safeRoute(r.URL.Path), "status", status, "title", title}
+	if cause != nil {
+		attrs = append(attrs, "error", safeLogValue(cause.Error(), 500))
+	}
+	if status >= http.StatusInternalServerError && status != http.StatusBadGateway && status != http.StatusServiceUnavailable {
+		s.logger.Error("request failed", attrs...)
+	} else {
+		s.logger.Warn("request could not be completed", attrs...)
+	}
+	writeProblem(w, r, status, title, detail)
+}
+
+// SetLogLevelVariable gives the server the variable that controls its logger,
+// so a level saved in the console takes effect without a restart.
+func (s *Server) SetLogLevelVariable(level *slog.LevelVar) { s.logLevel = level }
+
+func (s *Server) applyLogLevel(name string) {
+	if s.logLevel == nil {
+		return
+	}
+	next, err := logging.Normalize(name)
+	previous := logging.Name(s.logLevel.Level())
+	if err != nil || next == previous {
+		return
+	}
+	// Logged before the switch, at warn, so the change shows in the old level's
+	// output and leaves a trace when the level is raised.
+	s.logger.Warn("log level changed", "from", previous, "to", next)
+	logging.Set(s.logLevel, next)
+}

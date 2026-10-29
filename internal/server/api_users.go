@@ -54,7 +54,7 @@ func (s *Server) apiUsers(w http.ResponseWriter, r *http.Request) {
 				writeProblem(w, r, http.StatusConflict, "Username already exists", "Choose a different username.")
 				return
 			}
-			writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to create user.")
+			s.fail(w, r, err, http.StatusInternalServerError, "Database error", "Unable to create user.")
 			return
 		}
 		s.audit(r.Context(), p.ID, "user.create", "user", id, map[string]any{"username": input.Username, "role": input.Role})
@@ -77,7 +77,7 @@ func (s *Server) apiUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	users, err := s.db.ListUsers(r.Context(), after, limit+1)
 	if err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to list users.")
+		s.fail(w, r, err, 500, "Database error", "Unable to list users.")
 		return
 	}
 	items := make([]map[string]any, 0, len(users))
@@ -142,13 +142,13 @@ func (s *Server) apiUserPatch(w http.ResponseWriter, r *http.Request, id string)
 		case errors.Is(err, db.ErrLastAdmin):
 			writeProblem(w, r, http.StatusConflict, "Last administrator", "At least one active administrator must remain.")
 		case errors.As(err, &stage) && (stage.Stage == "lock" || stage.Stage == "count_admins"):
-			writeProblem(w, r, 500, "Database error", "Unable to validate administrator safety.")
+			s.fail(w, r, err, 500, "Database error", "Unable to validate administrator safety.")
 		case errors.As(err, &stage) && stage.Stage == "end_sessions":
-			writeProblem(w, r, 500, "Database error", "Unable to end the user's sessions.")
+			s.fail(w, r, err, 500, "Database error", "Unable to end the user's sessions.")
 		case errors.As(err, &stage) && stage.Stage == "revoke_tokens":
-			writeProblem(w, r, 500, "Database error", "Unable to revoke the user's tokens.")
+			s.fail(w, r, err, 500, "Database error", "Unable to revoke the user's tokens.")
 		default:
-			writeProblem(w, r, 500, "Database error", "Unable to update user.")
+			s.fail(w, r, err, 500, "Database error", "Unable to update user.")
 		}
 		return
 	}

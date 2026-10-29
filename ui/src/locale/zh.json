@@ -292,6 +292,7 @@
     "681942627979264325": "监控与追踪",
     "503359249737927668": "可观测性",
     "1313168010844959987": "指标在配置的路径上公开，无需应用程序身份验证。请将该路径保留在私有监控网络中。追踪数据通过 OTLP/HTTP 导出；凭据和请求数据绝不会写入 span。",
+    "5263267265282631494": "日志级别{$START_TAG_SELECT}{$START_TAG_OPTION}调试{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_1}信息{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_2}警告{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_3}错误{$CLOSE_TAG_OPTION}{$CLOSE_TAG_SELECT}{$START_TAG_SPAN}立即生效，无需重启。调试级别会记录每个请求的详细信息，输出可能很多；错误级别只报告失败。密码、令牌和密钥绝不会被记录。{$CLOSE_TAG_SPAN}",
     "3526572593379043188": "{$TAG_INPUT} 启用 Prometheus 指标",
     "5701539060358858775": "指标路径{$TAG_INPUT}",
     "8377028721251905902": "缓存清单刷新间隔{$TAG_INPUT}{$START_TAG_SPAN}以异步方式读取数据库中的权威元数据；该间隔可避免在 Prometheus 抓取期间执行查询。{$CLOSE_TAG_SPAN}",

@@ -172,7 +172,7 @@ func (s *Server) apiStats(w http.ResponseWriter, r *http.Request) {
 	}
 	stats, err := s.db.CacheStats(r.Context(), p.Role, p.ID)
 	if err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to read statistics.")
+		s.fail(w, r, err, 500, "Database error", "Unable to read statistics.")
 		return
 	}
 	repos, artifacts, totalBytes, hits, misses, active := stats.Repositories, stats.Artifacts, stats.Bytes, stats.Hits, stats.Misses, stats.Active
@@ -192,7 +192,7 @@ func (s *Server) apiActiveDownloads(w http.ResponseWriter, r *http.Request) {
 	}
 	downloads, err := s.db.ActiveDownloads(r.Context(), p.Role, p.ID)
 	if err != nil {
-		writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to read active downloads.")
+		s.fail(w, r, err, http.StatusInternalServerError, "Database error", "Unable to read active downloads.")
 		return
 	}
 	items := make([]map[string]any, 0, len(downloads))
@@ -201,7 +201,7 @@ func (s *Server) apiActiveDownloads(w http.ResponseWriter, r *http.Request) {
 	}
 	preloads, err := s.preloadSnapshots(r.Context(), p)
 	if err != nil {
-		writeProblem(w, r, http.StatusInternalServerError, "Database error", "Unable to read preload status.")
+		s.fail(w, r, err, http.StatusInternalServerError, "Database error", "Unable to read preload status.")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "preloads": preloads})
@@ -223,9 +223,10 @@ func (s *Server) apiCacheEntries(w http.ResponseWriter, r *http.Request) {
 	pathFilter := r.URL.Query().Get("path")
 	entries, err := s.db.SearchCache(r.Context(), p.Role, p.ID, repoFilter, pathFilter, limit)
 	if err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to search cache.")
+		s.fail(w, r, err, 500, "Database error", "Unable to search cache.")
 		return
 	}
+	s.logger.Debug("cache search", "request_id", requestID(r.Context()), "user_id", p.ID, "repo_filter", safeLogValue(repoFilter, 128), "path_filter", safeLogValue(pathFilter, 200), "limit", limit, "results", len(entries))
 	items := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		items = append(items, map[string]any{"id": e.ID, "repo_type": e.RepoType, "repo_id": e.RepoID, "commit_sha": e.Commit, "path": e.Path, "size_bytes": e.Size, "sha256": e.SHA256, "etag": e.ETag, "cached_at": e.CachedAt, "last_accessed_at": e.AccessedAt})
@@ -249,7 +250,7 @@ func (s *Server) apiCacheEntry(w http.ResponseWriter, r *http.Request, id string
 	}
 	visible, err := s.db.ArtifactVisible(r.Context(), id, p.Role, p.ID)
 	if err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to check cache entry visibility.")
+		s.fail(w, r, err, 500, "Database error", "Unable to check cache entry visibility.")
 		return
 	}
 	if !visible {
@@ -261,7 +262,7 @@ func (s *Server) apiCacheEntry(w http.ResponseWriter, r *http.Request, id string
 			writeProblem(w, r, 404, "Cache entry not found", "The cache entry does not exist.")
 			return
 		}
-		writeProblem(w, r, 500, "Purge failed", "Unable to purge the cache entry.")
+		s.fail(w, r, err, 500, "Purge failed", "Unable to purge the cache entry.")
 		return
 	}
 	s.audit(r.Context(), p.ID, "cache.entry.purge", "artifact", id, nil)
@@ -283,7 +284,7 @@ func (s *Server) apiPurge(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
 	count, size, err := s.db.PurgeEstimate(r.Context(), p.Role, p.ID, repoID, path)
 	if err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to estimate purge impact.")
+		s.fail(w, r, err, 500, "Database error", "Unable to estimate purge impact.")
 		return
 	}
 	if dry || !confirm {
@@ -292,12 +293,12 @@ func (s *Server) apiPurge(w http.ResponseWriter, r *http.Request) {
 	}
 	ids, err := s.db.PurgeCandidates(r.Context(), p.Role, p.ID, repoID, path)
 	if err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to find cache entries.")
+		s.fail(w, r, err, 500, "Database error", "Unable to find cache entries.")
 		return
 	}
 	for _, id := range ids {
 		if err := s.purgeArtifact(r.Context(), id); err != nil {
-			s.logger.Warn("cache purge entry failed")
+			s.logger.Warn("cache purge entry failed", "request_id", requestID(r.Context()), "artifact_id", id, "error", safeLogValue(err.Error(), 300))
 		}
 	}
 	s.audit(r.Context(), p.ID, "cache.purge", "cache", "filtered", map[string]any{"entries": len(ids), "repo_id": repoID, "path_filter": path})
@@ -335,7 +336,7 @@ func (s *Server) apiAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := s.db.ListAudit(r.Context(), before, limit+1)
 	if err != nil {
-		writeProblem(w, r, 500, "Database error", "Unable to read audit events.")
+		s.fail(w, r, err, 500, "Database error", "Unable to read audit events.")
 		return
 	}
 	items := make([]map[string]any, 0, len(events))
