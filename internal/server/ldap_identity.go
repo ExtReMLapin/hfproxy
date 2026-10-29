@@ -45,24 +45,36 @@ func ldapAccountDisabled(entry *ldap.Entry) bool {
 
 var errLDAPAccountDisabled = errors.New("account disabled")
 
-// findLDAPIdentity returns the local user linked to a directory entry. Links
-// made before stable identifiers were used are keyed by DN: when the entry now
-// has a stable identifier, the link is moved to it, so later moves in the
-// directory no longer break it.
+// findLDAPIdentity returns the local user linked to a directory entry. The link
+// is found by the entry's stable identifier (or its DN, for links made before
+// stable identifiers were used) and not by the directory's address, so changing
+// ldap:// for ldaps://, renaming the server or moving it to another port keeps
+// every account. A DN link is moved to the stable identifier as soon as the
+// entry has one, so later moves in the directory no longer break it, and the
+// recorded address follows the configured one.
 func (s *Server) findLDAPIdentity(ctx context.Context, issuer, stable, dn string) (db.ExternalAccount, error) {
+	var account db.ExternalAccount
+	var err error
 	if stable != "" {
-		account, err := s.db.FindExternalIdentity(ctx, issuer, stable)
-		if err == nil || !errors.Is(err, db.ErrNotFound) {
-			return account, err
+		account, err = s.db.FindExternalIdentityBySubject(ctx, "ldap", stable)
+		if err != nil && !errors.Is(err, db.ErrNotFound) {
+			return db.ExternalAccount{}, err
 		}
 	}
-	account, err := s.db.FindExternalIdentity(ctx, issuer, dn)
-	if err != nil {
-		return db.ExternalAccount{}, err
+	if stable == "" || errors.Is(err, db.ErrNotFound) {
+		account, err = s.db.FindExternalIdentityBySubject(ctx, "ldap", dn)
+		if err != nil {
+			return db.ExternalAccount{}, err
+		}
+		if stable != "" {
+			if err := s.db.ChangeExternalSubject(ctx, account, stable); err != nil {
+				s.logger.Warn("LDAP identity could not be moved to its stable identifier", "request_id", requestID(ctx))
+			}
+		}
 	}
-	if stable != "" {
-		if err := s.db.ChangeExternalSubject(ctx, account, stable); err != nil {
-			s.logger.Warn("LDAP identity could not be moved to its stable identifier", "request_id", requestID(ctx))
+	if account.Issuer != issuer {
+		if err := s.db.ChangeExternalIssuer(ctx, account, issuer); err != nil {
+			s.logger.Warn("LDAP identity could not be moved to the directory's new address", "request_id", requestID(ctx))
 		}
 	}
 	return account, nil
