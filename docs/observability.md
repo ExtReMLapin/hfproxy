@@ -31,6 +31,7 @@ HTTP route labels are normalized templates. No metric labels contain repository 
 | `hfproxy_upstream_retries_total` | Counter | operation | Retries (hfproxy currently does not retry requests) |
 | `hfproxy_downloads_total` | Counter | result | Client GET sessions for Hub resolve paths; success, failed, cancelled, partial |
 | `hfproxy_download_duration_seconds` | Histogram | result | Client download session duration |
+| `hfproxy_download_ttfb_seconds` | Histogram | cache | Time from the request to the first response byte, for successful downloads; `cache` is `hit`, `miss`, `stale` or `other` (the `X-Cache` header). The latency indicator in [slo.md](slo.md) |
 | `hfproxy_download_bytes_total` | Counter | source | Bytes written to clients, source cache or upstream |
 | `hfproxy_downloads_in_flight` | Gauge | — | Active resolve GET sessions |
 | `hfproxy_download_failures_total` | Counter | reason | `http_error`, `client_disconnect`, or `cancelled` client sessions |

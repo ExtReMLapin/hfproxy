@@ -37,6 +37,10 @@ Back up PostgreSQL and the S3 bucket together and restore them from the same poi
 ## More
 
 - [operations.md](operations.md): upgrades, rollbacks, incidents and service levels.
+- [runbooks.md](runbooks.md): what to do for each alert.
+- [slo.md](slo.md): service level objectives and burn-rate alerts.
+- [sizing.md](sizing.md): staging, storage, database and network sizing.
+- [rotation.md](rotation.md): rotating credentials and certificates.
 - [threat-model.md](threat-model.md): what hfproxy defends against.
 - [prometheus-alerts.yml](prometheus-alerts.yml): example alert rules.
 

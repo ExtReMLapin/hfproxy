@@ -97,3 +97,43 @@ func TestMetricsConcurrentRequests(t *testing.T) {
 		t.Fatalf("concurrent requests were lost:\n%s", out.Body.String())
 	}
 }
+
+func TestDownloadTimeToFirstByteIsSplitByCacheResult(t *testing.T) {
+	m := newMetrics()
+	serve := func(path, cache string, status int, delay time.Duration) {
+		h := m.middleware("/metrics", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			time.Sleep(delay)
+			if cache != "" {
+				w.Header().Set("X-Cache", cache)
+			}
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte("body"))
+		}))
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+	}
+	serve("/models/org/repo/resolve/main/a.bin", "HIT", http.StatusOK, 0)
+	serve("/models/org/repo/resolve/main/b.bin", "HIT", http.StatusOK, 0)
+	serve("/models/org/repo/resolve/main/c.bin", "MISS", http.StatusOK, 30*time.Millisecond)
+	serve("/models/org/repo/resolve/main/d.bin", "STALE", http.StatusOK, 0)
+	serve("/models/org/repo/resolve/main/e.bin", "", http.StatusOK, 0)
+	serve("/models/org/repo/resolve/main/f.bin", "", http.StatusNotFound, 0) // an error is not a latency sample
+	serve("/api/models/org/repo", "HIT", http.StatusOK, 0)                   // not a download
+	out := httptest.NewRecorder()
+	m.handler().ServeHTTP(out, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := out.Body.String()
+	for cache, want := range map[string]string{"hit": "2", "miss": "1", "stale": "1", "other": "1"} {
+		if !strings.Contains(body, `hfproxy_download_ttfb_seconds_count{cache="`+cache+`"} `+want) {
+			t.Errorf("cache=%s should have %s sample(s):\n%s", cache, want, body)
+		}
+	}
+	// The miss waited 30 ms before sending headers, so it is in no bucket below that.
+	if strings.Contains(body, `hfproxy_download_ttfb_seconds_bucket{cache="miss",le="0.025"} 1`) {
+		t.Error("the delay before the first byte was not measured")
+	}
+	if !strings.Contains(body, `hfproxy_download_ttfb_seconds_bucket{cache="miss",le="0.05"} 1`) {
+		t.Errorf("a 30 ms first byte should fit under 50 ms:\n%s", body)
+	}
+	if strings.Contains(body, "a.bin") || strings.Contains(body, "org/repo") {
+		t.Error("repository data leaked into the TTFB metric")
+	}
+}

@@ -1,0 +1,89 @@
+# Recording rules and burn-rate alerts for the service levels in slo.md.
+# Load it next to prometheus-alerts.yml. The objectives are the numbers in the
+# expressions (0.005 = 99.5% availability, 0.05 = 95% fast hits): change them
+# there if you choose other targets. Each alert also needs about one download a
+# minute, so a quiet service does not page on a single error.
+groups:
+  - name: hfproxy-slo-recording
+    rules:
+      # Share of download requests that failed on our side (5xx). 4xx answers,
+      # including 429 from the download limits, are the client's doing.
+      - record: hfproxy:download_error_ratio:rate5m
+        expr: |
+          sum(rate(hfproxy_http_requests_total{route=~"/(models|datasets|spaces)/.*", status_code=~"5.."}[5m]))
+            / clamp_min(sum(rate(hfproxy_http_requests_total{route=~"/(models|datasets|spaces)/.*"}[5m])), 1e-9)
+      - record: hfproxy:download_error_ratio:rate30m
+        expr: |
+          sum(rate(hfproxy_http_requests_total{route=~"/(models|datasets|spaces)/.*", status_code=~"5.."}[30m]))
+            / clamp_min(sum(rate(hfproxy_http_requests_total{route=~"/(models|datasets|spaces)/.*"}[30m])), 1e-9)
+      - record: hfproxy:download_error_ratio:rate1h
+        expr: |
+          sum(rate(hfproxy_http_requests_total{route=~"/(models|datasets|spaces)/.*", status_code=~"5.."}[1h]))
+            / clamp_min(sum(rate(hfproxy_http_requests_total{route=~"/(models|datasets|spaces)/.*"}[1h])), 1e-9)
+      - record: hfproxy:download_error_ratio:rate2h
+        expr: |
+          sum(rate(hfproxy_http_requests_total{route=~"/(models|datasets|spaces)/.*", status_code=~"5.."}[2h]))
+            / clamp_min(sum(rate(hfproxy_http_requests_total{route=~"/(models|datasets|spaces)/.*"}[2h])), 1e-9)
+      - record: hfproxy:download_error_ratio:rate6h
+        expr: |
+          sum(rate(hfproxy_http_requests_total{route=~"/(models|datasets|spaces)/.*", status_code=~"5.."}[6h]))
+            / clamp_min(sum(rate(hfproxy_http_requests_total{route=~"/(models|datasets|spaces)/.*"}[6h])), 1e-9)
+      - record: hfproxy:download_error_ratio:rate1d
+        expr: |
+          sum(rate(hfproxy_http_requests_total{route=~"/(models|datasets|spaces)/.*", status_code=~"5.."}[1d]))
+            / clamp_min(sum(rate(hfproxy_http_requests_total{route=~"/(models|datasets|spaces)/.*"}[1d])), 1e-9)
+      # Share of cache hits whose first byte took longer than 500 ms.
+      - record: hfproxy:cache_hit_slow_ratio:rate5m
+        expr: |
+          1 - sum(rate(hfproxy_download_ttfb_seconds_bucket{cache="hit", le="0.5"}[5m]))
+                / clamp_min(sum(rate(hfproxy_download_ttfb_seconds_count{cache="hit"}[5m])), 1e-9)
+      - record: hfproxy:cache_hit_slow_ratio:rate1h
+        expr: |
+          1 - sum(rate(hfproxy_download_ttfb_seconds_bucket{cache="hit", le="0.5"}[1h]))
+                / clamp_min(sum(rate(hfproxy_download_ttfb_seconds_count{cache="hit"}[1h])), 1e-9)
+      - record: hfproxy:cache_hit_slow_ratio:rate6h
+        expr: |
+          1 - sum(rate(hfproxy_download_ttfb_seconds_bucket{cache="hit", le="0.5"}[6h]))
+                / clamp_min(sum(rate(hfproxy_download_ttfb_seconds_count{cache="hit"}[6h])), 1e-9)
+
+  - name: hfproxy-slo-alerts
+    rules:
+      # Availability objective 99.5% => error budget 0.005. A burn rate of 14.4
+      # spends 2% of a 30-day budget in an hour; 6 spends 5% in six hours.
+      - alert: HfproxyAvailabilityFastBurn
+        expr: |
+          hfproxy:download_error_ratio:rate1h > 14.4 * 0.005
+            and hfproxy:download_error_ratio:rate5m > 14.4 * 0.005
+            and sum(rate(hfproxy_http_requests_total{route=~"/(models|datasets|spaces)/.*"}[1h])) > 0.02
+        labels: {severity: page}
+        annotations:
+          summary: Downloads fail fast enough to spend the monthly error budget in about two days
+          runbook_url: https://github.com/hfproxy/hfproxy/blob/main/docs/slo.md#responding-to-a-burn-rate-alert
+      - alert: HfproxyAvailabilitySlowBurn
+        expr: |
+          hfproxy:download_error_ratio:rate6h > 6 * 0.005
+            and hfproxy:download_error_ratio:rate30m > 6 * 0.005
+            and sum(rate(hfproxy_http_requests_total{route=~"/(models|datasets|spaces)/.*"}[1h])) > 0.02
+        labels: {severity: page}
+        annotations:
+          summary: Downloads fail steadily enough to spend the monthly error budget in about five days
+          runbook_url: https://github.com/hfproxy/hfproxy/blob/main/docs/slo.md#responding-to-a-burn-rate-alert
+      - alert: HfproxyAvailabilityBudgetDrain
+        expr: |
+          hfproxy:download_error_ratio:rate1d > 3 * 0.005
+            and hfproxy:download_error_ratio:rate2h > 3 * 0.005
+            and sum(rate(hfproxy_http_requests_total{route=~"/(models|datasets|spaces)/.*"}[1h])) > 0.02
+        labels: {severity: warning}
+        annotations:
+          summary: The monthly error budget is being spent three times faster than planned
+          runbook_url: https://github.com/hfproxy/hfproxy/blob/main/docs/slo.md#responding-to-a-burn-rate-alert
+      # Latency objective: 95% of hits start within 500 ms => budget 0.05.
+      - alert: HfproxyCacheHitsSlow
+        expr: |
+          hfproxy:cache_hit_slow_ratio:rate6h > 6 * 0.05
+            and hfproxy:cache_hit_slow_ratio:rate1h > 6 * 0.05
+            and sum(rate(hfproxy_download_ttfb_seconds_count{cache="hit"}[1h])) > 0.02
+        labels: {severity: warning}
+        annotations:
+          summary: More than 30% of cache hits take over 500 ms to start streaming
+          runbook_url: https://github.com/hfproxy/hfproxy/blob/main/docs/slo.md#responding-to-a-burn-rate-alert
