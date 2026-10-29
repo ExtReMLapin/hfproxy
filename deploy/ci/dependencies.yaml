@@ -23,6 +23,7 @@ spec:
     metadata:
       labels: {app: postgres}
     spec:
+      enableServiceLinks: false
       containers:
         - name: postgres
           image: postgres:16
@@ -54,6 +55,7 @@ spec:
     metadata:
       labels: {app: moto}
     spec:
+      enableServiceLinks: false
       containers:
         - name: moto
           image: python:3.12-slim
@@ -84,6 +86,7 @@ spec:
     metadata:
       labels: {app: fakehub}
     spec:
+      enableServiceLinks: false
       containers:
         - name: fakehub
           image: python:3.12-slim
