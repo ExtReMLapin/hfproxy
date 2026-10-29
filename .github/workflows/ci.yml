@@ -183,6 +183,30 @@ jobs:
           helm lint deploy/helm/hfproxy $values
           helm template hfproxy deploy/helm/hfproxy $values --set ingress.enabled=true --set ingress.host=hub.example.com --set ingress.tlsSecretName=tls --set replicaCount=2 --set metrics.serviceMonitor.enabled=true --set metrics.prometheusRule.enabled=true --set staging.type=pvc > /dev/null
           if helm template hfproxy deploy/helm/hfproxy > /dev/null 2>&1; then echo "the chart must refuse to render without secrets.existingSecret"; exit 1; fi
+  cluster:
+    # Installs the chart in a real (kind) cluster and exercises the service there.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+      - name: Build the image
+        run: docker build --tag hfproxy:ci .
+      - name: Install kind and helm
+        run: |
+          go install sigs.k8s.io/kind@v0.27.0
+          go install helm.sh/helm/v3/cmd/helm@v3.17.3
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Chart smoke test in a kind cluster
+        run: deploy/ci/kind-test.sh
   ui:
     runs-on: ubuntu-latest
     defaults:
