@@ -7,7 +7,8 @@ import { ManagedSettings, SettingsDraft } from '../../core/admin.types';
 import { IconComponent } from '../../shared/icon/icon';
 import { PageHeadingComponent } from '../../shared/page-heading/page-heading';
 
-type SettingsSection = 'connections' | 'storage' | 'access' | 'oidc' | 'ldap' | 'cache' | 'observability';
+type SettingsSection =
+  'connections' | 'storage' | 'access' | 'oidc' | 'ldap' | 'cache' | 'observability';
 
 @Component({
   selector: 'app-settings-page',
@@ -24,16 +25,20 @@ export class SettingsPageComponent implements OnInit {
   protected readonly busy = signal(false);
   protected readonly section = signal<SettingsSection>('connections');
   protected proxyURLVisible = false;
+
+  protected proxyToggleLabel(): string {
+    return this.proxyURLVisible ? $localize`Hide proxy URL` : $localize`Show proxy URL`;
+  }
   protected draft: SettingsDraft | null = null;
 
   protected readonly sections: { id: SettingsSection; label: string; icon: string }[] = [
-    { id: 'connections', label: 'Connections', icon: 'arrow' },
-    { id: 'storage', label: 'Object storage', icon: 'database' },
-    { id: 'access', label: 'Access & sessions', icon: 'lock' },
-    { id: 'oidc', label: 'OIDC / SSO', icon: 'key' },
-    { id: 'ldap', label: 'LDAP', icon: 'users' },
-    { id: 'cache', label: 'Cache rules', icon: 'layers' },
-    { id: 'observability', label: 'Observability', icon: 'layers' },
+    { id: 'connections', label: $localize`Connections`, icon: 'arrow' },
+    { id: 'storage', label: $localize`Object storage`, icon: 'database' },
+    { id: 'access', label: $localize`Access & sessions`, icon: 'lock' },
+    { id: 'oidc', label: $localize`OIDC / SSO`, icon: 'key' },
+    { id: 'ldap', label: $localize`LDAP`, icon: 'users' },
+    { id: 'cache', label: $localize`Cache rules`, icon: 'layers' },
+    { id: 'observability', label: $localize`Observability`, icon: 'layers' },
   ];
 
   /** Draft fields that edit a setting under a different name. */
@@ -70,7 +75,7 @@ export class SettingsPageComponent implements OnInit {
       this.setDraft(await this.api.get<ManagedSettings>('/api/v1/settings'));
     } catch (error) {
       this.feedback.showError(
-        AdminApiService.errorMessage(error, 'Unable to load instance settings.'),
+        AdminApiService.errorMessage(error, $localize`Unable to load instance settings.`),
       );
     } finally {
       this.loading.set(false);
@@ -105,7 +110,9 @@ export class SettingsPageComponent implements OnInit {
       const saved = await this.api.put<ManagedSettings>('/api/v1/settings', payload);
       this.setDraft(saved);
       await this.auth.refreshProviders();
-      this.feedback.showSuccess('Settings saved and applied. Secret values are write-only.');
+      this.feedback.showSuccess(
+        $localize`Settings saved and applied. Secret values are write-only.`,
+      );
     });
   }
 
@@ -120,7 +127,7 @@ export class SettingsPageComponent implements OnInit {
         hf_token: settings.hf_token,
         clear_hf_token: settings.clear_hf_token,
       });
-      this.feedback.showSuccess('Hugging Face Hub connection succeeded.');
+      this.feedback.showSuccess($localize`Hugging Face Hub connection succeeded.`);
     });
   }
 
@@ -139,7 +146,7 @@ export class SettingsPageComponent implements OnInit {
         s3_secret_key: settings.s3_secret_key,
         clear_s3_credentials: settings.clear_s3_credentials,
       });
-      this.feedback.showSuccess('S3-compatible storage connection succeeded.');
+      this.feedback.showSuccess($localize`S3-compatible storage connection succeeded.`);
     });
   }
 
@@ -172,7 +179,7 @@ export class SettingsPageComponent implements OnInit {
       await action();
     } catch (error) {
       this.feedback.showError(
-        AdminApiService.errorMessage(error, 'Unable to apply these settings.'),
+        AdminApiService.errorMessage(error, $localize`Unable to apply these settings.`),
       );
     } finally {
       this.busy.set(false);

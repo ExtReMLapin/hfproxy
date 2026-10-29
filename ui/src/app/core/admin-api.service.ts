@@ -24,7 +24,7 @@ export class AdminApiService {
       items.push(...page.items);
       cursor = page.next_cursor ?? '';
       if (cursor && seenCursors.has(cursor)) {
-        throw new Error('The API returned a repeated list cursor.');
+        throw new Error($localize`The API returned a repeated list cursor.`);
       }
       if (cursor) seenCursors.add(cursor);
     } while (cursor);
@@ -54,7 +54,8 @@ export class AdminApiService {
       if (typeof body === 'string' && body.trim()) {
         try {
           const parsed = JSON.parse(body) as { detail?: string; title?: string };
-          if (parsed && typeof parsed === 'object') return parsed.detail || parsed.title || fallback;
+          if (parsed && typeof parsed === 'object')
+            return parsed.detail || parsed.title || fallback;
         } catch {
           // Continue with the text/HTML error handling below.
         }

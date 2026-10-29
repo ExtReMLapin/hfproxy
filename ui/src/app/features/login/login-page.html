@@ -13,49 +13,55 @@
     ></div>
     <div class="relative flex items-center gap-3">
       <img src="/hfproxy-mark.svg" alt="" class="h-10 w-10 rounded-xl" />
-      <span class="text-lg font-bold tracking-tight">hfproxy</span>
+      <span class="text-lg font-bold tracking-tight" i18n>hfproxy</span>
     </div>
     <div class="relative max-w-xl pb-8">
       <div
         class="mb-6 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-100/80"
+        i18n
       >
         <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>Private Hub gateway
       </div>
-      <h1 class="max-w-lg text-4xl font-semibold leading-[1.12] tracking-tight xl:text-5xl">
+      <h1 class="max-w-lg text-4xl font-semibold leading-[1.12] tracking-tight xl:text-5xl" i18n>
         Your models.<br /><span class="text-emerald-300">Your infrastructure.</span>
       </h1>
-      <p class="mt-6 max-w-md text-sm leading-7 text-white/55">
+      <p class="mt-6 max-w-md text-sm leading-7 text-white/55" i18n>
         A secure, self-hosted cache for Hugging Face repositories. Manage access, storage, and
         authentication in one place.
       </p>
       <div class="mt-12 grid max-w-lg grid-cols-3 gap-4 border-t border-white/10 pt-6">
         <div>
-          <p class="text-[11px] text-white/40">Storage</p>
-          <p class="mt-1.5 text-xs font-semibold text-white/80">S3 compatible</p>
+          <p class="text-[11px] text-white/40" i18n>Storage</p>
+          <p class="mt-1.5 text-xs font-semibold text-white/80" i18n>S3 compatible</p>
         </div>
         <div>
-          <p class="text-[11px] text-white/40">Identity</p>
-          <p class="mt-1.5 text-xs font-semibold text-white/80">Local · SSO · LDAP</p>
+          <p class="text-[11px] text-white/40" i18n>Identity</p>
+          <p class="mt-1.5 text-xs font-semibold text-white/80" i18n>Local · SSO · LDAP</p>
         </div>
         <div>
-          <p class="text-[11px] text-white/40">Visibility</p>
-          <p class="mt-1.5 text-xs font-semibold text-white/80">Private by default</p>
+          <p class="text-[11px] text-white/40" i18n>Visibility</p>
+          <p class="mt-1.5 text-xs font-semibold text-white/80" i18n>Private by default</p>
         </div>
       </div>
     </div>
-    <p class="relative text-[11px] text-white/35">Protected administrator access</p>
+    <p class="relative text-[11px] text-white/35" i18n>Protected administrator access</p>
   </section>
 
-  <section class="flex min-h-screen items-center justify-center px-6 py-12 sm:px-10">
+  <section class="relative flex min-h-screen items-center justify-center px-6 py-12 sm:px-10">
+    <div class="absolute right-5 top-5"><app-language-switcher /></div>
     <div class="w-full max-w-[390px]">
       <div class="mb-10 flex items-center gap-3 lg:hidden">
         <img src="/favicon.svg" alt="" class="h-9 w-9 rounded-xl" />
-        <span class="font-bold tracking-tight text-slate-900">hfproxy</span>
+        <span class="font-bold tracking-tight text-slate-900" i18n>hfproxy</span>
       </div>
       <div class="mb-8">
-        <p class="text-xs font-bold uppercase tracking-[0.17em] text-emerald-700">Admin console</p>
-        <h2 class="mt-3 text-[28px] font-semibold tracking-tight text-slate-950">Welcome back</h2>
-        <p class="mt-2 text-sm leading-6 text-slate-500">
+        <p class="text-xs font-bold uppercase tracking-[0.17em] text-emerald-700" i18n>
+          Admin console
+        </p>
+        <h2 class="mt-3 text-[28px] font-semibold tracking-tight text-slate-950" i18n>
+          Welcome back
+        </h2>
+        <p class="mt-2 text-sm leading-6 text-slate-500" i18n>
           Sign in with your hfproxy account to continue.
         </p>
       </div>
@@ -70,7 +76,7 @@
       }
 
       <form class="space-y-5" (ngSubmit)="submit()">
-        <label class="block text-sm font-semibold text-slate-700"
+        <label class="block text-sm font-semibold text-slate-700" i18n
           >Username
           <input
             class="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10"
@@ -81,7 +87,7 @@
             placeholder="admin"
           />
         </label>
-        <label class="block text-sm font-semibold text-slate-700"
+        <label class="block text-sm font-semibold text-slate-700" i18n
           >Password
           <input
             class="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10"
@@ -98,7 +104,11 @@
           type="submit"
           [disabled]="auth.busy()"
         >
-          {{ auth.busy() ? 'Signing in…' : 'Sign in' }}
+          @if (auth.busy()) {
+            <ng-container i18n>Signing in…</ng-container>
+          } @else {
+            <ng-container i18n>Sign in</ng-container>
+          }
           @if (!auth.busy()) {
             <span aria-hidden="true">→</span>
           }
@@ -108,6 +118,7 @@
       @if (auth.providers().oidc) {
         <div
           class="my-6 flex items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400"
+          i18n
         >
           <span class="h-px flex-1 bg-slate-200"></span>or<span
             class="h-px flex-1 bg-slate-200"
@@ -117,13 +128,14 @@
           type="button"
           (click)="auth.startSSO()"
           class="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+          i18n
         >
           <app-icon name="key" [size]="17" />Continue with single sign-on
         </button>
       }
 
       @if (auth.providers().ldap) {
-        <p class="mt-6 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500">
+        <p class="mt-6 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500" i18n>
           Directory sign-in is enabled. Use your LDAP username and password above.
         </p>
       }
@@ -132,7 +144,7 @@
         class="mt-8 flex items-start gap-2.5 border-t border-slate-100 pt-5 text-xs leading-5 text-slate-400"
       >
         <app-icon name="lock" [size]="15" />
-        <span>Your session is encrypted and protected with CSRF validation.</span>
+        <span i18n>Your session is encrypted and protected with CSRF validation.</span>
       </div>
     </div>
   </section>

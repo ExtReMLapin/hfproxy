@@ -2,6 +2,9 @@
   title="Users"
   subtitle="Create local accounts and manage roles for people accessing the proxy."
   eyebrow="Identity & access"
+  i18n-title
+  i18n-subtitle
+  i18n-eyebrow
 />
 
 <section
@@ -14,14 +17,18 @@
       <app-icon name="plus" [size]="19" />
     </div>
     <div>
-      <h2 class="text-sm font-semibold text-slate-900">Create a local account</h2>
-      <p class="mt-1 text-xs leading-5 text-slate-500">
+      <h2 class="text-sm font-semibold text-slate-900" i18n>Create a local account</h2>
+      <p class="mt-1 text-xs leading-5 text-slate-500" i18n>
         Passwords must be at least 12 characters. Use SSO or LDAP for managed identities.
       </p>
     </div>
   </div>
-  <form #createForm="ngForm" class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5" (ngSubmit)="create(createForm)">
-    <label class="text-xs font-semibold text-slate-600"
+  <form
+    #createForm="ngForm"
+    class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5"
+    (ngSubmit)="create(createForm)"
+  >
+    <label class="text-xs font-semibold text-slate-600" i18n
       >Username<input
         class="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-normal outline-none focus:border-emerald-600"
         name="username"
@@ -31,7 +38,7 @@
         maxlength="64"
         autocomplete="off"
     /></label>
-    <label class="text-xs font-semibold text-slate-600"
+    <label class="text-xs font-semibold text-slate-600" i18n
       >Email <span class="font-normal text-slate-400">(optional)</span
       ><input
         class="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-normal outline-none focus:border-emerald-600"
@@ -39,13 +46,13 @@
         [(ngModel)]="draft.email"
         type="email"
     /></label>
-    <label class="text-xs font-semibold text-slate-600"
+    <label class="text-xs font-semibold text-slate-600" i18n
       >Display name<input
         class="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-normal outline-none focus:border-emerald-600"
         name="displayName"
         [(ngModel)]="draft.display_name"
     /></label>
-    <label class="text-xs font-semibold text-slate-600"
+    <label class="text-xs font-semibold text-slate-600" i18n
       >Temporary password<input
         class="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-normal outline-none focus:border-emerald-600"
         name="password"
@@ -57,7 +64,7 @@
         autocomplete="new-password"
     /></label>
     <div class="flex items-end gap-2">
-      <label class="min-w-0 flex-1 text-xs font-semibold text-slate-600"
+      <label class="min-w-0 flex-1 text-xs font-semibold text-slate-600" i18n
         >Role<select
           class="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-normal outline-none focus:border-emerald-600"
           name="role"
@@ -71,6 +78,7 @@
         type="submit"
         [disabled]="busy() || createForm.invalid"
         class="mb-px rounded-xl bg-emerald-700 px-4 py-[11px] text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
+        i18n
       >
         Create
       </button>
@@ -83,8 +91,8 @@
 >
   <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-6">
     <div>
-      <h2 class="text-sm font-semibold text-slate-900">Local accounts</h2>
-      <p class="mt-1 text-xs text-slate-400">
+      <h2 class="text-sm font-semibold text-slate-900" i18n>Local accounts</h2>
+      <p class="mt-1 text-xs text-slate-400" i18n>
         {{ users().length }} accounts · roles apply immediately
       </p>
     </div>
@@ -93,6 +101,7 @@
       (click)="load()"
       class="rounded-lg p-2 text-slate-400 hover:bg-slate-100"
       aria-label="Refresh users"
+      i18n-aria-label
     >
       <app-icon name="refresh" [size]="16" />
     </button>
@@ -103,17 +112,17 @@
         class="bg-slate-50/70 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400"
       >
         <tr>
-          <th class="px-5 py-3 font-semibold">Account</th>
-          <th class="px-4 py-3 font-semibold">Email</th>
-          <th class="px-4 py-3 font-semibold">Role</th>
-          <th class="px-4 py-3 font-semibold">Status</th>
-          <th class="px-5 py-3 text-right font-semibold">Action</th>
+          <th class="px-5 py-3 font-semibold" i18n>Account</th>
+          <th class="px-4 py-3 font-semibold" i18n>Email</th>
+          <th class="px-4 py-3 font-semibold" i18n>Role</th>
+          <th class="px-4 py-3 font-semibold" i18n>Status</th>
+          <th class="px-5 py-3 text-right font-semibold" i18n>Action</th>
         </tr>
       </thead>
       <tbody>
         @if (loading()) {
           <tr>
-            <td colspan="5" class="px-5 py-12 text-center text-sm text-slate-400">
+            <td colspan="5" class="px-5 py-12 text-center text-sm text-slate-400" i18n>
               Loading accounts…
             </td>
           </tr>
@@ -131,6 +140,7 @@
                     @if (user.id === currentUserId) {
                       <span
                         class="ml-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold uppercase text-emerald-700"
+                        i18n
                         >you</span
                       >
                     }</span
@@ -148,9 +158,9 @@
                 [ngModel]="user.role"
                 (ngModelChange)="setRole(user, $event)"
               >
-                <option value="reader">Reader</option>
-                <option value="operator">Operator</option>
-                <option value="admin">Admin</option>
+                <option value="reader" i18n>Reader</option>
+                <option value="operator" i18n>Operator</option>
+                <option value="admin" i18n>Admin</option>
               </select>
             </td>
             <td class="px-4 py-3.5">
@@ -160,8 +170,8 @@
                 [ngModel]="user.status"
                 (ngModelChange)="setStatus(user, $event)"
               >
-                <option value="active">Active</option>
-                <option value="disabled">Disabled</option>
+                <option value="active" i18n>Active</option>
+                <option value="disabled" i18n>Disabled</option>
               </select>
             </td>
             <td class="px-5 py-3.5 text-right">
@@ -170,6 +180,7 @@
                 (click)="save(user)"
                 [disabled]="busy()"
                 class="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                i18n
               >
                 Save
               </button>
@@ -178,7 +189,7 @@
         } @empty {
           @if (!loading()) {
             <tr>
-              <td colspan="5" class="px-5 py-12 text-center text-sm text-slate-400">
+              <td colspan="5" class="px-5 py-12 text-center text-sm text-slate-400" i18n>
                 No local accounts found.
               </td>
             </tr>
@@ -187,7 +198,10 @@
       </tbody>
     </table>
   </div>
-  <div class="border-t border-slate-100 px-5 py-3.5 text-[11px] leading-5 text-slate-400 sm:px-6">
+  <div
+    class="border-t border-slate-100 px-5 py-3.5 text-[11px] leading-5 text-slate-400 sm:px-6"
+    i18n
+  >
     OIDC and LDAP users can be provisioned as readers when the provider settings allow it.
   </div>
 </section>

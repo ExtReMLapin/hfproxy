@@ -2,6 +2,9 @@
   title="Repositories"
   subtitle="Control how each Hugging Face repository is exposed through your proxy."
   eyebrow="Access control"
+  i18n-title
+  i18n-subtitle
+  i18n-eyebrow
 />
 
 <section
@@ -14,28 +17,28 @@
       <app-icon name="plus" [size]="19" />
     </div>
     <div>
-      <h2 class="text-sm font-semibold text-slate-900">Add a repository policy</h2>
-      <p class="mt-1 text-xs leading-5 text-slate-500">
+      <h2 class="text-sm font-semibold text-slate-900" i18n>Add a repository policy</h2>
+      <p class="mt-1 text-xs leading-5 text-slate-500" i18n>
         Enter the repository ID as it appears on Hugging Face, for example
-        <code class="rounded bg-slate-100 px-1.5 py-0.5 text-[11px]">org/model-name</code>.
-        Adding a policy controls access; it does not download files. Use Preload on a configured
-        repository to cache its files from the main branch (up to 10,000 files per run).
+        <code class="rounded bg-slate-100 px-1.5 py-0.5 text-[11px]">org/model-name</code>. Adding a
+        policy controls access; it does not download files. Use Preload on a configured repository
+        to cache its files from the main branch (up to 10,000 files per run).
       </p>
     </div>
   </div>
   <form class="mt-5 grid gap-3 sm:grid-cols-[150px_1fr_170px_auto]" (ngSubmit)="createRepository()">
-    <label class="sr-only" for="repo-type">Repository type</label>
+    <label class="sr-only" for="repo-type" i18n>Repository type</label>
     <select
       id="repo-type"
       class="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-emerald-600"
       name="repoType"
       [(ngModel)]="repoDraft.repo_type"
     >
-      <option value="models">Model</option>
-      <option value="datasets">Dataset</option>
-      <option value="spaces">Space</option>
+      <option value="models" i18n>Model</option>
+      <option value="datasets" i18n>Dataset</option>
+      <option value="spaces" i18n>Space</option>
     </select>
-    <label class="sr-only" for="repo-id">Repository ID</label>
+    <label class="sr-only" for="repo-id" i18n>Repository ID</label>
     <input
       id="repo-id"
       class="min-w-0 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm outline-none placeholder:text-slate-400 focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10"
@@ -43,22 +46,24 @@
       [(ngModel)]="repoDraft.repo_id"
       required
       placeholder="organization/repository"
+      i18n-placeholder
     />
-    <label class="sr-only" for="repo-policy">Default access policy</label>
+    <label class="sr-only" for="repo-policy" i18n>Default access policy</label>
     <select
       id="repo-policy"
       class="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-emerald-600"
       name="repoPolicy"
       [(ngModel)]="repoDraft.access_policy"
     >
-      <option value="admin_only">Admins only</option>
-      <option value="allowlist">Allowlist</option>
-      <option value="public">Public</option>
+      <option value="admin_only" i18n>Admins only</option>
+      <option value="allowlist" i18n>Allowlist</option>
+      <option value="public" i18n>Public</option>
     </select>
     <button
       type="submit"
       [disabled]="busy()"
       class="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:opacity-50"
+      i18n
     >
       <app-icon name="plus" [size]="16" />Add policy
     </button>
@@ -72,8 +77,8 @@
     class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4 sm:px-6"
   >
     <div>
-      <h2 class="text-sm font-semibold text-slate-900">Configured repositories</h2>
-      <p class="mt-1 text-xs text-slate-400">
+      <h2 class="text-sm font-semibold text-slate-900" i18n>Configured repositories</h2>
+      <p class="mt-1 text-xs text-slate-400" i18n>
         {{ repositories().length }} policies · up to 200 shown
       </p>
     </div>
@@ -81,6 +86,7 @@
       type="button"
       (click)="load()"
       class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 hover:bg-slate-100"
+      i18n
     >
       <app-icon name="refresh" [size]="15" />Refresh
     </button>
@@ -91,17 +97,17 @@
         class="bg-slate-50/70 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400"
       >
         <tr>
-          <th class="px-5 py-3 font-semibold">Repository</th>
-          <th class="px-4 py-3 font-semibold">Type</th>
-          <th class="px-4 py-3 font-semibold">Default access</th>
-          <th class="px-4 py-3 font-semibold">Last updated</th>
-          <th class="px-5 py-3 text-right font-semibold">Actions</th>
+          <th class="px-5 py-3 font-semibold" i18n>Repository</th>
+          <th class="px-4 py-3 font-semibold" i18n>Type</th>
+          <th class="px-4 py-3 font-semibold" i18n>Default access</th>
+          <th class="px-4 py-3 font-semibold" i18n>Last updated</th>
+          <th class="px-5 py-3 text-right font-semibold" i18n>Actions</th>
         </tr>
       </thead>
       <tbody>
         @if (loading()) {
           <tr>
-            <td colspan="5" class="px-5 py-12 text-center text-sm text-slate-400">
+            <td colspan="5" class="px-5 py-12 text-center text-sm text-slate-400" i18n>
               Loading repository policies…
             </td>
           </tr>
@@ -116,19 +122,23 @@
                 <div>
                   <span class="text-sm font-semibold text-slate-800">{{ repo.repo_id }}</span>
                   @if (preloadFor(repo); as job) {
-                    <p class="mt-1 text-[11px] font-medium text-emerald-700">
+                    <p class="mt-1 text-[11px] font-medium text-emerald-700" i18n>
                       Preloading · {{ job.files_processed }} / {{ job.files_total || '…' }} files
                     </p>
                   } @else if (isCached(repo)) {
-                    <p class="mt-1 text-[11px] font-semibold text-emerald-700">✓ In cache</p>
+                    <p class="mt-1 text-[11px] font-semibold text-emerald-700" i18n>✓ In cache</p>
                   } @else if (preloadWasInterrupted(repo)) {
-                    <p class="mt-1 text-[11px] font-medium text-amber-700">Preload interrupted</p>
+                    <p class="mt-1 text-[11px] font-medium text-amber-700" i18n>
+                      Preload interrupted
+                    </p>
                   } @else if (cacheIsIncomplete(repo)) {
-                    <p class="mt-1 text-[11px] font-medium text-amber-700">Cache incomplete</p>
+                    <p class="mt-1 text-[11px] font-medium text-amber-700" i18n>Cache incomplete</p>
                   } @else if (preloadFailed(repo); as job) {
-                    <p class="mt-1 text-[11px] font-medium text-rose-700">Preload failed</p>
+                    <p class="mt-1 text-[11px] font-medium text-rose-700" i18n>Preload failed</p>
                     @if (job.error) {
-                      <p class="mt-1 max-w-xs text-[11px] leading-4 text-rose-600">{{ job.error }}</p>
+                      <p class="mt-1 max-w-xs text-[11px] leading-4 text-rose-600">
+                        {{ job.error }}
+                      </p>
                     }
                   }
                 </div>
@@ -141,9 +151,9 @@
                 [name]="'policy-' + repo.id"
                 [(ngModel)]="repo.access_policy"
               >
-                <option value="admin_only">Admins only</option>
-                <option value="allowlist">Allowlist</option>
-                <option value="public">Public</option></select
+                <option value="admin_only" i18n>Admins only</option>
+                <option value="allowlist" i18n>Allowlist</option>
+                <option value="public" i18n>Public</option></select
               ><span class="sr-only">{{ policyLabel(repo.access_policy) }}</span>
             </td>
             <td class="px-4 py-4 text-xs text-slate-400">{{ repo.updated_at | date: 'medium' }}</td>
@@ -154,11 +164,15 @@
                   (click)="savePolicy(repo)"
                   [disabled]="busy()"
                   class="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-white disabled:opacity-50"
+                  i18n
                 >
                   Save
                 </button>
                 @if (isCached(repo)) {
-                  <span class="inline-flex items-center rounded-lg bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">
+                  <span
+                    class="inline-flex items-center rounded-lg bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800"
+                    i18n
+                  >
                     In cache
                   </span>
                 } @else {
@@ -168,13 +182,18 @@
                     [disabled]="preloading()[repo.id] || !!preloadFor(repo)"
                     class="rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
                   >
-                    {{ preloading()[repo.id] || preloadFor(repo) ? 'Preloading…' : 'Preload' }}
+                    @if (preloading()[repo.id] || preloadFor(repo)) {
+                      <ng-container i18n>Preloading…</ng-container>
+                    } @else {
+                      <ng-container i18n>Preload</ng-container>
+                    }
                   </button>
                 }
                 <button
                   type="button"
                   (click)="openGrants(repo)"
                   class="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-white"
+                  i18n
                 >
                   Grants
                 </button>
@@ -183,6 +202,7 @@
                   (click)="deleteRepository(repo)"
                   aria-label="Delete repository policy"
                   class="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-700"
+                  i18n-aria-label
                 >
                   <app-icon name="trash" [size]="16" />
                 </button>
@@ -198,8 +218,8 @@
                 >
                   <app-icon name="box" [size]="20" />
                 </div>
-                <p class="mt-3 text-sm font-semibold text-slate-700">No policies configured</p>
-                <p class="mt-1 text-xs text-slate-400">
+                <p class="mt-3 text-sm font-semibold text-slate-700" i18n>No policies configured</p>
+                <p class="mt-1 text-xs text-slate-400" i18n>
                   Add a repository above to choose its access rules.
                 </p>
               </td>
@@ -220,24 +240,25 @@
     <section
       role="dialog"
       aria-modal="true"
-      [attr.aria-label]="'Access grants for ' + repo.repo_id"
+      [attr.aria-label]="grantsLabel(repo)"
       class="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl"
       (click)="$event.stopPropagation()"
       (keydown.escape)="closeGrants()"
     >
       <div class="flex items-start justify-between border-b border-slate-100 px-5 py-5 sm:px-6">
         <div>
-          <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700">
+          <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700" i18n>
             Fine-grained access
           </p>
           <h2 class="mt-1 text-lg font-semibold text-slate-950">{{ repo.repo_id }}</h2>
-          <p class="mt-1 text-xs text-slate-500">Grant access to a specific user or group.</p>
+          <p class="mt-1 text-xs text-slate-500" i18n>Grant access to a specific user or group.</p>
         </div>
         <button
           type="button"
           (click)="closeGrants()"
           aria-label="Close"
           class="rounded-lg px-2 py-1 text-xl leading-none text-slate-400 hover:bg-slate-100"
+          i18n-aria-label
         >
           ×
         </button>
@@ -249,8 +270,8 @@
             name="subjectType"
             [(ngModel)]="grantDraft.subject_type"
           >
-            <option value="user">User ID</option>
-            <option value="group">Group ID</option>
+            <option value="user" i18n>User ID</option>
+            <option value="group" i18n>Group ID</option>
           </select>
           <input
             class="min-w-0 rounded-lg border border-slate-200 px-3 py-2.5 text-xs outline-none placeholder:text-slate-400 focus:border-emerald-600"
@@ -258,26 +279,28 @@
             [(ngModel)]="grantDraft.subject_id"
             required
             placeholder="Paste ID"
+            i18n-placeholder
           />
           <select
             class="rounded-lg border border-slate-200 px-2.5 py-2.5 text-xs outline-none focus:border-emerald-600"
             name="permission"
             [(ngModel)]="grantDraft.permission"
           >
-            <option value="read">Read</option>
-            <option value="write">Write</option>
-            <option value="admin">Admin</option>
+            <option value="read" i18n>Read</option>
+            <option value="write" i18n>Write</option>
+            <option value="admin" i18n>Admin</option>
           </select>
           <button
             class="rounded-lg bg-emerald-700 px-3 py-2.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
             type="submit"
             [disabled]="busy()"
+            i18n
           >
             Add
           </button>
         </form>
         <div class="mt-6">
-          <p class="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+          <p class="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400" i18n>
             Current grants
           </p>
           <div class="divide-y divide-slate-100 rounded-xl border border-slate-100">
@@ -291,7 +314,7 @@
                     {{ grant.subject_id }}
                   </p>
                   <p class="mt-0.5 text-[10px] capitalize text-slate-400">
-                    {{ grant.subject_type }} · {{ grant.permission }}
+                    {{ subjectLabel(grant.subject_type) }} · {{ permissionLabel(grant.permission) }}
                   </p>
                 </div>
                 <button
@@ -299,12 +322,13 @@
                   (click)="removeGrant(grant)"
                   aria-label="Remove grant"
                   class="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-700"
+                  i18n-aria-label
                 >
                   <app-icon name="trash" [size]="15" />
                 </button>
               </div>
             } @empty {
-              <p class="px-4 py-8 text-center text-xs text-slate-400">
+              <p class="px-4 py-8 text-center text-xs text-slate-400" i18n>
                 No additional grants have been added.
               </p>
             }

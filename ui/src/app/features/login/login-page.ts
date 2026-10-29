@@ -2,11 +2,12 @@ import { Component, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { AuthService } from '../../core/auth.service';
 import { IconComponent } from '../../shared/icon/icon';
+import { LanguageSwitcherComponent } from '../../shared/language-switcher/language-switcher';
 
 @Component({
   selector: 'app-login-page',
   standalone: true,
-  imports: [FormsModule, IconComponent],
+  imports: [FormsModule, IconComponent, LanguageSwitcherComponent],
   templateUrl: './login-page.html',
 })
 export class LoginPageComponent {

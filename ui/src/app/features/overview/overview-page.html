@@ -2,11 +2,15 @@
   title="Overview"
   subtitle="A live view of your private Hub cache and repository access."
   eyebrow="System overview"
+  i18n-title
+  i18n-subtitle
+  i18n-eyebrow
 >
   <button
     type="button"
     (click)="load()"
     class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50"
+    i18n
   >
     <app-icon name="refresh" [size]="15" />Refresh
   </button>
@@ -24,7 +28,7 @@
       class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02]"
     >
       <div class="flex items-center justify-between">
-        <span class="text-xs font-semibold text-slate-500">Repositories</span
+        <span class="text-xs font-semibold text-slate-500" i18n>Repositories</span
         ><span class="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-emerald-700"
           ><app-icon name="box" [size]="18"
         /></span>
@@ -32,13 +36,13 @@
       <p class="mt-5 text-3xl font-semibold tracking-tight text-slate-950">
         {{ stats()?.repositories ?? 0 }}
       </p>
-      <p class="mt-1 text-xs text-slate-400">access policies configured</p>
+      <p class="mt-1 text-xs text-slate-400" i18n>access policies configured</p>
     </article>
     <article
       class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02]"
     >
       <div class="flex items-center justify-between">
-        <span class="text-xs font-semibold text-slate-500">Cached artifacts</span
+        <span class="text-xs font-semibold text-slate-500" i18n>Cached artifacts</span
         ><span class="grid h-9 w-9 place-items-center rounded-xl bg-blue-50 text-blue-700"
           ><app-icon name="database" [size]="18"
         /></span>
@@ -46,13 +50,13 @@
       <p class="mt-5 text-3xl font-semibold tracking-tight text-slate-950">
         {{ stats()?.artifacts ?? 0 | number }}
       </p>
-      <p class="mt-1 text-xs text-slate-400">files available from the cache</p>
+      <p class="mt-1 text-xs text-slate-400" i18n>files available from the cache</p>
     </article>
     <article
       class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02]"
     >
       <div class="flex items-center justify-between">
-        <span class="text-xs font-semibold text-slate-500">Storage used</span
+        <span class="text-xs font-semibold text-slate-500" i18n>Storage used</span
         ><span class="grid h-9 w-9 place-items-center rounded-xl bg-violet-50 text-violet-700"
           ><app-icon name="layers" [size]="18"
         /></span>
@@ -60,13 +64,13 @@
       <p class="mt-5 text-3xl font-semibold tracking-tight text-slate-950">
         {{ stats()?.cache_size || '0 B' }}
       </p>
-      <p class="mt-1 text-xs text-slate-400">stored in your S3 bucket</p>
+      <p class="mt-1 text-xs text-slate-400" i18n>stored in your S3 bucket</p>
     </article>
     <article
       class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02]"
     >
       <div class="flex items-center justify-between">
-        <span class="text-xs font-semibold text-slate-500">Cache hit rate</span
+        <span class="text-xs font-semibold text-slate-500" i18n>Cache hit rate</span
         ><span class="grid h-9 w-9 place-items-center rounded-xl bg-amber-50 text-amber-700"
           ><app-icon name="check-circle" [size]="18"
         /></span>
@@ -89,13 +93,14 @@
     >
       <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-6">
         <div>
-          <h2 class="text-sm font-semibold text-slate-900">Repositories</h2>
-          <p class="mt-1 text-xs text-slate-400">Latest configured access policies</p>
+          <h2 class="text-sm font-semibold text-slate-900" i18n>Repositories</h2>
+          <p class="mt-1 text-xs text-slate-400" i18n>Latest configured access policies</p>
         </div>
         @if (canManageRepositories) {
           <a
             routerLink="/repositories"
             class="text-xs font-semibold text-emerald-700 hover:text-emerald-900"
+            i18n
             >Manage all <span aria-hidden="true">→</span></a
           >
         } @else {
@@ -104,8 +109,11 @@
             disabled
             title="Only administrators can configure repositories."
             class="cursor-not-allowed text-xs font-semibold text-slate-400"
-            >Manage all · Admin only</button
+            i18n-title
+            i18n
           >
+            Manage all · Admin only
+          </button>
         }
       </div>
       <div class="overflow-x-auto">
@@ -114,10 +122,10 @@
             class="bg-slate-50/70 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400"
           >
             <tr>
-              <th class="px-5 py-3 font-semibold">Repository</th>
-              <th class="px-4 py-3 font-semibold">Type</th>
-              <th class="px-4 py-3 font-semibold">Access</th>
-              <th class="px-5 py-3 font-semibold">Updated</th>
+              <th class="px-5 py-3 font-semibold" i18n>Repository</th>
+              <th class="px-4 py-3 font-semibold" i18n>Type</th>
+              <th class="px-4 py-3 font-semibold" i18n>Access</th>
+              <th class="px-5 py-3 font-semibold" i18n>Updated</th>
             </tr>
           </thead>
           <tbody>
@@ -145,14 +153,15 @@
                   >
                     <app-icon name="box" [size]="19" />
                   </div>
-                  <p class="mt-3 text-sm font-semibold text-slate-700">No repositories yet</p>
-                  <p class="mt-1 text-xs text-slate-400">
+                  <p class="mt-3 text-sm font-semibold text-slate-700" i18n>No repositories yet</p>
+                  <p class="mt-1 text-xs text-slate-400" i18n>
                     Add a repository to control who can use it.
                   </p>
                   @if (canManageRepositories) {
                     <a
                       routerLink="/repositories"
                       class="mt-4 inline-flex text-xs font-semibold text-emerald-700"
+                      i18n
                       >Configure a repository →</a
                     >
                   } @else {
@@ -161,8 +170,11 @@
                       disabled
                       title="Only administrators can configure repositories."
                       class="mt-4 inline-flex cursor-not-allowed text-xs font-semibold text-slate-400"
-                      >Configure a repository · Admin only</button
+                      i18n-title
+                      i18n
                     >
+                      Configure a repository · Admin only
+                    </button>
                   }
                 </td>
               </tr>
@@ -178,8 +190,10 @@
       >
         <div class="flex items-start justify-between">
           <div>
-            <p class="text-xs font-semibold text-slate-500">Cache performance</p>
-            <h2 class="mt-1 text-xl font-semibold text-slate-950">{{ hitPercent }}% hit rate</h2>
+            <p class="text-xs font-semibold text-slate-500" i18n>Cache performance</p>
+            <h2 class="mt-1 text-xl font-semibold text-slate-950" i18n>
+              {{ hitPercent }}% hit rate
+            </h2>
           </div>
           <div class="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-emerald-700">
             <app-icon name="database" [size]="18" />
@@ -187,14 +201,14 @@
         </div>
         <div class="mt-5 space-y-3">
           <div class="flex items-center justify-between text-xs">
-            <span class="text-slate-500">Cache hits</span
+            <span class="text-slate-500" i18n>Cache hits</span
             ><span class="font-semibold text-slate-800">{{ hitCount }}</span>
           </div>
           <div class="h-1.5 overflow-hidden rounded-full bg-slate-100">
             <div class="h-full rounded-full bg-emerald-500" [style.width.%]="hitPercent"></div>
           </div>
           <div class="flex items-center justify-between text-xs">
-            <span class="text-slate-500">Origin fetches</span
+            <span class="text-slate-500" i18n>Origin fetches</span
             ><span class="font-semibold text-slate-800">{{ missCount }}</span>
           </div>
         </div>
@@ -202,28 +216,35 @@
       <article class="rounded-2xl bg-[#10251f] p-5 text-white shadow-sm sm:p-6">
         <div class="flex items-center gap-2 text-emerald-300">
           <span class="h-2 w-2 rounded-full bg-emerald-400"></span
-          ><span class="text-xs font-semibold">Proxy status</span>
+          ><span class="text-xs font-semibold" i18n>Proxy status</span>
         </div>
-        <h2 class="mt-3 text-xl font-semibold tracking-tight">Ready to serve</h2>
-        <p class="mt-2 text-xs leading-5 text-white/50">
+        <h2 class="mt-3 text-xl font-semibold tracking-tight" i18n>Ready to serve</h2>
+        <p class="mt-2 text-xs leading-5 text-white/50" i18n>
           Requests are routed through your configured Hub connection and object storage.
         </p>
         <div class="mt-5 flex items-center justify-between border-t border-white/10 pt-4 text-xs">
-          <span class="text-white/45">Downloads in progress</span
+          <span class="text-white/45" i18n>Downloads in progress</span
           ><span class="font-semibold text-white">{{ activeDownloads().length }}</span>
         </div>
       </article>
     </div>
   </section>
 
-  <section class="mt-5 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm shadow-slate-900/[0.02]">
-    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4 sm:px-6">
+  <section
+    class="mt-5 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm shadow-slate-900/[0.02]"
+  >
+    <div
+      class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4 sm:px-6"
+    >
       <div>
-        <h2 class="text-sm font-semibold text-slate-900">Downloads and preloading</h2>
-        <p class="mt-1 text-xs text-slate-400">Transfer status refreshes every two seconds.</p>
+        <h2 class="text-sm font-semibold text-slate-900" i18n>Downloads and preloading</h2>
+        <p class="mt-1 text-xs text-slate-400" i18n>Transfer status refreshes every two seconds.</p>
       </div>
       <span class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800">
-        {{ activeDownloads().length }} active file{{ activeDownloads().length === 1 ? '' : 's' }}
+        <ng-container i18n>{activeDownloads().length, plural,
+          =1 {1 active file}
+          other {{{ activeDownloads().length }} active files}
+        }</ng-container>
       </span>
     </div>
 
@@ -234,22 +255,31 @@
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p class="text-sm font-semibold text-slate-800">{{ job.repo_id }}</p>
-                <p class="mt-1 text-xs text-slate-400">Repository preload · {{ job.repo_type }}</p>
+                <p class="mt-1 text-xs text-slate-400" i18n>
+                  Repository preload · {{ job.repo_type }}
+                </p>
               </div>
-              <span class="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+              <span
+                class="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600"
+              >
                 {{ preloadStatus(job.status) }}
               </span>
             </div>
             @if (job.files_total > 0) {
               <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
-                <div class="h-full rounded-full bg-emerald-600 transition-all" [style.width.%]="preloadPercent(job)"></div>
+                <div
+                  class="h-full rounded-full bg-emerald-600 transition-all"
+                  [style.width.%]="preloadPercent(job)"
+                ></div>
               </div>
-              <p class="mt-2 text-xs text-slate-500">
+              <p class="mt-2 text-xs text-slate-500" i18n>
                 {{ job.files_processed | number }} / {{ job.files_total | number }} files
-                @if (job.failed_files > 0) { · {{ job.failed_files }} failed }
+                @if (job.failed_files > 0) {
+                  · {{ job.failed_files }} failed
+                }
               </p>
             } @else if (job.status === 'running') {
-              <p class="mt-2 text-xs text-slate-500">Reading the repository file list…</p>
+              <p class="mt-2 text-xs text-slate-500" i18n>Reading the repository file list…</p>
             }
             @if (job.error) {
               <p class="mt-2 text-xs text-rose-700">{{ job.error }}</p>
@@ -268,17 +298,22 @@
               <p class="mt-1 truncate font-mono text-[11px] text-slate-500">{{ download.path }}</p>
             </div>
             <div class="text-right">
-              <p class="text-xs font-semibold text-emerald-800">{{ bytes(download.bytes) }} transferred</p>
-              <p class="mt-1 text-[11px] text-slate-400">Started {{ download.started_at | date: 'mediumTime' }}</p>
+              <p class="text-xs font-semibold text-emerald-800" i18n>
+                {{ bytes(download.bytes) }} transferred
+              </p>
+              <p class="mt-1 text-[11px] text-slate-400" i18n>
+                Started {{ download.started_at | date: 'mediumTime' }}
+              </p>
             </div>
           </div>
         }
       </div>
     } @else if (preloadJobs().length === 0) {
       <div class="px-5 py-8 text-center sm:px-6">
-        <p class="text-sm font-medium text-slate-700">No downloads in progress</p>
-        <p class="mt-1 text-xs text-slate-400">
-          Adding a repository only sets its access policy. Files are cached when a client requests them, or use Preload to fetch the whole repository.
+        <p class="text-sm font-medium text-slate-700" i18n>No downloads in progress</p>
+        <p class="mt-1 text-xs text-slate-400" i18n>
+          Adding a repository only sets its access policy. Files are cached when a client requests
+          them, or use Preload to fetch the whole repository.
         </p>
       </div>
     }

@@ -33,7 +33,9 @@ export class UsersPageComponent implements OnInit {
     try {
       this.users.set(await this.api.listAll<AdminUser>('/api/v1/users'));
     } catch (error) {
-      this.feedback.showError(AdminApiService.errorMessage(error, 'Unable to load users.'));
+      this.feedback.showError(
+        AdminApiService.errorMessage(error, $localize`Unable to load users.`),
+      );
     } finally {
       this.loading.set(false);
     }
@@ -49,9 +51,11 @@ export class UsersPageComponent implements OnInit {
       await this.api.post('/api/v1/users', this.draft);
       this.draft = { username: '', email: '', display_name: '', password: '', role: 'reader' };
       await this.load();
-      this.feedback.showSuccess('User account created.');
+      this.feedback.showSuccess($localize`User account created.`);
     } catch (error) {
-      this.feedback.showError(AdminApiService.errorMessage(error, 'Unable to create this user.'));
+      this.feedback.showError(
+        AdminApiService.errorMessage(error, $localize`Unable to create this user.`),
+      );
     } finally {
       this.busy.set(false);
     }
@@ -66,23 +70,31 @@ export class UsersPageComponent implements OnInit {
         status: user.status,
       });
       this.savedValues.delete(user.id);
-      this.feedback.showSuccess(`Updated ${user.username}.`);
+      this.feedback.showSuccess($localize`Updated ${user.username}:USERNAME:.`);
     } catch (error) {
       user.role = previous.role;
       user.status = previous.status;
-      this.feedback.showError(AdminApiService.errorMessage(error, 'Unable to update this user.'));
+      this.feedback.showError(
+        AdminApiService.errorMessage(error, $localize`Unable to update this user.`),
+      );
     } finally {
       this.busy.set(false);
     }
   }
 
   protected setRole(user: AdminUser, role: string): void {
-    this.savedValues.set(user.id, this.savedValues.get(user.id) ?? { role: user.role, status: user.status });
+    this.savedValues.set(
+      user.id,
+      this.savedValues.get(user.id) ?? { role: user.role, status: user.status },
+    );
     user.role = role;
   }
 
   protected setStatus(user: AdminUser, status: string): void {
-    this.savedValues.set(user.id, this.savedValues.get(user.id) ?? { role: user.role, status: user.status });
+    this.savedValues.set(
+      user.id,
+      this.savedValues.get(user.id) ?? { role: user.role, status: user.status },
+    );
     user.status = status;
   }
 

@@ -36,7 +36,7 @@ export class CachePageComponent implements OnInit {
       );
     } catch (error) {
       this.feedback.showError(
-        AdminApiService.errorMessage(error, 'Unable to search cached files.'),
+        AdminApiService.errorMessage(error, $localize`Unable to search cached files.`),
       );
     } finally {
       this.loading.set(false);
@@ -46,7 +46,7 @@ export class CachePageComponent implements OnInit {
   protected async purge(entry: CacheEntry): Promise<void> {
     if (
       !window.confirm(
-        `Remove ${entry.path} from the cache for ${entry.repo_id}? This deletes the stored artifact.`,
+        $localize`Remove ${entry.path}:PATH: from the cache for ${entry.repo_id}:REPOSITORY:? This deletes the stored artifact.`,
       )
     )
       return;
@@ -54,10 +54,10 @@ export class CachePageComponent implements OnInit {
     try {
       await this.api.post(`/api/v1/cache/entries/${encodeURIComponent(entry.id)}/purge`, {});
       await this.search();
-      this.feedback.showSuccess('Cached artifact purged.');
+      this.feedback.showSuccess($localize`Cached artifact purged.`);
     } catch (error) {
       this.feedback.showError(
-        AdminApiService.errorMessage(error, 'Unable to purge the cached artifact.'),
+        AdminApiService.errorMessage(error, $localize`Unable to purge the cached artifact.`),
       );
     } finally {
       this.busy.set(false);
@@ -65,7 +65,9 @@ export class CachePageComponent implements OnInit {
   }
 
   protected typeLabel(type: string): string {
-    return type === 'datasets' ? 'Dataset' : type === 'spaces' ? 'Space' : 'Model';
+    if (type === 'datasets') return $localize`Dataset`;
+    if (type === 'spaces') return $localize`Space`;
+    return $localize`Model`;
   }
 
   protected bytes(value: number): string {

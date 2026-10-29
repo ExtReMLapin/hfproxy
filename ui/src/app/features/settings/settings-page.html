@@ -2,12 +2,16 @@
   title="Settings"
   subtitle="Configure upstream access, storage, authentication, and cache behavior."
   eyebrow="Instance configuration"
+  i18n-title
+  i18n-subtitle
+  i18n-eyebrow
 >
   <button
     type="button"
     (click)="refresh()"
     [disabled]="busy()"
     class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+    i18n
   >
     <app-icon name="refresh" [size]="15" />Reload
   </button>
@@ -16,6 +20,7 @@
 @if (loading()) {
   <div
     class="grid min-h-64 place-items-center rounded-2xl border border-slate-200 bg-white text-sm text-slate-400"
+    i18n
   >
     Loading current settings…
   </div>
@@ -25,6 +30,7 @@
       <nav
         class="flex gap-1 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white p-2 shadow-sm xl:block xl:h-fit xl:space-y-1"
         aria-label="Settings sections"
+        i18n-aria-label
       >
         @for (item of sections; track item.id) {
           <button
@@ -45,6 +51,7 @@
           <p
             class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800"
             role="status"
+            i18n
           >
             {{ draft.locked.length }} setting(s) are locked to the environment and cannot be edited
             here: {{ draft.locked.join(', ') }}. Change the HFPROXY_* variables of the deployment
@@ -58,11 +65,14 @@
             >
               <div class="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700">
+                  <p
+                    class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700"
+                    i18n
+                  >
                     Upstream
                   </p>
-                  <h2 class="mt-1 text-lg font-semibold text-slate-950">Hugging Face Hub</h2>
-                  <p class="mt-1 max-w-xl text-xs leading-5 text-slate-500">
+                  <h2 class="mt-1 text-lg font-semibold text-slate-950" i18n>Hugging Face Hub</h2>
+                  <p class="mt-1 max-w-xl text-xs leading-5 text-slate-500" i18n>
                     The token lets hfproxy access private repositories. Hub and proxy credentials
                     are stored encrypted and never sent back to this page.
                   </p>
@@ -74,57 +84,72 @@
                     [class.bg-amber-50]="!settings.hf_token_set"
                     [class.text-amber-700]="!settings.hf_token_set"
                     class="rounded-full px-2.5 py-1 text-[10px] font-bold"
-                    >{{ settings.hf_token_set ? 'Token configured' : 'No token saved' }}</span
                   >
+                    @if (settings.hf_token_set) {
+                      <ng-container i18n>Token configured</ng-container>
+                    } @else {
+                      <ng-container i18n>No token saved</ng-container>
+                    }
+                  </span>
                   <span
                     [class.bg-emerald-50]="settings.hf_proxy_set"
                     [class.text-emerald-700]="settings.hf_proxy_set"
                     [class.bg-slate-100]="!settings.hf_proxy_set"
                     [class.text-slate-600]="!settings.hf_proxy_set"
                     class="rounded-full px-2.5 py-1 text-[10px] font-bold"
-                    >{{ settings.hf_proxy_set ? 'Proxy configured' : 'No proxy' }}</span
                   >
+                    @if (settings.hf_proxy_set) {
+                      <ng-container i18n>Proxy configured</ng-container>
+                    } @else {
+                      <ng-container i18n>No proxy</ng-container>
+                    }
+                  </span>
                 </div>
               </div>
               <div class="mt-6 grid gap-4 md:grid-cols-2">
-                <label class="field"
+                <label class="field" i18n
                   >Hub base URL<input
                     class="control"
                     name="hfBase"
-                    [(ngModel)]="settings.hf_base_url" [disabled]="isLocked('hf_base_url')"
+                    [(ngModel)]="settings.hf_base_url"
+                    [disabled]="isLocked('hf_base_url')"
                     placeholder="https://huggingface.co" /></label
-                ><label class="field"
+                ><label class="field" i18n
                   >Request timeout<input
                     class="control"
                     name="hfTimeout"
-                    [(ngModel)]="settings.hf_timeout" [disabled]="isLocked('hf_timeout')"
+                    [(ngModel)]="settings.hf_timeout"
+                    [disabled]="isLocked('hf_timeout')"
                     placeholder="2m"
                   /><span class="hint">Go duration, for example 30s or 2m.</span></label
-                ><label class="field md:col-span-2"
+                ><label class="field md:col-span-2" i18n
                   >Allowed redirect hosts<input
                     class="control"
                     name="hfHosts"
-                    [(ngModel)]="settings.hf_allowed_hosts_text" [disabled]="isLocked('hf_allowed_hosts_text')"
+                    [(ngModel)]="settings.hf_allowed_hosts_text"
+                    [disabled]="isLocked('hf_allowed_hosts_text')"
                     placeholder="huggingface.co, *.hf.co"
                   /><span class="hint"
                     >Comma separated. Keep this list narrow to protect browser redirects.</span
                   ></label
-                ><label class="field md:col-span-2"
+                ><label class="field md:col-span-2" i18n
                   >Hub read token<input
                     class="control"
                     name="hfToken"
-                    [(ngModel)]="settings.hf_token" [disabled]="isLocked('hf_token')"
+                    [(ngModel)]="settings.hf_token"
+                    [disabled]="isLocked('hf_token')"
                     type="password"
                     autocomplete="new-password"
                     placeholder="Leave blank to keep the saved token"
                 /></label>
-                <label class="field md:col-span-2">
+                <label class="field md:col-span-2" i18n>
                   Optional outbound proxy URL
                   <span class="relative block">
                     <input
                       class="control pr-11"
                       name="hfProxy"
-                      [(ngModel)]="settings.hf_proxy_url" [disabled]="isLocked('hf_proxy_url')"
+                      [(ngModel)]="settings.hf_proxy_url"
+                      [disabled]="isLocked('hf_proxy_url')"
                       [type]="proxyURLVisible ? 'text' : 'password'"
                       autocomplete="new-password"
                       placeholder="http://proxy.example:3128 or socks5://proxy.example:1080"
@@ -133,7 +158,7 @@
                       type="button"
                       class="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-600"
                       (click)="proxyURLVisible = !proxyURLVisible"
-                      [attr.aria-label]="proxyURLVisible ? 'Hide proxy URL' : 'Show proxy URL'"
+                      [attr.aria-label]="proxyToggleLabel()"
                       [attr.aria-pressed]="proxyURLVisible"
                     >
                       <app-icon [name]="proxyURLVisible ? 'eye-off' : 'eye'" [size]="18" />
@@ -141,8 +166,8 @@
                   </span>
                   <span class="hint"
                     >Supported: HTTP, HTTPS, SOCKS4, SOCKS4a, and SOCKS5. HTTP(S) and SOCKS5 accept
-                    user:password credentials; SOCKS4 accepts a user ID only. Use HTTPS for an
-                    HTTP proxy with credentials.</span
+                    user:password credentials; SOCKS4 accepts a user ID only. Use HTTPS for an HTTP
+                    proxy with credentials.</span
                   >
                 </label>
               </div>
@@ -151,8 +176,9 @@
                   ><input
                     type="checkbox"
                     name="clearHFProxy"
-                    [(ngModel)]="settings.clear_hf_proxy" [disabled]="isLocked('clear_hf_proxy')"
-                  /><span>Clear the saved Hugging Face proxy</span></label
+                    [(ngModel)]="settings.clear_hf_proxy"
+                    [disabled]="isLocked('clear_hf_proxy')"
+                  /><span i18n>Clear the saved Hugging Face proxy</span></label
                 >
               }
               @if (settings.hf_token_set) {
@@ -160,8 +186,9 @@
                   ><input
                     type="checkbox"
                     name="clearHF"
-                    [(ngModel)]="settings.clear_hf_token" [disabled]="isLocked('clear_hf_token')"
-                  /><span>Clear the saved Hugging Face token</span></label
+                    [(ngModel)]="settings.clear_hf_token"
+                    [disabled]="isLocked('clear_hf_token')"
+                  /><span i18n>Clear the saved Hugging Face token</span></label
                 >
               }
               <div class="mt-6 flex flex-wrap items-center gap-3">
@@ -170,9 +197,10 @@
                   (click)="testHub()"
                   [disabled]="busy()"
                   class="secondary-button"
+                  i18n
                 >
                   <app-icon name="arrow" [size]="15" />Test Hub connection</button
-                ><span class="text-[11px] text-slate-400"
+                ><span class="text-[11px] text-slate-400" i18n
                   >Uses the current form values without saving them.</span
                 >
               </div>
@@ -184,11 +212,16 @@
             >
               <div class="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700">
+                  <p
+                    class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700"
+                    i18n
+                  >
                     Object storage
                   </p>
-                  <h2 class="mt-1 text-lg font-semibold text-slate-950">S3-compatible storage</h2>
-                  <p class="mt-1 max-w-xl text-xs leading-5 text-slate-500">
+                  <h2 class="mt-1 text-lg font-semibold text-slate-950" i18n>
+                    S3-compatible storage
+                  </h2>
+                  <p class="mt-1 max-w-xl text-xs leading-5 text-slate-500" i18n>
                     Connect Garage, AWS S3, or another S3-compatible service. Credentials are stored
                     encrypted.
                   </p>
@@ -199,50 +232,59 @@
                   [class.bg-slate-100]="!settings.s3_secret_key_set"
                   [class.text-slate-600]="!settings.s3_secret_key_set"
                   class="rounded-full px-2.5 py-1 text-[10px] font-bold"
-                  >{{
-                    settings.s3_secret_key_set ? 'Credentials saved' : 'Default credential chain'
-                  }}</span
                 >
+                  @if (settings.s3_secret_key_set) {
+                    <ng-container i18n>Credentials saved</ng-container>
+                  } @else {
+                    <ng-container i18n>Default credential chain</ng-container>
+                  }
+                </span>
               </div>
               <div class="mt-6 grid gap-4 sm:grid-cols-2">
-                <label class="field sm:col-span-2"
+                <label class="field sm:col-span-2" i18n
                   >Endpoint URL<input
                     class="control"
                     name="s3Endpoint"
-                    [(ngModel)]="settings.s3_endpoint" [disabled]="isLocked('s3_endpoint')"
+                    [(ngModel)]="settings.s3_endpoint"
+                    [disabled]="isLocked('s3_endpoint')"
                     placeholder="https://s3.example.com"
                   /><span class="hint">Leave empty to use the standard cloud endpoint.</span></label
-                ><label class="field"
+                ><label class="field" i18n
                   >Region<input
                     class="control"
                     name="s3Region"
-                    [(ngModel)]="settings.s3_region" [disabled]="isLocked('s3_region')"
+                    [(ngModel)]="settings.s3_region"
+                    [disabled]="isLocked('s3_region')"
                     placeholder="us-east-1" /></label
-                ><label class="field"
+                ><label class="field" i18n
                   >Bucket<input
                     class="control"
                     name="s3Bucket"
-                    [(ngModel)]="settings.s3_bucket" [disabled]="isLocked('s3_bucket')"
+                    [(ngModel)]="settings.s3_bucket"
+                    [disabled]="isLocked('s3_bucket')"
                     required /></label
-                ><label class="field sm:col-span-2"
+                ><label class="field sm:col-span-2" i18n
                   >Key prefix<input
                     class="control"
                     name="s3Prefix"
-                    [(ngModel)]="settings.s3_prefix" [disabled]="isLocked('s3_prefix')"
+                    [(ngModel)]="settings.s3_prefix"
+                    [disabled]="isLocked('s3_prefix')"
                     placeholder="hfproxy" /></label
-                ><label class="field"
+                ><label class="field" i18n
                   >Access key<input
                     class="control"
                     name="s3Access"
-                    [(ngModel)]="settings.s3_access_key" [disabled]="isLocked('s3_access_key')"
+                    [(ngModel)]="settings.s3_access_key"
+                    [disabled]="isLocked('s3_access_key')"
                     type="password"
                     autocomplete="new-password"
                     placeholder="Leave blank to keep current key" /></label
-                ><label class="field"
+                ><label class="field" i18n
                   >Secret key<input
                     class="control"
                     name="s3Secret"
-                    [(ngModel)]="settings.s3_secret_key" [disabled]="isLocked('s3_secret_key')"
+                    [(ngModel)]="settings.s3_secret_key"
+                    [disabled]="isLocked('s3_secret_key')"
                     type="password"
                     autocomplete="new-password"
                     placeholder="Leave blank to keep current key"
@@ -253,8 +295,9 @@
                   ><input
                     type="checkbox"
                     name="pathStyle"
-                    [(ngModel)]="settings.s3_force_path_style" [disabled]="isLocked('s3_force_path_style')"
-                  /><span
+                    [(ngModel)]="settings.s3_force_path_style"
+                    [disabled]="isLocked('s3_force_path_style')"
+                  /><span i18n
                     >Use path-style URLs
                     <span class="font-normal text-slate-400"
                       >(required by many S3-compatible services)</span
@@ -264,21 +307,24 @@
                   ><input
                     type="checkbox"
                     name="s3Encryption"
-                    [(ngModel)]="settings.s3_server_side_encryption" [disabled]="isLocked('s3_server_side_encryption')"
-                  /><span>Request AES256 server-side encryption</span></label
+                    [(ngModel)]="settings.s3_server_side_encryption"
+                    [disabled]="isLocked('s3_server_side_encryption')"
+                  /><span i18n>Request AES256 server-side encryption</span></label
                 >
                 @if (settings.s3_secret_key_set) {
                   <label class="toggle-row text-rose-700"
                     ><input
                       type="checkbox"
                       name="clearS3"
-                      [(ngModel)]="settings.clear_s3_credentials" [disabled]="isLocked('clear_s3_credentials')"
-                    /><span>Clear saved S3 credentials</span></label
+                      [(ngModel)]="settings.clear_s3_credentials"
+                      [disabled]="isLocked('clear_s3_credentials')"
+                    /><span i18n>Clear saved S3 credentials</span></label
                   >
                 }
               </div>
               <div
                 class="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900"
+                i18n
               >
                 <span class="font-semibold">Garage:</span> Garage does not support S3-managed AES256
                 encryption; leave that option off and use encrypted disks for at-rest protection.
@@ -290,6 +336,7 @@
                   (click)="testS3()"
                   [disabled]="busy()"
                   class="secondary-button"
+                  i18n
                 >
                   <app-icon name="arrow" [size]="15" />Test storage connection
                 </button>
@@ -300,44 +347,48 @@
             <section
               class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] sm:p-7"
             >
-              <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700">
+              <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700" i18n>
                 Authentication
               </p>
-              <h2 class="mt-1 text-lg font-semibold text-slate-950">Access & sessions</h2>
-              <p class="mt-1 text-xs leading-5 text-slate-500">
+              <h2 class="mt-1 text-lg font-semibold text-slate-950" i18n>Access & sessions</h2>
+              <p class="mt-1 text-xs leading-5 text-slate-500" i18n>
                 Local accounts are always available. SSO and directory sign-in can be configured
                 separately.
               </p>
               <div class="mt-6 grid gap-4 sm:grid-cols-2">
-                <label class="field"
+                <label class="field" i18n
                   >Primary sign-in mode<select
                     class="control"
                     name="authMode"
-                    [(ngModel)]="settings.auth_mode" [disabled]="isLocked('auth_mode')"
+                    [(ngModel)]="settings.auth_mode"
+                    [disabled]="isLocked('auth_mode')"
                   >
                     <option value="local">Local accounts</option>
                     <option value="oidc">OIDC single sign-on</option>
                   </select></label
-                ><label class="field"
+                ><label class="field" i18n
                   >Public URL<input
                     class="control"
                     name="publicUrl"
-                    [(ngModel)]="settings.public_url" [disabled]="isLocked('public_url')"
+                    [(ngModel)]="settings.public_url"
+                    [disabled]="isLocked('public_url')"
                     placeholder="https://hfproxy.example.com"
                   /><span class="hint"
                     >Used when creating external authentication callbacks.</span
                   ></label
-                ><label class="field"
+                ><label class="field" i18n
                   >Idle session lifetime<input
                     class="control"
                     name="idleTTL"
-                    [(ngModel)]="settings.session_idle_ttl" [disabled]="isLocked('session_idle_ttl')"
+                    [(ngModel)]="settings.session_idle_ttl"
+                    [disabled]="isLocked('session_idle_ttl')"
                     placeholder="8h" /></label
-                ><label class="field"
+                ><label class="field" i18n
                   >Absolute session lifetime<input
                     class="control"
                     name="absoluteTTL"
-                    [(ngModel)]="settings.session_absolute_ttl" [disabled]="isLocked('session_absolute_ttl')"
+                    [(ngModel)]="settings.session_absolute_ttl"
+                    [disabled]="isLocked('session_absolute_ttl')"
                     placeholder="24h"
                 /></label>
               </div>
@@ -345,10 +396,16 @@
                 ><input
                   type="checkbox"
                   name="anonRead"
-                  [(ngModel)]="settings.anonymous_public_read" [disabled]="isLocked('anonymous_public_read')"
-                /><span>Allow unauthenticated reads for repositories marked public</span></label
+                  [(ngModel)]="settings.anonymous_public_read"
+                  [disabled]="isLocked('anonymous_public_read')"
+                /><span i18n
+                  >Allow unauthenticated reads for repositories marked public</span
+                ></label
               >
-              <div class="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500">
+              <div
+                class="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500"
+                i18n
+              >
                 Database connection and session encryption are bootstrap settings and remain in the
                 environment.
               </div>
@@ -360,11 +417,16 @@
             >
               <div class="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700">
+                  <p
+                    class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700"
+                    i18n
+                  >
                     Optional provider
                   </p>
-                  <h2 class="mt-1 text-lg font-semibold text-slate-950">OIDC single sign-on</h2>
-                  <p class="mt-1 max-w-xl text-xs leading-5 text-slate-500">
+                  <h2 class="mt-1 text-lg font-semibold text-slate-950" i18n>
+                    OIDC single sign-on
+                  </h2>
+                  <p class="mt-1 max-w-xl text-xs leading-5 text-slate-500" i18n>
                     When the issuer is configured, users can sign in with your identity provider.
                   </p>
                 </div>
@@ -374,34 +436,43 @@
                   [class.bg-slate-100]="!settings.oidc_client_secret_set"
                   [class.text-slate-500]="!settings.oidc_client_secret_set"
                   class="rounded-full px-2.5 py-1 text-[10px] font-bold"
-                  >{{ settings.oidc_client_secret_set ? 'Configured' : 'Disabled' }}</span
                 >
+                  @if (settings.oidc_client_secret_set) {
+                    <ng-container i18n>Configured</ng-container>
+                  } @else {
+                    <ng-container i18n>Disabled</ng-container>
+                  }
+                </span>
               </div>
               <div class="mt-6 grid gap-4 sm:grid-cols-2">
-                <label class="field sm:col-span-2"
+                <label class="field sm:col-span-2" i18n
                   >Issuer URL<input
                     class="control"
                     name="oidcIssuer"
-                    [(ngModel)]="settings.oidc_issuer" [disabled]="isLocked('oidc_issuer')"
+                    [(ngModel)]="settings.oidc_issuer"
+                    [disabled]="isLocked('oidc_issuer')"
                     placeholder="https://identity.example.com/issuer" /></label
-                ><label class="field"
+                ><label class="field" i18n
                   >Client ID<input
                     class="control"
                     name="oidcClientID"
-                    [(ngModel)]="settings.oidc_client_id" [disabled]="isLocked('oidc_client_id')" /></label
-                ><label class="field"
+                    [(ngModel)]="settings.oidc_client_id"
+                    [disabled]="isLocked('oidc_client_id')" /></label
+                ><label class="field" i18n
                   >Client secret<input
                     class="control"
                     name="oidcSecret"
-                    [(ngModel)]="settings.oidc_client_secret" [disabled]="isLocked('oidc_client_secret')"
+                    [(ngModel)]="settings.oidc_client_secret"
+                    [disabled]="isLocked('oidc_client_secret')"
                     type="password"
                     autocomplete="new-password"
                     placeholder="Leave blank to keep saved secret" /></label
-                ><label class="field sm:col-span-2"
+                ><label class="field sm:col-span-2" i18n
                   >Callback URL<input
                     class="control"
                     name="oidcCallback"
-                    [(ngModel)]="settings.oidc_redirect_url" [disabled]="isLocked('oidc_redirect_url')"
+                    [(ngModel)]="settings.oidc_redirect_url"
+                    [disabled]="isLocked('oidc_redirect_url')"
                     placeholder="https://hfproxy.example.com/auth/callback"
                 /></label>
               </div>
@@ -410,18 +481,23 @@
                   ><input
                     type="checkbox"
                     name="clearOIDC"
-                    [(ngModel)]="settings.clear_oidc_client_secret" [disabled]="isLocked('clear_oidc_client_secret')"
-                  /><span>Clear saved client secret</span></label
+                    [(ngModel)]="settings.clear_oidc_client_secret"
+                    [disabled]="isLocked('clear_oidc_client_secret')"
+                  /><span i18n>Clear saved client secret</span></label
                 >
               }
               <label class="toggle-row mt-4"
                 ><input
                   type="checkbox"
                   name="oidcProvision"
-                  [(ngModel)]="settings.oidc_auto_provision" [disabled]="isLocked('oidc_auto_provision')"
-                /><span>Provision verified OIDC identities as reader accounts</span></label
+                  [(ngModel)]="settings.oidc_auto_provision"
+                  [disabled]="isLocked('oidc_auto_provision')"
+                /><span i18n>Provision verified OIDC identities as reader accounts</span></label
               >
-              <p class="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500">
+              <p
+                class="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500"
+                i18n
+              >
                 Applying the issuer performs provider discovery before activating the configuration.
               </p>
             </section>
@@ -432,11 +508,16 @@
             >
               <div class="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700">
+                  <p
+                    class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700"
+                    i18n
+                  >
                     Optional provider
                   </p>
-                  <h2 class="mt-1 text-lg font-semibold text-slate-950">LDAP / Active Directory</h2>
-                  <p class="mt-1 max-w-xl text-xs leading-5 text-slate-500">
+                  <h2 class="mt-1 text-lg font-semibold text-slate-950" i18n>
+                    LDAP / Active Directory
+                  </h2>
+                  <p class="mt-1 max-w-xl text-xs leading-5 text-slate-500" i18n>
                     Directory passwords are used only to authenticate with LDAP and are never stored
                     or logged.
                   </p>
@@ -447,41 +528,51 @@
                   [class.bg-slate-100]="!settings.ldap_url"
                   [class.text-slate-500]="!settings.ldap_url"
                   class="rounded-full px-2.5 py-1 text-[10px] font-bold"
-                  >{{ settings.ldap_url ? 'Configured' : 'Disabled' }}</span
                 >
+                  @if (settings.ldap_url) {
+                    <ng-container i18n>Configured</ng-container>
+                  } @else {
+                    <ng-container i18n>Disabled</ng-container>
+                  }
+                </span>
               </div>
               <div class="mt-6 grid gap-4 sm:grid-cols-2">
-                <label class="field sm:col-span-2"
+                <label class="field sm:col-span-2" i18n
                   >LDAP URL<input
                     class="control"
                     name="ldapURL"
-                    [(ngModel)]="settings.ldap_url" [disabled]="isLocked('ldap_url')"
+                    [(ngModel)]="settings.ldap_url"
+                    [disabled]="isLocked('ldap_url')"
                     placeholder="ldaps://directory.example.com:636" /></label
-                ><label class="field sm:col-span-2"
+                ><label class="field sm:col-span-2" i18n
                   >Bind DN <span class="font-normal text-slate-400">(optional)</span
                   ><input
                     class="control"
                     name="ldapBindDN"
-                    [(ngModel)]="settings.ldap_bind_dn" [disabled]="isLocked('ldap_bind_dn')" /></label
-                ><label class="field sm:col-span-2"
+                    [(ngModel)]="settings.ldap_bind_dn"
+                    [disabled]="isLocked('ldap_bind_dn')" /></label
+                ><label class="field sm:col-span-2" i18n
                   >Bind password<input
                     class="control"
                     name="ldapPassword"
-                    [(ngModel)]="settings.ldap_bind_password" [disabled]="isLocked('ldap_bind_password')"
+                    [(ngModel)]="settings.ldap_bind_password"
+                    [disabled]="isLocked('ldap_bind_password')"
                     type="password"
                     autocomplete="new-password"
                     placeholder="Leave blank to keep saved password" /></label
-                ><label class="field sm:col-span-2"
+                ><label class="field sm:col-span-2" i18n
                   >Search base DN<input
                     class="control"
                     name="ldapBase"
-                    [(ngModel)]="settings.ldap_base_dn" [disabled]="isLocked('ldap_base_dn')"
+                    [(ngModel)]="settings.ldap_base_dn"
+                    [disabled]="isLocked('ldap_base_dn')"
                     placeholder="ou=users,dc=example,dc=com" /></label
-                ><label class="field sm:col-span-2"
+                ><label class="field sm:col-span-2" i18n
                   >User search filter<input
                     class="control font-mono text-xs"
                     name="ldapFilter"
-                    [(ngModel)]="settings.ldap_user_filter" [disabled]="isLocked('ldap_user_filter')"
+                    [(ngModel)]="settings.ldap_user_filter"
+                    [disabled]="isLocked('ldap_user_filter')"
                     placeholder="(uid={username})"
                 /></label>
               </div>
@@ -490,26 +581,32 @@
                   ><input
                     type="checkbox"
                     name="ldapTLS"
-                    [(ngModel)]="settings.ldap_starttls" [disabled]="isLocked('ldap_starttls')"
-                  /><span>Use StartTLS when using ldap://</span></label
+                    [(ngModel)]="settings.ldap_starttls"
+                    [disabled]="isLocked('ldap_starttls')"
+                  /><span i18n>Use StartTLS when using ldap://</span></label
                 ><label class="toggle-row"
                   ><input
                     type="checkbox"
                     name="ldapProvision"
-                    [(ngModel)]="settings.ldap_auto_provision" [disabled]="isLocked('ldap_auto_provision')"
-                  /><span>Provision matching directory users as reader accounts</span></label
+                    [(ngModel)]="settings.ldap_auto_provision"
+                    [disabled]="isLocked('ldap_auto_provision')"
+                  /><span i18n>Provision matching directory users as reader accounts</span></label
                 >
                 @if (settings.ldap_bind_password_set) {
                   <label class="toggle-row text-rose-700"
                     ><input
                       type="checkbox"
                       name="clearLDAP"
-                      [(ngModel)]="settings.clear_ldap_bind_password" [disabled]="isLocked('clear_ldap_bind_password')"
-                    /><span>Clear saved bind password</span></label
+                      [(ngModel)]="settings.clear_ldap_bind_password"
+                      [disabled]="isLocked('clear_ldap_bind_password')"
+                    /><span i18n>Clear saved bind password</span></label
                   >
                 }
               </div>
-              <p class="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500">
+              <p
+                class="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500"
+                i18n
+              >
                 Users enter their directory username and password on the standard sign-in form.
               </p>
             </section>
@@ -518,56 +615,63 @@
             <section
               class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] sm:p-7"
             >
-              <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700">
+              <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700" i18n>
                 Proxy behavior
               </p>
-              <h2 class="mt-1 text-lg font-semibold text-slate-950">Cache rules</h2>
-              <p class="mt-1 text-xs leading-5 text-slate-500">
+              <h2 class="mt-1 text-lg font-semibold text-slate-950" i18n>Cache rules</h2>
+              <p class="mt-1 text-xs leading-5 text-slate-500" i18n>
                 Control limits and expiry using Go duration syntax, for example 60s, 2m, or 24h.
               </p>
               <div class="mt-6 grid gap-4 sm:grid-cols-2">
-                <label class="field"
+                <label class="field" i18n
                   >Maximum file size <span class="font-normal text-slate-400">(bytes)</span
                   ><input
                     class="control"
                     name="maxSize"
                     type="number"
                     min="1"
-                    [(ngModel)]="settings.cache_max_file_size" [disabled]="isLocked('cache_max_file_size')" /></label
-                ><label class="field"
-                  >Total cache size limit <span class="font-normal text-slate-400">(bytes, 0 = no limit)</span
+                    [(ngModel)]="settings.cache_max_file_size"
+                    [disabled]="isLocked('cache_max_file_size')" /></label
+                ><label class="field" i18n
+                  >Total cache size limit
+                  <span class="font-normal text-slate-400">(bytes, 0 = no limit)</span
                   ><input
                     class="control"
                     name="maxTotalSize"
                     type="number"
                     min="0"
-                    [(ngModel)]="settings.cache_max_total_size" [disabled]="isLocked('cache_max_total_size')" /><span
-                    class="mt-1 block text-[11px] font-normal leading-4 text-slate-500"
+                    [(ngModel)]="settings.cache_max_total_size"
+                    [disabled]="isLocked('cache_max_total_size')"
+                  /><span class="mt-1 block text-[11px] font-normal leading-4 text-slate-500"
                     >When the cache grows past this, the least recently used files are removed.
                     Pinned files are never removed. For example, 107374182400 is 100 GiB.</span
                   ></label
-                ><label class="field"
+                ><label class="field" i18n
                   >Reference TTL<input
                     class="control"
                     name="refTTL"
-                    [(ngModel)]="settings.cache_ref_ttl" [disabled]="isLocked('cache_ref_ttl')"
+                    [(ngModel)]="settings.cache_ref_ttl"
+                    [disabled]="isLocked('cache_ref_ttl')"
                     placeholder="24h" /></label
-                ><label class="field"
+                ><label class="field" i18n
                   >Negative cache TTL<input
                     class="control"
                     name="negativeTTL"
-                    [(ngModel)]="settings.cache_negative_ttl" [disabled]="isLocked('cache_negative_ttl')"
+                    [(ngModel)]="settings.cache_negative_ttl"
+                    [disabled]="isLocked('cache_negative_ttl')"
                     placeholder="30s" /></label
-                ><label class="field"
+                ><label class="field" i18n
                   >Blob garbage collection grace<input
                     class="control"
                     name="gcGrace"
-                    [(ngModel)]="settings.cache_gc_grace" [disabled]="isLocked('cache_gc_grace')"
+                    [(ngModel)]="settings.cache_gc_grace"
+                    [disabled]="isLocked('cache_gc_grace')"
                     placeholder="1h"
                 /></label>
               </div>
               <div
                 class="mt-6 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-800"
+                i18n
               >
                 Cache size and contents can be inspected on the Cache page. Changing the storage
                 bucket does not migrate existing objects.
@@ -575,29 +679,97 @@
             </section>
           }
           @case ('observability') {
-            <section class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] sm:p-7">
-              <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700">Monitoring and tracing</p>
-              <h2 class="mt-1 text-lg font-semibold text-slate-950">Observability</h2>
-              <p class="mt-1 max-w-2xl text-xs leading-5 text-slate-500">
-                Metrics are exposed on the configured path without application authentication. Keep that path on a private monitoring network. Traces are exported over OTLP/HTTP; credentials and request data are never added to spans.
+            <section
+              class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] sm:p-7"
+            >
+              <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700" i18n>
+                Monitoring and tracing
+              </p>
+              <h2 class="mt-1 text-lg font-semibold text-slate-950" i18n>Observability</h2>
+              <p class="mt-1 max-w-2xl text-xs leading-5 text-slate-500" i18n>
+                Metrics are exposed on the configured path without application authentication. Keep
+                that path on a private monitoring network. Traces are exported over OTLP/HTTP;
+                credentials and request data are never added to spans.
               </p>
               <div class="mt-6 space-y-5">
                 <div class="rounded-xl border border-slate-200 p-4">
-                  <label class="flex items-center gap-3 text-sm font-semibold text-slate-800">
-                    <input name="metricsEnabled" type="checkbox" [(ngModel)]="settings.metrics_enabled" [disabled]="isLocked('metrics_enabled')" /> Enable Prometheus metrics
+                  <label class="flex items-center gap-3 text-sm font-semibold text-slate-800" i18n>
+                    <input
+                      name="metricsEnabled"
+                      type="checkbox"
+                      [(ngModel)]="settings.metrics_enabled"
+                      [disabled]="isLocked('metrics_enabled')"
+                    />
+                    Enable Prometheus metrics
                   </label>
-                  <label class="field mt-4">Metrics path<input class="control" name="metricsPath" [(ngModel)]="settings.metrics_path" [disabled]="isLocked('metrics_path')" placeholder="/metrics" /></label>
-                  <label class="field mt-4">Cache inventory refresh<input class="control" name="inventoryRefresh" [(ngModel)]="settings.cache_inventory_refresh" [disabled]="isLocked('cache_inventory_refresh')" placeholder="5m" /><span class="hint">Reads authoritative database metadata asynchronously; this interval avoids queries during Prometheus scrapes.</span></label>
-                  <p class="hint mt-2">Scrape from a private ServiceMonitor or PodMonitor. The endpoint is excluded from HTTP request metrics.</p>
+                  <label class="field mt-4" i18n
+                    >Metrics path<input
+                      class="control"
+                      name="metricsPath"
+                      [(ngModel)]="settings.metrics_path"
+                      [disabled]="isLocked('metrics_path')"
+                      placeholder="/metrics"
+                  /></label>
+                  <label class="field mt-4" i18n
+                    >Cache inventory refresh<input
+                      class="control"
+                      name="inventoryRefresh"
+                      [(ngModel)]="settings.cache_inventory_refresh"
+                      [disabled]="isLocked('cache_inventory_refresh')"
+                      placeholder="5m"
+                    /><span class="hint"
+                      >Reads authoritative database metadata asynchronously; this interval avoids
+                      queries during Prometheus scrapes.</span
+                    ></label
+                  >
+                  <p class="hint mt-2" i18n>
+                    Scrape from a private ServiceMonitor or PodMonitor. The endpoint is excluded
+                    from HTTP request metrics.
+                  </p>
                 </div>
                 <div class="rounded-xl border border-slate-200 p-4">
-                  <label class="flex items-center gap-3 text-sm font-semibold text-slate-800">
-                    <input name="tracingEnabled" type="checkbox" [(ngModel)]="settings.tracing_enabled" [disabled]="isLocked('tracing_enabled')" /> Enable distributed tracing
+                  <label class="flex items-center gap-3 text-sm font-semibold text-slate-800" i18n>
+                    <input
+                      name="tracingEnabled"
+                      type="checkbox"
+                      [(ngModel)]="settings.tracing_enabled"
+                      [disabled]="isLocked('tracing_enabled')"
+                    />
+                    Enable distributed tracing
                   </label>
                   <div class="mt-4 grid gap-4 sm:grid-cols-2">
-                    <label class="field">Service name<input class="control" name="traceService" [(ngModel)]="settings.tracing_service_name" [disabled]="isLocked('tracing_service_name')" placeholder="hfproxy" /></label>
-                    <label class="field">Sampling ratio<input class="control" name="traceSample" type="number" min="0" max="1" step="0.01" [(ngModel)]="settings.tracing_sampling_ratio" [disabled]="isLocked('tracing_sampling_ratio')" /><span class="hint">Use 0.1 to sample about one in ten traces.</span></label>
-                    <label class="field sm:col-span-2">OTLP HTTP endpoint<input class="control" name="otlpEndpoint" [(ngModel)]="settings.otlp_endpoint" [disabled]="isLocked('otlp_endpoint')" placeholder="http://otel-collector:4318/v1/traces" /><span class="hint">Use an internal collector endpoint. A base endpoint receives the standard /v1/traces path.</span></label>
+                    <label class="field" i18n
+                      >Service name<input
+                        class="control"
+                        name="traceService"
+                        [(ngModel)]="settings.tracing_service_name"
+                        [disabled]="isLocked('tracing_service_name')"
+                        placeholder="hfproxy"
+                    /></label>
+                    <label class="field" i18n
+                      >Sampling ratio<input
+                        class="control"
+                        name="traceSample"
+                        type="number"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        [(ngModel)]="settings.tracing_sampling_ratio"
+                        [disabled]="isLocked('tracing_sampling_ratio')"
+                      /><span class="hint">Use 0.1 to sample about one in ten traces.</span></label
+                    >
+                    <label class="field sm:col-span-2" i18n
+                      >OTLP HTTP endpoint<input
+                        class="control"
+                        name="otlpEndpoint"
+                        [(ngModel)]="settings.otlp_endpoint"
+                        [disabled]="isLocked('otlp_endpoint')"
+                        placeholder="http://otel-collector:4318/v1/traces"
+                      /><span class="hint"
+                        >Use an internal collector endpoint. A base endpoint receives the standard
+                        /v1/traces path.</span
+                      ></label
+                    >
                   </div>
                 </div>
               </div>
@@ -606,7 +778,7 @@
         }
 
         <div class="mt-5 flex flex-col-reverse justify-between gap-3 sm:flex-row sm:items-center">
-          <p class="text-[11px] leading-5 text-slate-400">
+          <p class="text-[11px] leading-5 text-slate-400" i18n>
             Credentials and tokens are write-only and encrypted with the session secret.
           </p>
           <div class="flex items-center justify-end gap-2">
@@ -614,6 +786,7 @@
               type="button"
               (click)="refresh()"
               class="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+              i18n
             >
               Discard changes</button
             ><button
@@ -621,7 +794,12 @@
               [disabled]="busy()"
               class="inline-flex min-w-36 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-800 disabled:opacity-50"
             >
-              <app-icon name="check" [size]="15" />{{ busy() ? 'Applying…' : 'Save and apply' }}
+              <app-icon name="check" [size]="15" />
+              @if (busy()) {
+                <ng-container i18n>Applying…</ng-container>
+              } @else {
+                <ng-container i18n>Save and apply</ng-container>
+              }
             </button>
           </div>
         </div>
