@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/go-ldap/ldap/v3"
@@ -71,6 +72,44 @@ func TestLDAPIdentityMovesFromDNToStableSubject(t *testing.T) {
 	var subject string
 	if err := store.SQL.QueryRow(`SELECT subject FROM external_identities WHERE user_id=$1`, user.ID).Scan(&subject); err != nil || subject != "entryuuid:1" {
 		t.Fatalf("stored subject = %q (%v)", subject, err)
+	}
+}
+
+func TestLDAPIdentitySurvivesAChangeOfDirectoryAddress(t *testing.T) {
+	store := auditAPIFreshStore(t)
+	s := auditAPINewServer(t, store, auditAPIConfig())
+	ctx := context.Background()
+	user := settingsAdmin(t, store)
+	if _, err := store.SQL.Exec(`INSERT INTO external_identities(id,user_id,provider,issuer,subject) VALUES($1,$2,'ldap','ldap://old.example:389','entryuuid:7')`, db.NewID(), user.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, issuer := range []string{"ldaps://new.example:636", "ldaps://new.example:636", "ldap://third.example:1389"} {
+		account, err := s.findLDAPIdentity(ctx, issuer, "entryuuid:7", "uid=alice,dc=x")
+		if err != nil || account.UserID != user.ID {
+			t.Fatalf("lookup under %s = %+v %v, want the same user", issuer, account, err)
+		}
+		var stored string
+		var n int
+		if err := store.SQL.QueryRow(`SELECT min(issuer), count(*) FROM external_identities WHERE user_id=$1`, user.ID).Scan(&stored, &n); err != nil || stored != issuer || n != 1 {
+			t.Fatalf("after a lookup under %s the link is recorded under %q (%d links, %v)", issuer, stored, n, err)
+		}
+	}
+	// Another person is not mistaken for this one.
+	if _, err := s.findLDAPIdentity(ctx, "ldaps://new.example:636", "entryuuid:8", "uid=bob,dc=x"); !errors.Is(err, db.ErrNotFound) {
+		t.Fatalf("an unknown entry = %v, want not found", err)
+	}
+	// A link made before stable identifiers, under the old address, is still
+	// found by DN and moved to both the stable id and the new address.
+	if _, err := store.SQL.Exec(`INSERT INTO external_identities(id,user_id,provider,issuer,subject) VALUES($1,$2,'ldap','ldap://old.example:389','uid=carol,dc=x')`, db.NewID(), settingsAdmin(t, store).ID); err != nil {
+		t.Fatal(err)
+	}
+	account, err := s.findLDAPIdentity(ctx, "ldaps://new.example:636", "entryuuid:9", "uid=carol,dc=x")
+	if err != nil {
+		t.Fatalf("a DN link under the old address: %v", err)
+	}
+	var issuer, subject string
+	if err := store.SQL.QueryRow(`SELECT issuer, subject FROM external_identities WHERE user_id=$1`, account.UserID).Scan(&issuer, &subject); err != nil || issuer != "ldaps://new.example:636" || subject != "entryuuid:9" {
+		t.Fatalf("the DN link is now %q / %q (%v)", issuer, subject, err)
 	}
 }
 

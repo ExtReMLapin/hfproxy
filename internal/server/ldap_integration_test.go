@@ -204,19 +204,19 @@ func TestLDAPDirectory(t *testing.T) {
 		}
 	})
 
-	t.Run("StartTLS on the plain port", func(t *testing.T) {
-		cfg := ldapTestConfig(plainURL)
-		cfg.LDAPStartTLS = true
-		starttls := auditAPINewServer(t, store, cfg)
-		// Accounts are linked to the directory by its configured URL, so this URL
-		// has its own accounts: only the sign-in itself is checked here.
-		id, err := starttls.authenticateLDAP(ctx, "alice", "alice-password")
-		if err != nil {
-			t.Fatalf("StartTLS sign-in: %v", err)
+	t.Run("the same accounts are found through StartTLS and under another address", func(t *testing.T) {
+		starttls := ldapTestConfig(plainURL)
+		starttls.LDAPStartTLS = true
+		byIP := ldapTestConfig(strings.Replace(ldapsURL, "localhost", "127.0.0.1", 1))
+		for name, cfg := range map[string]config.Config{"StartTLS on the plain port": starttls, "LDAPS by IP address": byIP} {
+			other := auditAPINewServer(t, store, cfg)
+			id, err := other.authenticateLDAP(ctx, "alice", "alice-password")
+			if err != nil || id != aliceID {
+				t.Fatalf("%s: sign-in = %q %v, want the account %q", name, id, err, aliceID)
+			}
 		}
-		var email string
-		if err := store.SQL.QueryRow(`SELECT email FROM users WHERE id=$1`, id).Scan(&email); err != nil || email != "alice@example.org" {
-			t.Fatalf("StartTLS account has email %q (%v)", email, err)
+		if n := ldapTestUserCount(t, store, "alice"); n != 1 {
+			t.Fatalf("%d local accounts for alice after reaching the directory by three addresses", n)
 		}
 	})
 
