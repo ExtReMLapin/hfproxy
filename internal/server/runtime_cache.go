@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"net/http"
 	"time"
@@ -126,26 +125,10 @@ func (s *Server) collectOrphanedBlobsCounted(ctx context.Context) (int, error) {
 	if objects == nil || s.currentConfig().CacheGCGrace < 0 {
 		return 0, nil
 	}
-	rows, err := s.db.SQL.QueryContext(ctx, `SELECT id FROM blobs b
-		WHERE b.orphaned_at IS NOT NULL AND b.orphaned_at < now()-$1::interval
-		AND NOT EXISTS (SELECT 1 FROM artifacts a WHERE a.blob_id=b.id)`, s.currentConfig().CacheGCGrace.String())
+	ids, err := s.db.OrphanedBlobIDs(ctx, s.currentConfig().CacheGCGrace)
 	if err != nil {
 		return 0, err
 	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, err
-	}
-	rows.Close()
 	deleted := 0
 	var firstErr error
 	for _, id := range ids {
@@ -166,35 +149,5 @@ func (s *Server) collectOrphanedBlobsCounted(ctx context.Context) (int, error) {
 // collectOrphanedBlob removes one blob and its object if it is still orphaned
 // and unreferenced once locked. It reports whether the blob was deleted.
 func (s *Server) collectOrphanedBlob(ctx context.Context, objects *storage.S3, id string) (bool, error) {
-	tx, err := s.db.SQL.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-	var key string
-	if err = tx.QueryRowContext(ctx, `SELECT storage_key FROM blobs WHERE id=$1 AND orphaned_at IS NOT NULL AND orphaned_at < now()-$2::interval FOR UPDATE`, id, s.currentConfig().CacheGCGrace.String()).Scan(&key); err == sql.ErrNoRows {
-		return false, nil
-	} else if err != nil {
-		return false, err
-	}
-	var refs int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM artifacts WHERE blob_id=$1`, id).Scan(&refs); err != nil {
-		return false, err
-	}
-	if refs > 0 {
-		if _, err = tx.ExecContext(ctx, `UPDATE blobs SET orphaned_at=NULL WHERE id=$1`, id); err != nil {
-			return false, err
-		}
-		return false, tx.Commit()
-	}
-	if err = objects.Delete(ctx, key); err != nil {
-		return false, err
-	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM blobs WHERE id=$1`, id); err != nil {
-		return false, err
-	}
-	if err = tx.Commit(); err != nil {
-		return false, err
-	}
-	return true, nil
+	return s.db.CollectOrphanedBlob(ctx, id, s.currentConfig().CacheGCGrace, objects.Delete)
 }

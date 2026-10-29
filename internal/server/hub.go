@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,7 +45,7 @@ type resolvePath struct{ RepoType, RepoID, Revision, FilePath string }
 
 type downloadProgressWriter struct {
 	ctx         context.Context
-	db          *sql.DB
+	store       *db.Store
 	id          string
 	baseBytes   int64
 	destination io.Writer
@@ -57,7 +58,7 @@ func (w *downloadProgressWriter) Write(chunk []byte) (int, error) {
 	w.bytes += int64(n)
 	if time.Since(w.lastPersist) >= time.Second {
 		w.lastPersist = time.Now()
-		_, _ = w.db.ExecContext(w.ctx, `UPDATE downloads SET bytes=$2 WHERE id=$1 AND status='downloading'`, w.id, w.baseBytes+w.bytes)
+		_ = w.store.SetDownloadBytes(w.ctx, w.id, w.baseBytes+w.bytes)
 	}
 	return n, err
 }
@@ -219,14 +220,14 @@ type accessError struct {
 
 func (e accessError) Error() string { return e.detail }
 func (s *Server) repositoryAccess(ctx context.Context, p *Principal, authErr error, repoType, repoID string) (string, string, error) {
-	var id, policy string
-	err := s.db.SQL.QueryRowContext(ctx, `SELECT id,access_policy FROM repositories WHERE repo_type=$1 AND repo_id=$2 AND deleted_at IS NULL`, repoType, repoID).Scan(&id, &policy)
-	if err == sql.ErrNoRows {
+	repo, err := s.db.FindRepository(ctx, repoType, repoID)
+	if errors.Is(err, db.ErrNotFound) {
 		return "", "", accessError{http.StatusForbidden, "Repository not registered", "This repository has no local access policy."}
 	}
 	if err != nil {
 		return "", "", err
 	}
+	id, policy := repo.ID, repo.Policy
 	if p == nil {
 		if authErr != errNoCredentials || !s.currentConfig().AnonymousPublicRead || policy != "public" {
 			return "", "", accessError{http.StatusUnauthorized, "Authentication required", "Sign in to access this repository."}
@@ -242,10 +243,7 @@ func (s *Server) repositoryAccess(ctx context.Context, p *Principal, authErr err
 	case "admin_only":
 		return "", "", accessError{http.StatusForbidden, "Forbidden", "This repository is restricted to administrators."}
 	case "allowlist":
-		var allowed bool
-		err := s.db.SQL.QueryRowContext(ctx, `SELECT EXISTS(
-			SELECT 1 FROM repo_grants g WHERE g.repository_id=$1 AND g.permission IN ('read','write','admin') AND (
-			(g.subject_type='user' AND g.subject_id=$2) OR (g.subject_type='group' AND EXISTS(SELECT 1 FROM group_members m WHERE m.group_id=g.subject_id AND m.user_id=$2))))`, id, p.ID).Scan(&allowed)
+		allowed, err := s.db.HasReadGrant(ctx, id, p.ID)
 		if err != nil {
 			return "", "", err
 		}
@@ -390,14 +388,9 @@ func callerOf(ctx context.Context) requestInfo {
 }
 
 func (s *Server) finishDownload(ctx context.Context, id string, bytes int64, errorClass string) {
-	status := "miss"
-	if errorClass != "" {
-		status = "failed"
-	}
 	ctx, cancel := bookkeepingContext(ctx)
 	defer cancel()
-	_, err := s.db.SQL.ExecContext(ctx, "UPDATE downloads SET status=$2,completed_at=now(),bytes=$3,error_class=$4 WHERE id=$1", id, status, bytes, errorClass)
-	if err != nil {
+	if err := s.db.FinishDownload(ctx, id, bytes, errorClass); err != nil {
 		s.logger.Warn("download completion could not be recorded")
 	}
 }

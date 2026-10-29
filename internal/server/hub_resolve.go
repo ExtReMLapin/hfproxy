@@ -459,7 +459,7 @@ func (s *Server) downloadUnknownSize(fill *cacheFill) bool {
 		destination = io.MultiWriter(fill.tmp, hash, asStreamingWriter(w))
 		fill.streamed = true
 	}
-	progress := &downloadProgressWriter{ctx: fill.ctx, db: s.db.SQL, id: fill.downloadID, destination: destination, lastPersist: time.Now()}
+	progress := &downloadProgressWriter{ctx: fill.ctx, store: s.db, id: fill.downloadID, destination: destination, lastPersist: time.Now()}
 	fill.size, err = io.Copy(progress, limited)
 	if err != nil {
 		s.finishDownload(fill.ctx, fill.downloadID, fill.size, "upstream_read")

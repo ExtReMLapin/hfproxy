@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -137,58 +136,39 @@ func (s *Server) startMaintenance(ctx context.Context) {
 // events and audit events, in bounded batches.
 func (s *Server) runRetention(ctx context.Context) {
 	cfg := s.currentConfig()
-	jobs := []struct {
-		table string
-		query string
-		args  []any
-	}{
-		{"sessions", `DELETE FROM sessions WHERE token_hash IN (SELECT token_hash FROM sessions WHERE expires_at < now() LIMIT $1)`, nil},
-		// A download whose process died, or whose bookkeeping was lost, would stay
-		// "in progress" forever and inflate the console's counter.
-		{"downloads_abandoned", `UPDATE downloads SET status='failed',error_class='abandoned',completed_at=now() WHERE id IN (SELECT id FROM downloads WHERE status='downloading' AND started_at < now()-interval '12 hours' LIMIT $1)`, nil},
-		{"login_attempts", `DELETE FROM login_attempts WHERE key IN (SELECT key FROM login_attempts WHERE window_start < now()-interval '1 hour' LIMIT $1)`, nil},
+	type job struct {
+		name      db.RetentionJob
+		olderThan time.Duration
 	}
+	jobs := []job{{name: db.RetainSessions}, {name: db.RetainAbandonedDownloads}, {name: db.RetainLoginAttempts}}
 	if cfg.RetentionDownloads > 0 {
-		jobs = append(jobs, struct {
-			table string
-			query string
-			args  []any
-		}{"downloads", `DELETE FROM downloads WHERE id IN (SELECT id FROM downloads WHERE started_at < now()-make_interval(secs => $2::double precision) LIMIT $1)`, []any{cfg.RetentionDownloads.Seconds()}})
+		jobs = append(jobs, job{db.RetainDownloads, cfg.RetentionDownloads})
 	}
 	if cfg.RetentionAudit > 0 {
-		jobs = append(jobs, struct {
-			table string
-			query string
-			args  []any
-		}{"audit_events", `DELETE FROM audit_events WHERE id IN (SELECT id FROM audit_events WHERE created_at < now()-make_interval(secs => $2::double precision) LIMIT $1)`, []any{cfg.RetentionAudit.Seconds()}})
+		jobs = append(jobs, job{db.RetainAudit, cfg.RetentionAudit})
 	}
-	for _, job := range jobs {
-		deleted, err := s.deleteInBatches(ctx, job.query, job.args)
+	for _, j := range jobs {
+		deleted, err := s.retainInBatches(ctx, j.name, j.olderThan)
 		if deleted > 0 {
 			if s.metrics != nil {
-				s.metrics.add("hfproxy_retention_deleted_total", []string{"table=" + job.table}, float64(deleted))
+				s.metrics.add("hfproxy_retention_deleted_total", []string{"table=" + string(j.name)}, float64(deleted))
 			}
-			s.logger.Info("retention purge completed", "table", job.table, "deleted", deleted)
+			s.logger.Info("retention purge completed", "table", string(j.name), "deleted", deleted)
 		}
-		if err != nil {
-			if ctx.Err() == nil {
-				s.logger.Warn("retention purge failed", "table", job.table, "class", fmt.Sprintf("%T", err))
-			}
-			continue
+		if err != nil && ctx.Err() == nil {
+			s.logger.Warn("retention purge failed", "table", string(j.name), "class", fmt.Sprintf("%T", err))
 		}
 	}
 }
 
-func (s *Server) deleteInBatches(ctx context.Context, query string, extra []any) (int64, error) {
+func (s *Server) retainInBatches(ctx context.Context, job db.RetentionJob, olderThan time.Duration) (int64, error) {
 	var total int64
-	args := append([]any{retentionBatch}, extra...)
 	for i := 0; i < retentionMaxBatches; i++ {
-		result, err := s.db.SQL.ExecContext(ctx, query, args...)
+		n, err := s.db.RunRetention(ctx, job, retentionBatch, olderThan)
+		total += n
 		if err != nil {
 			return total, err
 		}
-		n, _ := result.RowsAffected()
-		total += n
 		if n < retentionBatch {
 			return total, nil
 		}
@@ -205,8 +185,8 @@ func (s *Server) evictOverQuota(ctx context.Context) (int, error) {
 	if limit <= 0 {
 		return 0, nil
 	}
-	var total int64
-	if err := s.db.SQL.QueryRowContext(ctx, `SELECT COALESCE(SUM(size_bytes),0) FROM blobs WHERE orphaned_at IS NULL`).Scan(&total); err != nil {
+	total, err := s.db.LiveBytes(ctx)
+	if err != nil {
 		return 0, err
 	}
 	if total <= limit {
@@ -215,24 +195,7 @@ func (s *Server) evictOverQuota(ctx context.Context) (int, error) {
 	target := int64(float64(limit) * evictionTargetPercent / 100)
 	evicted := 0
 	for total > target {
-		rows, err := s.db.SQL.QueryContext(ctx, `SELECT a.id,a.blob_id FROM artifacts a
-			WHERE NOT EXISTS (`+pinnedArtifact+`)
-			ORDER BY a.last_accessed_at ASC, a.id LIMIT $1`, evictionBatch)
-		if err != nil {
-			return evicted, err
-		}
-		type candidate struct{ id, blobID string }
-		var batch []candidate
-		for rows.Next() {
-			var c candidate
-			if err := rows.Scan(&c.id, &c.blobID); err != nil {
-				rows.Close()
-				return evicted, err
-			}
-			batch = append(batch, c)
-		}
-		err = rows.Err()
-		rows.Close()
+		batch, err := s.db.EvictionCandidates(ctx, evictionBatch)
 		if err != nil {
 			return evicted, err
 		}
@@ -240,7 +203,7 @@ func (s *Server) evictOverQuota(ctx context.Context) (int, error) {
 			break
 		}
 		for _, c := range batch {
-			freed, err := s.evictArtifact(ctx, c.id, c.blobID)
+			freed, err := s.db.EvictArtifact(ctx, c.ArtifactID, c.BlobID)
 			if err != nil {
 				return evicted, err
 			}
@@ -260,47 +223,9 @@ func (s *Server) evictOverQuota(ctx context.Context) (int, error) {
 	return evicted, nil
 }
 
-// pinnedArtifact is true for an artifact "a" that a pin covers.
-const pinnedArtifact = db.PinnedArtifactSQL
-
 // pinnedBytes is the size of the live blobs that eviction must not touch.
 func (s *Server) pinnedBytes(ctx context.Context) (int64, error) {
-	var bytes int64
-	err := s.db.SQL.QueryRowContext(ctx, `SELECT COALESCE(SUM(b.size_bytes),0) FROM blobs b
-		WHERE b.orphaned_at IS NULL AND EXISTS (SELECT 1 FROM artifacts a WHERE a.blob_id=b.id AND EXISTS (`+pinnedArtifact+`))`).Scan(&bytes)
-	return bytes, err
-}
-
-func (s *Server) evictArtifact(ctx context.Context, artifactID, blobID string) (int64, error) {
-	tx, err := s.db.SQL.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-	// Lock the blob first, the same order publication uses, so a concurrent
-	// fill cannot attach a new artifact between the count and the orphan mark.
-	var size int64
-	if err := tx.QueryRowContext(ctx, `SELECT size_bytes FROM blobs WHERE id=$1 FOR UPDATE`, blobID).Scan(&size); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return 0, err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM artifacts WHERE id=$1`, artifactID); err != nil {
-		return 0, err
-	}
-	var refs int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM artifacts WHERE blob_id=$1`, blobID).Scan(&refs); err != nil {
-		return 0, err
-	}
-	var freed int64
-	if refs == 0 {
-		result, err := tx.ExecContext(ctx, `UPDATE blobs SET orphaned_at=now() WHERE id=$1 AND orphaned_at IS NULL`, blobID)
-		if err != nil {
-			return 0, err
-		}
-		if n, _ := result.RowsAffected(); n > 0 {
-			freed = size
-		}
-	}
-	return freed, tx.Commit()
+	return s.db.PinnedBytes(ctx)
 }
 
 var (

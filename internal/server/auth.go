@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"net"
@@ -91,7 +92,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var storedHash, status string
-		authErr = s.db.SQL.QueryRowContext(r.Context(), `SELECT id,password_hash,status FROM users WHERE username=$1`, username).Scan(&userID, &storedHash, &status)
+		userID, storedHash, status, authErr = s.db.PasswordLogin(r.Context(), username)
 		if !verifyPassword(localLoginHash(storedHash, status, authErr), password) {
 			authErr = sql.ErrNoRows
 		}
@@ -150,8 +151,8 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	var actorID string
 	if err == nil && cookie.Value != "" {
 		candidates := s.keyRing().HashCandidates(cookie.Value)
-		_ = s.db.SQL.QueryRowContext(r.Context(), `SELECT user_id FROM sessions WHERE token_hash = ANY($1)`, candidates).Scan(&actorID)
-		if _, err := s.db.SQL.ExecContext(r.Context(), `DELETE FROM sessions WHERE token_hash = ANY($1)`, candidates); err != nil {
+		actorID = s.db.SessionOwner(r.Context(), candidates)
+		if err := s.db.DeleteSessions(r.Context(), candidates); err != nil {
 			s.logger.Error("session could not be deleted at logout; it stays valid until it expires", "request_id", requestID(r.Context()))
 		}
 	}
@@ -257,37 +258,22 @@ func (s *Server) oidcUser(ctx context.Context, issuer string, claims struct {
 	Name          string `json:"name"`
 	Nonce         string `json:"nonce"`
 }) (string, error) {
-	var userID, status string
-	err := s.db.SQL.QueryRowContext(ctx, `SELECT u.id,u.status FROM external_identities x JOIN users u ON u.id=x.user_id WHERE x.issuer=$1 AND x.subject=$2`, issuer, claims.Subject).Scan(&userID, &status)
+	account, err := s.db.FindExternalIdentity(ctx, issuer, claims.Subject)
 	if err == nil {
-		if status != "active" {
+		if account.Status != "active" {
 			return "", fmt.Errorf("account disabled")
 		}
-		return userID, nil
+		return account.UserID, nil
 	}
-	if err != sql.ErrNoRows || !s.currentConfig().OIDCAutoProvision || !claims.EmailVerified {
+	if !errors.Is(err, db.ErrNotFound) || !s.currentConfig().OIDCAutoProvision || !claims.EmailVerified {
 		return "", fmt.Errorf("identity is not provisioned")
 	}
 	email, err := mail.ParseAddress(claims.Email)
 	if err != nil || !claims.EmailVerified {
 		return "", fmt.Errorf("verified email is required for provisioning")
 	}
-	username := usernameFromEmail(email.Address)
-	userID = db.NewID()
-	tx, err := s.db.SQL.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO users(id,username,email,display_name,role) VALUES ($1,$2,$3,$4,'reader')`, userID, username, email.Address, claims.Name)
-	if err != nil {
-		return "", err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO external_identities(id,user_id,provider,issuer,subject) VALUES ($1,$2,'oidc',$3,$4)`, db.NewID(), userID, issuer, claims.Subject)
-	if err != nil {
-		return "", err
-	}
-	if err := tx.Commit(); err != nil {
+	userID := db.NewID()
+	if err := s.db.ProvisionExternalUser(ctx, userID, usernameFromEmail(email.Address), email.Address, claims.Name, "oidc", issuer, claims.Subject); err != nil {
 		return "", err
 	}
 	s.audit(ctx, userID, "user.provision", "user", userID, map[string]any{"provider": "oidc"})
@@ -339,15 +325,15 @@ func (s *Server) authenticateLDAP(ctx context.Context, username, password string
 	if subject == "" {
 		subject = entry.DN
 	}
-	userID, status, err := s.findLDAPIdentity(ctx, issuer, stable, entry.DN)
+	account, err := s.findLDAPIdentity(ctx, issuer, stable, entry.DN)
 	if err == nil {
-		if status != "active" {
+		if account.Status != "active" {
 			return "", fmt.Errorf("account disabled")
 		}
-		s.refreshLDAPGroups(ctx, conn, userID, entry.DN)
-		return userID, nil
+		s.refreshLDAPGroups(ctx, conn, account.UserID, entry.DN)
+		return account.UserID, nil
 	}
-	if err != sql.ErrNoRows || !s.currentConfig().LDAPAutoProvision {
+	if !errors.Is(err, db.ErrNotFound) || !s.currentConfig().LDAPAutoProvision {
 		return "", fmt.Errorf("LDAP identity is not provisioned")
 	}
 	localUsername := usernameFromLogin(username)
@@ -362,19 +348,15 @@ func (s *Server) authenticateLDAP(ctx context.Context, username, password string
 	if len(displayName) > 200 {
 		displayName = username
 	}
-	userID = db.NewID()
-	tx, err := s.db.SQL.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, "INSERT INTO users(id,username,email,display_name,role) VALUES($1,$2,$3,$4,'reader')", userID, localUsername, email, displayName); err != nil {
-		return "", fmt.Errorf("provision LDAP user failed")
-	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO external_identities(id,user_id,provider,issuer,subject) VALUES($1,$2,'ldap',$3,$4)", db.NewID(), userID, issuer, subject); err != nil {
-		return "", fmt.Errorf("record LDAP identity failed")
-	}
-	if err := tx.Commit(); err != nil {
+	userID := db.NewID()
+	if err := s.db.ProvisionExternalUser(ctx, userID, localUsername, email, displayName, "ldap", issuer, subject); err != nil {
+		var stage *db.StageError
+		if errors.As(err, &stage) && stage.Stage == "identity" {
+			return "", fmt.Errorf("record LDAP identity failed")
+		}
+		if errors.As(err, &stage) {
+			return "", fmt.Errorf("provision LDAP user failed")
+		}
 		return "", err
 	}
 	s.audit(ctx, userID, "user.provision", "user", userID, map[string]any{"provider": "ldap"})

@@ -1,9 +1,12 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 )
 
 func newTestStore(t *testing.T) *Store {
@@ -225,5 +228,318 @@ func TestPublishArtifactRestoresMissingObjectsAndRecordsDownloads(t *testing.T) 
 	}
 	if count, _, _ := store.PurgeEstimate(ctx, "admin", "x", "", ""); count != 1 {
 		t.Fatalf("one artifact should remain, estimate says %d", count)
+	}
+}
+
+func TestSessionsTokensAndAudit(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	user := NewID()
+	store.CreateUser(ctx, user, "gina", "g@example.com", "Gina", "pw-hash", "reader")
+
+	hash, csrf := []byte("session-hash-0123456789abcdef-aa"), []byte("csrf-hash-0123456789abcdef-aaaaa")
+	if err := store.CreateSession(ctx, hash, user, csrf, time.Now().Add(time.Hour), "k1"); err != nil {
+		t.Fatal(err)
+	}
+	found, err := store.LookupSession(ctx, [][]byte{[]byte("unknown"), hash})
+	if err != nil || found.ID != user || found.Username != "gina" || !bytes.Equal(found.Hash, hash) {
+		t.Fatalf("LookupSession = %+v %v", found, err)
+	}
+	if stored, err := store.SessionCSRFHash(ctx, [][]byte{hash}); err != nil || !bytes.Equal(stored, csrf) {
+		t.Fatalf("SessionCSRFHash = %q %v", stored, err)
+	}
+	if owner := store.SessionOwner(ctx, [][]byte{hash}); owner != user {
+		t.Fatalf("SessionOwner = %q", owner)
+	}
+	if err := store.TouchSession(ctx, hash, time.Hour, 2*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteSessions(ctx, [][]byte{hash}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LookupSession(ctx, [][]byte{hash}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a deleted session = %v, want ErrNotFound", err)
+	}
+	expired := []byte("expired-session-hash-0123456789a")
+	store.CreateSession(ctx, expired, user, csrf, time.Now().Add(-time.Minute), "")
+	if _, err := store.LookupSession(ctx, [][]byte{expired}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an expired session = %v, want ErrNotFound", err)
+	}
+
+	tok := &AccessToken{ID: NewID(), Name: "t", Prefix: "p", Scopes: []string{"read", "write"}}
+	tokenHash := []byte("token-hash-0123456789abcdef-old!")
+	if err := store.CreateToken(ctx, user, tok, tokenHash, "k0", 10); err != nil {
+		t.Fatal(err)
+	}
+	lookup, err := store.LookupToken(ctx, [][]byte{tokenHash})
+	if err != nil || lookup.TokenID != tok.ID || len(lookup.Scopes) != 2 || !bytes.Equal(lookup.StoredHash, tokenHash) {
+		t.Fatalf("LookupToken = %+v %v", lookup, err)
+	}
+	newHash := []byte("token-hash-0123456789abcdef-new!")
+	if err := store.RehashToken(ctx, tok.ID, tokenHash, newHash, "k1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LookupToken(ctx, [][]byte{tokenHash}); !errors.Is(err, ErrNotFound) {
+		t.Fatal("the old hash must stop working after a rehash")
+	}
+	if err := store.TouchToken(ctx, tok.ID); err != nil {
+		t.Fatal(err)
+	}
+	store.RevokeToken(ctx, user, tok.ID)
+	if _, err := store.LookupToken(ctx, [][]byte{newHash}); !errors.Is(err, ErrNotFound) {
+		t.Fatal("a revoked token must not be found")
+	}
+
+	if id, hashStored, status, err := store.PasswordLogin(ctx, "gina"); err != nil || id != user || hashStored != "pw-hash" || status != "active" {
+		t.Fatalf("PasswordLogin = %q %q %q %v", id, hashStored, status, err)
+	}
+	if _, _, _, err := store.PasswordLogin(ctx, "nobody"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown login = %v", err)
+	}
+	if err := store.InsertAudit(ctx, user, "test.event", "thing", "1", `{"k":"v"}`, "req-1"); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := store.ListAudit(ctx, nil, 5)
+	if len(events) != 1 || events[0].Action != "test.event" || events[0].Actor != "gina" {
+		t.Fatalf("audit = %+v", events)
+	}
+}
+
+func TestExternalIdentitiesAndGroupSync(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	user := NewID()
+	if err := store.ProvisionExternalUser(ctx, user, "hank-abc", "h@example.com", "Hank", "oidc", "https://idp", "sub-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ProvisionExternalUser(ctx, NewID(), "hank-abc", "", "", "oidc", "https://idp", "sub-2"); err == nil {
+		t.Fatal("a duplicate username must fail")
+	} else {
+		var stage *StageError
+		if !errors.As(err, &stage) || stage.Stage != "user" {
+			t.Fatalf("error = %v, want the user stage", err)
+		}
+	}
+	account, err := store.FindExternalIdentity(ctx, "https://idp", "sub-1")
+	if err != nil || account.UserID != user || account.Status != "active" {
+		t.Fatalf("FindExternalIdentity = %+v %v", account, err)
+	}
+	if _, err := store.FindExternalIdentity(ctx, "https://idp", "sub-404"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown identity = %v", err)
+	}
+	if err := store.ChangeExternalSubject(ctx, account, "sub-1-renamed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.FindExternalIdentity(ctx, "https://idp", "sub-1-renamed"); err != nil {
+		t.Fatal(err)
+	}
+
+	localGroup := NewID()
+	store.SQL.Exec(`INSERT INTO groups(id,name,source) VALUES($1,'shared','local')`, localGroup)
+	store.SQL.Exec(`INSERT INTO group_members(group_id,user_id) VALUES($1,$2)`, localGroup, user)
+	if err := store.SyncGroups(ctx, user, "ldap", []string{"a", "b", "shared", ""}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SyncGroups(ctx, user, "ldap", []string{"a"}); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := store.SQL.Query(`SELECT g.name,g.source FROM group_members m JOIN groups g ON g.id=m.group_id WHERE m.user_id=$1 ORDER BY 1`, user)
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var name, source string
+		rows.Scan(&name, &source)
+		got = append(got, name+":"+source)
+	}
+	if strings.Join(got, ",") != "a:ldap,shared:local" {
+		t.Fatalf("memberships = %v, want the ldap group a and the untouched local group shared", got)
+	}
+}
+
+func TestLoginAttemptCounters(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	window := time.Minute
+	for i := 1; i <= 3; i++ {
+		counts, err := store.CountLoginAttempts(ctx, []string{"ip:1", "pair:1:x"}, window)
+		if err != nil || len(counts) != 2 {
+			t.Fatalf("CountLoginAttempts = %v %v", counts, err)
+		}
+		for _, c := range counts {
+			if c.Attempts != i || c.Remaining < 1 || c.Remaining > 60 {
+				t.Fatalf("attempt %d: %+v", i, c)
+			}
+		}
+	}
+	if _, found, err := store.LoginAttempts(ctx, "fail:x", window); err != nil || found {
+		t.Fatalf("an unseen key = found %v, %v", found, err)
+	}
+	store.AddLoginAttempt(ctx, "fail:x", window)
+	store.AddLoginAttempt(ctx, "fail:x", window)
+	if c, found, err := store.LoginAttempts(ctx, "fail:x", window); err != nil || !found || c.Attempts != 2 {
+		t.Fatalf("LoginAttempts = %+v %v %v", c, found, err)
+	}
+	// A key whose window ended starts over.
+	store.SQL.Exec(`UPDATE login_attempts SET window_start=now()-interval '2 minutes' WHERE key='fail:x'`)
+	store.AddLoginAttempt(ctx, "fail:x", window)
+	if c, _, _ := store.LoginAttempts(ctx, "fail:x", window); c.Attempts != 1 {
+		t.Fatalf("after the window expired the count is %d, want 1", c.Attempts)
+	}
+}
+
+func TestEvictionRetentionAndBlobCollection(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	owner := NewID()
+	store.CreateUser(ctx, owner, "ivy", "", "", "h", "admin")
+	repo, _ := store.UpsertRepository(ctx, "models", "org/e", "public", owner)
+	commit := "0123456789abcdef0123456789abcdef01234567"
+	publish := func(path, sha string, size int64) {
+		in := PublishInput{RepoID: repo, Commit: commit, Path: path, SHA256: sha, Size: size, StorageKey: "blobs/" + sha, ContentType: "x"}
+		if err := store.PublishArtifact(ctx, in, func(context.Context, string) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publish("old", "aa", 10)
+	publish("new", "bb", 20)
+	store.SQL.Exec(`UPDATE artifacts SET last_accessed_at=now()-interval '2 days' WHERE path='old'`)
+	if total, _ := store.LiveBytes(ctx); total != 30 {
+		t.Fatalf("LiveBytes = %d", total)
+	}
+	if count, size, _ := store.BlobTotals(ctx); count != 2 || size != 30 {
+		t.Fatalf("BlobTotals = %d %d", count, size)
+	}
+	cands, err := store.EvictionCandidates(ctx, 10)
+	if err != nil || len(cands) != 2 {
+		t.Fatalf("EvictionCandidates = %v %v", cands, err)
+	}
+	a, _ := store.FindArtifact(ctx, repo, commit, "old")
+	if cands[0].ArtifactID != a.ID {
+		t.Fatal("the least recently used artifact must come first")
+	}
+	// A pin keeps a file out of the candidates and counts as pinned bytes.
+	store.AddPin(ctx, repo, commit, "", owner)
+	if cands, _ := store.EvictionCandidates(ctx, 10); len(cands) != 0 {
+		t.Fatalf("pinned files must not be candidates: %v", cands)
+	}
+	if pinned, _ := store.PinnedBytes(ctx); pinned != 30 {
+		t.Fatalf("PinnedBytes = %d", pinned)
+	}
+	store.RemovePin(ctx, repo, commit, "")
+
+	freed, err := store.EvictArtifact(ctx, a.ID, a.BlobID)
+	if err != nil || freed != 10 {
+		t.Fatalf("EvictArtifact freed %d (%v), want 10", freed, err)
+	}
+	// Orphaned blobs are collected only after the grace period, and the object is deleted first.
+	if ids, _ := store.OrphanedBlobIDs(ctx, time.Hour); len(ids) != 0 {
+		t.Fatalf("a fresh orphan must wait for the grace period: %v", ids)
+	}
+	store.SQL.Exec(`UPDATE blobs SET orphaned_at=now()-interval '2 hours' WHERE sha256='aa'`)
+	ids, _ := store.OrphanedBlobIDs(ctx, time.Hour)
+	if len(ids) != 1 {
+		t.Fatalf("OrphanedBlobIDs = %v", ids)
+	}
+	deleted := ""
+	removed, err := store.CollectOrphanedBlob(ctx, ids[0], time.Hour, func(_ context.Context, key string) error { deleted = key; return nil })
+	if err != nil || !removed || deleted != "blobs/aa" {
+		t.Fatalf("CollectOrphanedBlob = %v %v key=%q", removed, err, deleted)
+	}
+	// An object that cannot be deleted keeps its row, so nothing leaks.
+	store.SQL.Exec(`UPDATE blobs SET orphaned_at=now()-interval '2 hours' WHERE sha256='bb'`)
+	store.SQL.Exec(`DELETE FROM artifacts WHERE path='new'`)
+	ids, _ = store.OrphanedBlobIDs(ctx, time.Hour)
+	if removed, err := store.CollectOrphanedBlob(ctx, ids[0], time.Hour, func(context.Context, string) error { return errors.New("S3 down") }); removed || err == nil {
+		t.Fatalf("a failed object delete must be reported: %v %v", removed, err)
+	}
+	if count, _, _ := store.BlobTotals(ctx); count != 1 {
+		t.Fatalf("the blob row must survive a failed object delete, %d rows", count)
+	}
+
+	// Retention.
+	store.SQL.Exec(`INSERT INTO downloads(id,path,status,started_at) VALUES('d-old','x','hit',now()-interval '10 days'),('d-new','y','hit',now())`)
+	if n, err := store.RunRetention(ctx, RetainDownloads, 100, 48*time.Hour); err != nil || n != 1 {
+		t.Fatalf("RunRetention(downloads) = %d %v", n, err)
+	}
+	if _, err := store.RunRetention(ctx, RetentionJob("nope"), 1, 0); err == nil {
+		t.Fatal("an unknown job must be refused")
+	}
+}
+
+func TestResumptionLifecycle(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	owner := NewID()
+	store.CreateUser(ctx, owner, "jo", "", "", "h", "admin")
+	repo, _ := store.UpsertRepository(ctx, "models", "org/r", "public", owner)
+	if _, err := store.FindResumption(ctx, repo, "c", "f"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing state = %v", err)
+	}
+	r := &Resumption{ID: NewID(), RepositoryID: repo, CommitSHA: "c", Path: "f", ETag: "e1", TotalSize: 100, ContentType: "x", ChunkSize: 40}
+	if err := store.CreateResumption(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := store.AdvanceResumption(ctx, r.ID, 0, 40); err != nil || !ok {
+		t.Fatalf("advance = %v %v", ok, err)
+	}
+	if ok, _ := store.AdvanceResumption(ctx, r.ID, 0, 40); ok {
+		t.Fatal("a stale writer must not advance the count")
+	}
+	got, _ := store.FindResumption(ctx, repo, "c", "f")
+	if got.CompletedBytes != 40 || got.ETag != "e1" {
+		t.Fatalf("state = %+v", got)
+	}
+	store.SetResumptionETag(ctx, r.ID, "e2")
+	store.ResetResumption(ctx, r.ID, "e3", 200, "y", 50)
+	got, _ = store.FindResumption(ctx, repo, "c", "f")
+	if got.CompletedBytes != 0 || got.ETag != "e3" || got.TotalSize != 200 || got.ChunkSize != 50 {
+		t.Fatalf("after reset = %+v", got)
+	}
+
+	// Stale cleanup: only old rows, and the blocks are discarded first.
+	if stale, _ := store.StaleResumptions(ctx, time.Hour, 10); len(stale) != 0 {
+		t.Fatalf("fresh state listed as stale: %v", stale)
+	}
+	store.SQL.Exec(`UPDATE download_resumptions SET updated_at=now()-interval '3 hours' WHERE id=$1`, r.ID)
+	stale, _ := store.StaleResumptions(ctx, time.Hour, 10)
+	if len(stale) != 1 {
+		t.Fatalf("stale = %v", stale)
+	}
+	failing := func(context.Context, *Resumption) error { return errors.New("S3 down") }
+	if removed, err := store.CleanupStaleResumption(ctx, stale[0], time.Hour, failing); removed || err == nil {
+		t.Fatalf("a failed discard must keep the state: %v %v", removed, err)
+	}
+	discarded := false
+	ok := func(context.Context, *Resumption) error { discarded = true; return nil }
+	if removed, err := store.CleanupStaleResumption(ctx, stale[0], time.Hour, ok); !removed || err != nil || !discarded {
+		t.Fatalf("cleanup = %v %v discarded=%v", removed, err, discarded)
+	}
+	if _, err := store.FindResumption(ctx, repo, "c", "f"); !errors.Is(err, ErrNotFound) {
+		t.Fatal("the state must be gone")
+	}
+
+	// The advisory lock excludes a second holder until released.
+	unlock, err := store.LockResume(ctx, repo, "c", "f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := make(chan struct{})
+	go func() {
+		u, err := store.LockResume(ctx, repo, "c", "f")
+		if err == nil {
+			u()
+		}
+		close(second)
+	}()
+	select {
+	case <-second:
+		t.Fatal("the lock was granted twice")
+	case <-time.After(300 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case <-second:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the lock was not released")
 	}
 }

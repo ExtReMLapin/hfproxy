@@ -2,10 +2,8 @@ package server
 
 import (
 	"context"
-	"database/sql"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -51,61 +49,29 @@ var errLDAPAccountDisabled = errors.New("account disabled")
 // made before stable identifiers were used are keyed by DN: when the entry now
 // has a stable identifier, the link is moved to it, so later moves in the
 // directory no longer break it.
-func (s *Server) findLDAPIdentity(ctx context.Context, issuer, stable, dn string) (userID, status string, err error) {
+func (s *Server) findLDAPIdentity(ctx context.Context, issuer, stable, dn string) (db.ExternalAccount, error) {
 	if stable != "" {
-		err = s.db.SQL.QueryRowContext(ctx, "SELECT u.id,u.status FROM external_identities x JOIN users u ON u.id=x.user_id WHERE x.issuer=$1 AND x.subject=$2", issuer, stable).Scan(&userID, &status)
-		if err == nil || !errors.Is(err, sql.ErrNoRows) {
-			return userID, status, err
+		account, err := s.db.FindExternalIdentity(ctx, issuer, stable)
+		if err == nil || !errors.Is(err, db.ErrNotFound) {
+			return account, err
 		}
 	}
-	var identityID string
-	err = s.db.SQL.QueryRowContext(ctx, "SELECT x.id,u.id,u.status FROM external_identities x JOIN users u ON u.id=x.user_id WHERE x.issuer=$1 AND x.subject=$2", issuer, dn).Scan(&identityID, &userID, &status)
+	account, err := s.db.FindExternalIdentity(ctx, issuer, dn)
 	if err != nil {
-		return "", "", err
+		return db.ExternalAccount{}, err
 	}
 	if stable != "" {
-		if _, upErr := s.db.SQL.ExecContext(ctx, "UPDATE external_identities SET subject=$2 WHERE id=$1", identityID, stable); upErr != nil {
+		if err := s.db.ChangeExternalSubject(ctx, account, stable); err != nil {
 			s.logger.Warn("LDAP identity could not be moved to its stable identifier", "request_id", requestID(ctx))
 		}
 	}
-	return userID, status, nil
+	return account, nil
 }
 
 // syncLDAPGroups makes the user's membership in "ldap" groups match the
 // directory. Local groups are never touched.
 func (s *Server) syncLDAPGroups(ctx context.Context, userID string, names []string) error {
-	tx, err := s.db.SQL.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	keep := make([]string, 0, len(names))
-	for _, name := range names {
-		name = strings.TrimSpace(name)
-		if name == "" || len(name) > 200 {
-			continue
-		}
-		var groupID string
-		err := tx.QueryRowContext(ctx, `INSERT INTO groups(id,name,source) VALUES($1,$2,'ldap') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id`, db.NewID(), name).Scan(&groupID)
-		if err != nil {
-			return fmt.Errorf("record group: %w", err)
-		}
-		var source string
-		if err := tx.QueryRowContext(ctx, `SELECT source FROM groups WHERE id=$1`, groupID).Scan(&source); err != nil {
-			return err
-		}
-		if source != "ldap" {
-			continue // a local group with the same name: membership stays managed locally
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO group_members(group_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, groupID, userID); err != nil {
-			return err
-		}
-		keep = append(keep, groupID)
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM group_members m USING groups g WHERE g.id=m.group_id AND g.source='ldap' AND m.user_id=$1 AND NOT (m.group_id = ANY($2))`, userID, keep); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return s.db.SyncGroups(ctx, userID, "ldap", names)
 }
 
 // ldapGroupNames asks the directory for the groups of a user entry.

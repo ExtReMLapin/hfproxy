@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,9 +55,9 @@ func (s *Server) startRepoPreload(w http.ResponseWriter, r *http.Request, reposi
 	if !ok {
 		return
 	}
-	var repoType, repoID string
-	err := s.db.SQL.QueryRowContext(r.Context(), `SELECT repo_type,repo_id FROM repositories WHERE id=$1 AND deleted_at IS NULL`, repositoryID).Scan(&repoType, &repoID)
-	if errors.Is(err, sql.ErrNoRows) {
+	repository, err := s.db.GetRepository(r.Context(), repositoryID)
+	repoType, repoID := repository.Type, repository.RepoID
+	if errors.Is(err, db.ErrNotFound) {
 		writeProblem(w, r, http.StatusNotFound, "Repository not found", "The repository does not exist.")
 		return
 	}
@@ -277,28 +276,12 @@ func (s *Server) preloadSnapshots(ctx context.Context, principal *Principal) ([]
 		}
 	}
 	s.preloadsMu.RUnlock()
-	rows, err := s.db.SQL.QueryContext(ctx, `SELECT r.id,r.repo_type,r.repo_id,e.action,e.metadata_json::text,e.created_at,
-		CASE WHEN e.action='repository.preload.finished' AND e.metadata_json->>'status'='completed'
-			THEN (SELECT COUNT(*) FROM artifacts a WHERE a.repository_id=r.id
-				AND (COALESCE(e.metadata_json->>'commit_sha','')='' OR a.commit_sha=e.metadata_json->>'commit_sha'))
-			ELSE -1 END AS cached_files
-		FROM repositories r JOIN LATERAL (
-			SELECT action,metadata_json,created_at FROM audit_events
-			WHERE target_type='repository' AND target_id=r.id AND action IN ('repository.preload.started','repository.preload.finished')
-			ORDER BY created_at DESC,id DESC LIMIT 1
-		) e ON TRUE
-		WHERE r.deleted_at IS NULL ORDER BY e.created_at DESC LIMIT 200`)
+	records, err := s.db.LastPreloads(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var repositoryPK, repoType, repoID, action, encodedMetadata string
-		var updatedAt time.Time
-		var cachedFiles int64
-		if err := rows.Scan(&repositoryPK, &repoType, &repoID, &action, &encodedMetadata, &updatedAt, &cachedFiles); err != nil {
-			return nil, err
-		}
+	for _, record := range records {
+		repoType, repoID, action, encodedMetadata, updatedAt, cachedFiles := record.RepoType, record.RepoID, record.Action, record.MetadataJSON, record.At, record.CachedFiles
 		key := repoType + "/" + repoID
 		if known[key] {
 			continue
@@ -331,16 +314,13 @@ func (s *Server) preloadSnapshots(ctx context.Context, principal *Principal) ([]
 		})
 		known[key] = true
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
 	for key, job := range fallback {
 		if known[key] {
 			continue
 		}
 		if job.Status == "completed" {
-			var cachedFiles int64
-			if err := s.db.SQL.QueryRowContext(ctx, `SELECT COUNT(*) FROM artifacts a JOIN repositories r ON r.id=a.repository_id WHERE r.repo_type=$1 AND r.repo_id=$2 AND a.commit_sha=$3`, job.RepoType, job.RepoID, job.CommitSHA).Scan(&cachedFiles); err != nil {
+			cachedFiles, err := s.db.CachedFilesAt(ctx, job.RepoType, job.RepoID, job.CommitSHA)
+			if err != nil {
 				return nil, err
 			}
 			if cachedFiles < int64(job.FilesTotal) {

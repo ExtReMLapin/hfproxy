@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -23,34 +22,11 @@ const (
 	downloadResumeMaxAge    = 7 * 24 * time.Hour
 )
 
-type downloadResume struct {
-	ID             string
-	RepositoryID   string
-	CommitSHA      string
-	Path           string
-	ETag           string
-	TotalSize      int64
-	ContentType    string
-	ChunkSize      int64
-	CompletedBytes int64
-}
+// downloadResume is the saved state of a chunked download.
+type downloadResume = db.Resumption
 
 func (s *Server) lockDownloadResume(ctx context.Context, repositoryID, commit, filePath string) (func(), error) {
-	conn, err := s.db.SQL.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("acquire download resume connection: %w", err)
-	}
-	lockKey := repositoryID + "|" + commit + "|" + filePath
-	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtextextended($1, 0))`, lockKey); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("lock download resume: %w", err)
-	}
-	return func() {
-		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, lockKey)
-		_ = conn.Close() // Closing the session also releases the lock if unlock failed.
-	}, nil
+	return s.db.LockResume(ctx, repositoryID, commit, filePath)
 }
 
 type upstreamStatusError struct {
@@ -71,7 +47,7 @@ func (s *Server) downloadResumable(ctx context.Context, objectStore *storage.S3,
 	if err != nil {
 		return nil, "", nil, err
 	}
-	if _, err := s.db.SQL.ExecContext(ctx, `UPDATE downloads SET bytes=$2 WHERE id=$1 AND status='downloading'`, downloadID, resume.CompletedBytes); err != nil {
+	if err := s.db.SetDownloadBytes(ctx, downloadID, resume.CompletedBytes); err != nil {
 		s.logger.Warn("download progress could not be recorded", "request_id", requestID(ctx))
 	}
 	if stream != nil && resume.CompletedBytes > 0 {
@@ -176,15 +152,10 @@ func (s *Server) downloadResumable(ctx context.Context, objectStore *storage.S3,
 }
 
 func (s *Server) loadDownloadResume(ctx context.Context, objectStore *storage.S3, repositoryID, commit, filePath string, total int64, etag, contentType string) (*downloadResume, error) {
-	resume := &downloadResume{}
-	err := s.db.SQL.QueryRowContext(ctx, `SELECT id,repository_id,commit_sha,path,upstream_etag,total_size,content_type,chunk_size,completed_bytes
-		FROM download_resumptions WHERE repository_id=$1 AND commit_sha=$2 AND path=$3`, repositoryID, commit, filePath).Scan(
-		&resume.ID, &resume.RepositoryID, &resume.CommitSHA, &resume.Path, &resume.ETag, &resume.TotalSize, &resume.ContentType, &resume.ChunkSize, &resume.CompletedBytes)
-	if errors.Is(err, sql.ErrNoRows) {
+	resume, err := s.db.FindResumption(ctx, repositoryID, commit, filePath)
+	if errors.Is(err, db.ErrNotFound) {
 		resume = &downloadResume{ID: db.NewID(), RepositoryID: repositoryID, CommitSHA: commit, Path: filePath, ETag: etag, TotalSize: total, ContentType: contentType, ChunkSize: downloadResumeChunkSize}
-		_, err = s.db.SQL.ExecContext(ctx, `INSERT INTO download_resumptions(id,repository_id,commit_sha,path,upstream_etag,total_size,content_type,chunk_size,completed_bytes)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,0)`, resume.ID, repositoryID, commit, filePath, etag, total, contentType, downloadResumeChunkSize)
-		if err != nil {
+		if err := s.db.CreateResumption(ctx, resume); err != nil {
 			return nil, fmt.Errorf("create resumable download state: %w", err)
 		}
 		return resume, nil
@@ -213,7 +184,7 @@ func (s *Server) resetDownloadResume(ctx context.Context, objectStore *storage.S
 	if contentType == "" {
 		contentType = resume.ContentType
 	}
-	_, err := s.db.SQL.ExecContext(ctx, `UPDATE download_resumptions SET upstream_etag=$2,total_size=$3,content_type=$4,chunk_size=$5,completed_bytes=0,updated_at=now() WHERE id=$1`, resume.ID, etag, total, contentType, downloadResumeChunkSize)
+	err := s.db.ResetResumption(ctx, resume.ID, etag, total, contentType, downloadResumeChunkSize)
 	if err != nil {
 		return fmt.Errorf("reset resumable download state: %w", err)
 	}
@@ -226,7 +197,7 @@ func (s *Server) updateDownloadResumeETag(ctx context.Context, resume *downloadR
 	if etag == "" || etag == resume.ETag {
 		return nil
 	}
-	if _, err := s.db.SQL.ExecContext(ctx, `UPDATE download_resumptions SET upstream_etag=$2,updated_at=now() WHERE id=$1`, resume.ID, etag); err != nil {
+	if err := s.db.SetResumptionETag(ctx, resume.ID, etag); err != nil {
 		return fmt.Errorf("save resumable download validator: %w", err)
 	}
 	resume.ETag = etag
@@ -271,7 +242,7 @@ func (s *Server) saveDownloadChunk(ctx context.Context, objectStore *storage.S3,
 	if stream != nil {
 		destination = io.MultiWriter(tmp, stream)
 	}
-	progress := &downloadProgressWriter{ctx: ctx, db: s.db.SQL, id: downloadID, baseBytes: offset, destination: destination, lastPersist: time.Now()}
+	progress := &downloadProgressWriter{ctx: ctx, store: s.db, id: downloadID, baseBytes: offset, destination: destination, lastPersist: time.Now()}
 	written, err := io.CopyN(progress, body, length)
 	if err != nil || written != length {
 		return fmt.Errorf("Hub transfer stopped before the current block completed")
@@ -283,11 +254,11 @@ func (s *Server) saveDownloadChunk(ctx context.Context, objectStore *storage.S3,
 	if err := objectStore.UploadFile(ctx, tmp, objectStore.PartialKey(resume.ID, part), resume.ContentType, length); err != nil {
 		return fmt.Errorf("persist resumable download block: %w", err)
 	}
-	result, err := s.db.SQL.ExecContext(ctx, `UPDATE download_resumptions SET completed_bytes=$2,updated_at=now() WHERE id=$1 AND completed_bytes=$3`, resume.ID, offset+length, offset)
+	advanced, err := s.db.AdvanceResumption(ctx, resume.ID, offset, offset+length)
 	if err != nil {
 		return fmt.Errorf("save resumable download progress: %w", err)
 	}
-	if changed, _ := result.RowsAffected(); changed != 1 {
+	if !advanced {
 		return fmt.Errorf("resumable download progress changed unexpectedly")
 	}
 	resume.CompletedBytes = offset + length
@@ -409,7 +380,7 @@ func (s *Server) finishDownloadResume(ctx context.Context, objectStore *storage.
 		s.logger.Warn("could not remove completed download blocks", "error", err)
 		return
 	}
-	if _, err := s.db.SQL.ExecContext(ctx, `DELETE FROM download_resumptions WHERE id=$1`, resume.ID); err != nil {
+	if err := s.db.DeleteResumption(ctx, resume.ID); err != nil {
 		s.logger.Warn("could not remove completed download state", "error", err)
 	}
 }
@@ -431,72 +402,22 @@ func (s *Server) startDownloadResumeCleanup(ctx context.Context) {
 }
 
 func (s *Server) cleanupStaleDownloadResumptions(ctx context.Context) {
-	maxAgeHours := float64(downloadResumeMaxAge / time.Hour)
-	rows, err := s.db.SQL.QueryContext(ctx, `SELECT id,repository_id,commit_sha,path,upstream_etag,total_size,content_type,chunk_size,completed_bytes
-		FROM download_resumptions WHERE updated_at < now()-($1::double precision * interval '1 hour') ORDER BY updated_at LIMIT 100`, maxAgeHours)
+	stale, err := s.db.StaleResumptions(ctx, downloadResumeMaxAge, 100)
 	if err != nil {
 		if ctx.Err() == nil {
 			s.logger.Warn("could not list stale download blocks", "error", err)
 		}
 		return
 	}
-	var stale []*downloadResume
-	for rows.Next() {
-		item := &downloadResume{}
-		if err := rows.Scan(&item.ID, &item.RepositoryID, &item.CommitSHA, &item.Path, &item.ETag, &item.TotalSize, &item.ContentType, &item.ChunkSize, &item.CompletedBytes); err != nil {
-			rows.Close()
-			s.logger.Warn("could not read stale download state", "error", err)
-			return
-		}
-		stale = append(stale, item)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		s.logger.Warn("could not finish reading stale download state", "error", err)
-		return
-	}
-	rows.Close()
-
 	for _, item := range stale {
 		if ctx.Err() != nil {
 			return
 		}
-		s.cleanupStaleDownloadResume(ctx, item)
-	}
-}
-
-func (s *Server) cleanupStaleDownloadResume(ctx context.Context, candidate *downloadResume) {
-	tx, err := s.db.SQL.BeginTx(ctx, nil)
-	if err != nil {
-		return
-	}
-	defer tx.Rollback()
-	lockKey := candidate.RepositoryID + ":" + candidate.CommitSHA + ":" + candidate.Path
-	var locked bool
-	if err := tx.QueryRowContext(ctx, `SELECT pg_try_advisory_xact_lock(hashtext($1))`, lockKey).Scan(&locked); err != nil || !locked {
-		return
-	}
-	current := &downloadResume{}
-	maxAgeHours := float64(downloadResumeMaxAge / time.Hour)
-	err = tx.QueryRowContext(ctx, `SELECT id,repository_id,commit_sha,path,upstream_etag,total_size,content_type,chunk_size,completed_bytes
-		FROM download_resumptions WHERE id=$1 AND updated_at < now()-($2::double precision * interval '1 hour')`, candidate.ID, maxAgeHours).Scan(
-		&current.ID, &current.RepositoryID, &current.CommitSHA, &current.Path, &current.ETag, &current.TotalSize, &current.ContentType, &current.ChunkSize, &current.CompletedBytes)
-	if errors.Is(err, sql.ErrNoRows) {
-		return
-	}
-	if err != nil {
-		s.logger.Warn("could not recheck stale download state", "error", err)
-		return
-	}
-	if err := deleteDownloadResumeParts(ctx, s.currentStorage(), current); err != nil {
-		s.logger.Warn("could not remove stale download blocks", "error", err)
-		return
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM download_resumptions WHERE id=$1`, current.ID); err != nil {
-		s.logger.Warn("could not remove stale download state", "error", err)
-		return
-	}
-	if err := tx.Commit(); err != nil {
-		s.logger.Warn("could not commit stale download cleanup", "error", err)
+		_, err := s.db.CleanupStaleResumption(ctx, item, downloadResumeMaxAge, func(ctx context.Context, current *downloadResume) error {
+			return deleteDownloadResumeParts(ctx, s.currentStorage(), current)
+		})
+		if err != nil && ctx.Err() == nil {
+			s.logger.Warn("could not remove stale download state", "error", err)
+		}
 	}
 }

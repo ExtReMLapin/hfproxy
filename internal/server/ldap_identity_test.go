@@ -59,14 +59,14 @@ func TestLDAPIdentityMovesFromDNToStableSubject(t *testing.T) {
 		t.Fatal(err)
 	}
 	// First sign-in after the upgrade: found by DN, link moved to the stable id.
-	id, status, err := s.findLDAPIdentity(ctx, issuer, "entryuuid:1", "uid=alice,ou=old,dc=x")
-	if err != nil || id != user.ID || status != "active" {
-		t.Fatalf("lookup by DN = %q %q %v", id, status, err)
+	account, err := s.findLDAPIdentity(ctx, issuer, "entryuuid:1", "uid=alice,ou=old,dc=x")
+	if err != nil || account.UserID != user.ID || account.Status != "active" {
+		t.Fatalf("lookup by DN = %+v %v", account, err)
 	}
 	// The user is moved in the directory: the DN changes, the stable id does not.
-	id, _, err = s.findLDAPIdentity(ctx, issuer, "entryuuid:1", "uid=alice,ou=new,dc=x")
-	if err != nil || id != user.ID {
-		t.Fatalf("lookup after the move = %q %v, want the same user", id, err)
+	account, err = s.findLDAPIdentity(ctx, issuer, "entryuuid:1", "uid=alice,ou=new,dc=x")
+	if err != nil || account.UserID != user.ID {
+		t.Fatalf("lookup after the move = %+v %v, want the same user", account, err)
 	}
 	var subject string
 	if err := store.SQL.QueryRow(`SELECT subject FROM external_identities WHERE user_id=$1`, user.ID).Scan(&subject); err != nil || subject != "entryuuid:1" {

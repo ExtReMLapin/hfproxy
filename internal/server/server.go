@@ -145,8 +145,8 @@ func (s *Server) startCacheInventoryMetrics(ctx context.Context) {
 		refresh = 5 * time.Minute
 	}
 	refreshInventory := func() {
-		var count, size int64
-		if err := s.db.SQL.QueryRowContext(ctx, `SELECT count(*),coalesce(sum(size_bytes),0) FROM blobs`).Scan(&count, &size); err != nil {
+		count, size, err := s.db.BlobTotals(ctx)
+		if err != nil {
 			s.logger.Warn("cache inventory metrics refresh failed")
 			return
 		}
@@ -704,8 +704,7 @@ func (s *Server) audit(ctx context.Context, actorID, action, targetType, targetI
 	if err != nil || len(encoded) > 4096 {
 		encoded = []byte(`{}`)
 	}
-	_, err = s.db.SQL.ExecContext(ctx, `INSERT INTO audit_events(id, actor_user_id, action, target_type, target_id, metadata_json, request_id)
-		VALUES ($1, NULLIF($2,''), $3, $4, $5, $6::jsonb, $7)`, db.NewID(), actorID, action, targetType, targetID, string(encoded), requestID(ctx))
+	err = s.db.InsertAudit(ctx, actorID, action, targetType, targetID, string(encoded), requestID(ctx))
 	if err != nil {
 		s.logger.Error("audit write failed", "action", action)
 	}
@@ -740,27 +739,22 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 			return cached, nil
 		}
 		ring := s.keyRing()
-		var p Principal
-		var status string
-		var scopes []string
-		var storedHash []byte
-		err := s.db.SQL.QueryRowContext(r.Context(), `SELECT u.id,u.username,u.email,u.display_name,u.role,u.status,t.id,t.scopes,t.token_hash
-			FROM access_tokens t JOIN users u ON u.id=t.user_id
-			WHERE t.token_hash = ANY($1) AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at>now())`, ring.HashCandidates(token)).
-			Scan(&p.ID, &p.Username, &p.Email, &p.DisplayName, &p.Role, &status, &p.TokenID, &scopes, &storedHash)
-		if err != nil || status != "active" {
+		found, err := s.db.LookupToken(r.Context(), ring.HashCandidates(token))
+		if err != nil || found.Status != "active" {
 			return nil, errUnauthenticated
 		}
+		p := Principal{ID: found.ID, Username: found.Username, Email: found.Email, DisplayName: found.DisplayName, Role: found.Role, TokenID: found.TokenID}
+		scopes, storedHash := found.Scopes, found.StoredHash
 		p.Authenticated = true
 		p.Scopes = scopes
 		if !ring.IsCurrent(token, storedHash) {
 			// Hashed under an older scheme or secret: move it to the current key
 			// now that the plaintext is in hand.
-			if _, err := s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET token_hash=$3, key_id=$4 WHERE id=$1 AND token_hash=$2`, p.TokenID, storedHash, ring.Hash(token), ring.KeyID()); err != nil {
+			if err := s.db.RehashToken(r.Context(), p.TokenID, storedHash, ring.Hash(token), ring.KeyID()); err != nil {
 				s.logger.Warn("token hash could not be moved to the current key", "request_id", requestID(r.Context()))
 			}
 		}
-		if _, err := s.db.SQL.ExecContext(r.Context(), `UPDATE access_tokens SET last_used_at=now() WHERE id=$1 AND (last_used_at IS NULL OR last_used_at < now()-interval '1 minute')`, p.TokenID); err != nil {
+		if err := s.db.TouchToken(r.Context(), p.TokenID); err != nil {
 			s.logger.Warn("token last use could not be recorded", "request_id", requestID(r.Context()))
 		}
 		s.authLookups().put(cacheKey, &p)
@@ -777,19 +771,12 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 	if cached, ok := s.authLookups().get(sessionKey); ok {
 		return cached, nil
 	}
-	var p Principal
-	var status string
-	var digest []byte
-	err = s.db.SQL.QueryRowContext(r.Context(), `SELECT u.id,u.username,u.email,u.display_name,u.role,u.status,ss.token_hash
-		FROM sessions ss JOIN users u ON u.id=ss.user_id
-		WHERE ss.token_hash = ANY($1) AND ss.expires_at>now()`, s.keyRing().HashCandidates(cookie.Value)).
-		Scan(&p.ID, &p.Username, &p.Email, &p.DisplayName, &p.Role, &status, &digest)
-	if err != nil || status != "active" {
+	found, err := s.db.LookupSession(r.Context(), s.keyRing().HashCandidates(cookie.Value))
+	if err != nil || found.Status != "active" {
 		return nil, errUnauthenticated
 	}
-	p.Authenticated = true
-	if _, err := s.db.SQL.ExecContext(r.Context(), `UPDATE sessions SET last_seen_at=now(), expires_at=LEAST(created_at + $2::interval, now() + $1::interval) WHERE token_hash=$3 AND last_seen_at < now()-interval '1 minute'`,
-		s.currentConfig().SessionIdleTTL.String(), s.currentConfig().SessionAbsoluteTTL.String(), digest); err != nil {
+	p := Principal{ID: found.ID, Username: found.Username, Email: found.Email, DisplayName: found.DisplayName, Role: found.Role, Authenticated: true}
+	if err := s.db.TouchSession(r.Context(), found.Hash, s.currentConfig().SessionIdleTTL, s.currentConfig().SessionAbsoluteTTL); err != nil {
 		s.logger.Warn("session activity could not be recorded", "request_id", requestID(r.Context()))
 	}
 	s.authLookups().put(sessionKey, &p)
@@ -813,14 +800,15 @@ func (s *Server) createSession(ctx context.Context, userID string, w http.Respon
 	// holds so a pre-login session identifier can never survive authentication.
 	if r != nil {
 		if old, err := r.Cookie("hfproxy_session"); err == nil && old.Value != "" {
-			_, _ = s.db.SQL.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ANY($1)`, s.keyRing().HashCandidates(old.Value))
+			if err := s.db.DeleteSessions(ctx, s.keyRing().HashCandidates(old.Value)); err != nil {
+				s.logger.Warn("the previous session could not be ended at sign-in", "request_id", requestID(ctx))
+			}
 		}
 	}
 	token := randomSecret(32)
 	csrf := randomSecret(32)
 	ring := s.keyRing()
-	_, err := s.db.SQL.ExecContext(ctx, `INSERT INTO sessions(token_hash,user_id,csrf_hash,expires_at,key_id) VALUES ($1,$2,$3,$4,$5)`,
-		ring.Hash(token), userID, ring.Hash(csrf), time.Now().Add(s.currentConfig().SessionIdleTTL), ring.KeyID())
+	err := s.db.CreateSession(ctx, ring.Hash(token), userID, ring.Hash(csrf), time.Now().Add(s.currentConfig().SessionIdleTTL), ring.KeyID())
 	if err != nil {
 		return "", err
 	}
@@ -856,8 +844,8 @@ func (s *Server) checkCSRF(r *http.Request) bool {
 		return false
 	}
 	ring := s.keyRing()
-	var stored []byte
-	if err := s.db.SQL.QueryRowContext(r.Context(), `SELECT csrf_hash FROM sessions WHERE token_hash = ANY($1) AND expires_at>now()`, ring.HashCandidates(cookie.Value)).Scan(&stored); err != nil {
+	stored, err := s.db.SessionCSRFHash(r.Context(), ring.HashCandidates(cookie.Value))
+	if err != nil {
 		return false
 	}
 	return ring.MatchesAny(provided, stored)
