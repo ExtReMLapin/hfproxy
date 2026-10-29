@@ -27,6 +27,7 @@ All notable changes to hfproxy. The format follows [Keep a Changelog](https://ke
 
 ### Fixed
 
+- **A race in the download limiter could crash the instance.** When a user reached their simultaneous-download limit at the moment another of their downloads finished, the refusal read a map without its lock, which Go treats as a fatal error that takes down every stream of the instance. Introduced with the download limits (unreleased), never in a release.
 - Documentation said a Hub mirror "works" without mentioning that private addresses were refused; it now describes the option above.
 
 ### Tests and CI
