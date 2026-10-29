@@ -219,40 +219,52 @@ type accessError struct {
 }
 
 func (e accessError) Error() string { return e.detail }
+
+// repositoryGrant is what the access check found out about a repository the
+// caller may read.
+type repositoryGrant struct{ ID, Policy, Origin, OwnerID string }
+
 func (s *Server) repositoryAccess(ctx context.Context, p *Principal, authErr error, repoType, repoID string) (string, string, error) {
+	grant, err := s.repositoryAccessInfo(ctx, p, authErr, repoType, repoID)
+	return grant.ID, grant.Policy, err
+}
+
+func (s *Server) repositoryAccessInfo(ctx context.Context, p *Principal, authErr error, repoType, repoID string) (repositoryGrant, error) {
 	repo, err := s.db.FindRepository(ctx, repoType, repoID)
 	if errors.Is(err, db.ErrNotFound) {
-		return "", "", accessError{http.StatusForbidden, "Repository not registered", "This repository has no local access policy."}
+		return repositoryGrant{}, accessError{http.StatusForbidden, "Repository not registered", "This repository has no local access policy."}
 	}
 	if err != nil {
-		return "", "", err
+		return repositoryGrant{}, err
 	}
 	id, policy := repo.ID, repo.Policy
+	granted := repositoryGrant{ID: id, Policy: policy, Origin: repo.Origin, OwnerID: repo.OwnerID}
 	if p == nil {
 		if authErr != errNoCredentials || !s.currentConfig().AnonymousPublicRead || policy != "public" {
-			return "", "", accessError{http.StatusUnauthorized, "Authentication required", "Sign in to access this repository."}
+			return repositoryGrant{}, accessError{http.StatusUnauthorized, "Authentication required", "Sign in to access this repository."}
 		}
-		return id, policy, nil
+		return granted, nil
 	}
 	if p.Role == "admin" {
-		return id, policy, nil
+		return granted, nil
 	}
 	switch policy {
 	case "public":
-		return id, policy, nil
+		return granted, nil
 	case "admin_only":
-		return "", "", accessError{http.StatusForbidden, "Forbidden", "This repository is restricted to administrators."}
+		return repositoryGrant{}, accessError{http.StatusForbidden, "Forbidden", "This repository is restricted to administrators."}
 	case "allowlist":
 		allowed, err := s.db.HasReadGrant(ctx, id, p.ID)
 		if err != nil {
-			return "", "", err
+			return repositoryGrant{}, err
 		}
-		if !allowed {
-			return "", "", accessError{http.StatusForbidden, "Forbidden", "You do not have read access to this repository."}
+		// The person who published a repository can always read it.
+		if !allowed && (repo.OwnerID == "" || repo.OwnerID != p.ID) {
+			return repositoryGrant{}, accessError{http.StatusForbidden, "Forbidden", "You do not have read access to this repository."}
 		}
-		return id, policy, nil
+		return granted, nil
 	}
-	return "", "", accessError{http.StatusForbidden, "Forbidden", "Repository access denied."}
+	return repositoryGrant{}, accessError{http.StatusForbidden, "Forbidden", "Repository access denied."}
 }
 
 func (s *Server) accessProblem(w http.ResponseWriter, r *http.Request, err error) {

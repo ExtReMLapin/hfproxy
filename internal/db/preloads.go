@@ -53,12 +53,12 @@ func (s *Store) CachedFilesAt(ctx context.Context, repoType, repoID, commit stri
 }
 
 // RepositoryAccess is what the access check needs about a repository.
-type RepositoryAccess struct{ ID, Policy string }
+type RepositoryAccess struct{ ID, Policy, Origin, OwnerID string }
 
 // FindRepository returns a live repository by type and name, or ErrNotFound.
 func (s *Store) FindRepository(ctx context.Context, repoType, repoID string) (RepositoryAccess, error) {
 	var a RepositoryAccess
-	err := s.SQL.QueryRowContext(ctx, `SELECT id,access_policy FROM repositories WHERE repo_type=$1 AND repo_id=$2 AND deleted_at IS NULL`, repoType, repoID).Scan(&a.ID, &a.Policy)
+	err := s.SQL.QueryRowContext(ctx, `SELECT id,access_policy,origin,COALESCE(owner_user_id,'') FROM repositories WHERE repo_type=$1 AND repo_id=$2 AND deleted_at IS NULL`, repoType, repoID).Scan(&a.ID, &a.Policy, &a.Origin, &a.OwnerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RepositoryAccess{}, ErrNotFound
 	}

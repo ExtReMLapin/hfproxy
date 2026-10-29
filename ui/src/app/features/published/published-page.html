@@ -1,0 +1,164 @@
+<app-page-heading
+  title="Models and datasets"
+  subtitle="Publish your own models and datasets here. They are served through the same API as the Hugging Face Hub and are never sent to it."
+  eyebrow="Published"
+  i18n-title
+  i18n-subtitle
+  i18n-eyebrow
+/>
+
+@if (list(); as data) {
+  @if (!data.enabled) {
+    <p
+      role="status"
+      class="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+      i18n
+    >
+      Publishing is turned off by an administrator. You can still read what was published.
+    </p>
+  } @else {
+    <section class="mb-6 rounded-2xl border border-slate-200 bg-white p-6">
+      <h2 class="text-sm font-semibold text-slate-900" i18n>New repository</h2>
+      <form
+        #createForm="ngForm"
+        (ngSubmit)="createForm.valid && create()"
+        class="mt-4 flex flex-wrap items-end gap-4"
+      >
+        <label class="text-xs font-semibold text-slate-600" i18n
+          >Type
+          <select
+            name="repoType"
+            [(ngModel)]="draft.repo_type"
+            class="mt-2 block rounded-xl border border-slate-200 px-3 py-2.5 text-sm"
+          >
+            <option value="model">Model</option>
+            <option value="dataset">Dataset</option>
+          </select>
+        </label>
+        <label class="text-xs font-semibold text-slate-600" i18n
+          >Owner
+          <select
+            name="namespace"
+            [(ngModel)]="draft.namespace"
+            class="mt-2 block rounded-xl border border-slate-200 px-3 py-2.5 text-sm"
+          >
+            @for (namespace of data.namespaces; track namespace) {
+              <option [value]="namespace">{{ namespace }}</option>
+            }
+          </select>
+        </label>
+        <label class="min-w-[12rem] flex-1 text-xs font-semibold text-slate-600" i18n
+          >Name
+          <input
+            name="repoName"
+            [(ngModel)]="draft.name"
+            required
+            maxlength="96"
+            pattern="[A-Za-z0-9][A-Za-z0-9._-]*"
+            placeholder="my-model"
+            class="mt-2 block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm"
+          />
+        </label>
+        <label class="flex items-center gap-2 pb-2.5 text-xs font-semibold text-slate-600"
+          ><input type="checkbox" name="repoPrivate" [(ngModel)]="draft.private" /><span i18n
+            >Private</span
+          ></label
+        >
+        <button
+          type="submit"
+          [disabled]="busy() || !createForm.valid || !draft.name.trim()"
+          class="rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+          i18n
+        >
+          Create
+        </button>
+      </form>
+      <p class="mt-3 text-xs leading-5 text-slate-500" i18n>
+        A private repository can only be read by its owner and by the members of the group that owns
+        it.
+      </p>
+    </section>
+  }
+
+  <section class="mb-6 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+    <h2 class="border-b border-slate-100 px-6 py-4 text-sm font-semibold" i18n>Repositories</h2>
+    @if (loading()) {
+      <p class="p-6 text-sm text-slate-500" i18n>Loading…</p>
+    } @else if (data.items.length === 0) {
+      <p class="p-6 text-sm text-slate-500" i18n>
+        Nothing is published yet. Create a repository above, or with the
+        <code>hf</code> command line.
+      </p>
+    } @else {
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-sm">
+          <thead class="bg-slate-50 text-xs text-slate-500">
+            <tr>
+              <th class="p-4" i18n>Repository</th>
+              <th class="p-4" i18n>Type</th>
+              <th class="p-4" i18n>Access</th>
+              <th class="p-4" i18n>Size</th>
+              <th class="p-4" i18n>Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (repo of data.items; track repo.id) {
+              <tr class="border-t border-slate-100">
+                <td class="p-4">
+                  <a
+                    [routerLink]="['/published', repo.id]"
+                    class="font-semibold text-emerald-800 hover:underline"
+                    >{{ repo.repo_id }}</a
+                  >
+                  @if (repo.owner) {
+                    <div class="text-xs text-slate-500">{{ repo.owner }}</div>
+                  }
+                </td>
+                <td class="p-4">{{ typeLabel(repo) }}</td>
+                <td class="p-4">
+                  @if (repo.private) {
+                    <span
+                      class="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800"
+                      i18n
+                      >Private</span
+                    >
+                  } @else {
+                    <span
+                      class="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-800"
+                      i18n
+                      >Shared</span
+                    >
+                  }
+                </td>
+                <td class="p-4">{{ formatBytes(repo.bytes) }}</td>
+                <td class="p-4 text-xs text-slate-500">{{ repo.updated_at | date: 'medium' }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </section>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-6">
+    <h2 class="text-sm font-semibold text-slate-900" i18n>Publish from the command line</h2>
+    <p class="mt-2 text-sm leading-6 text-slate-500" i18n>
+      Create an access token that can publish on the Access tokens page, then use the Hugging Face
+      tools as usual, pointed at this proxy.
+    </p>
+    <pre
+      class="mt-4 overflow-x-auto rounded-xl bg-slate-900 p-4 text-xs leading-5 text-slate-100"
+    ><code>export HF_ENDPOINT={{ endpoint }}
+export HF_TOKEN=hfpx_…
+
+hf repo create my-model
+hf upload my-model ./model-folder .
+hf download my-model</code></pre>
+    <p class="mt-3 text-xs leading-5 text-slate-500" i18n>
+      Files larger than {{ formatBytes(data.max_file) }} are refused.
+      @if (data.quota > 0) {
+        Your storage quota is {{ formatBytes(data.quota) }}.
+      }
+    </p>
+  </section>
+}

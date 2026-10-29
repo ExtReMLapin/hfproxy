@@ -20,6 +20,9 @@ const settings = {
   download_max_concurrent: 0,
   download_rate_limit: 0,
   download_daily_quota: 0,
+  custom_repositories: true,
+  upload_max_file_size: 53687091200,
+  upload_user_quota: 0,
   locked: [] as string[],
 } as unknown as ManagedSettings;
 

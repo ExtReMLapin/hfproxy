@@ -5,6 +5,8 @@ import { AuditPageComponent } from './features/audit/audit-page';
 import { CachePageComponent } from './features/cache/cache-page';
 import { GroupsPageComponent } from './features/groups/groups-page';
 import { OverviewPageComponent } from './features/overview/overview-page';
+import { PublishedDetailPageComponent } from './features/published/published-detail-page';
+import { PublishedPageComponent } from './features/published/published-page';
 import { RepositoriesPageComponent } from './features/repositories/repositories-page';
 import { SettingsPageComponent } from './features/settings/settings-page';
 import { UsersPageComponent } from './features/users/users-page';
@@ -25,6 +27,8 @@ export const routes: Routes = [
     children: [
       { path: '', pathMatch: 'full', redirectTo: 'overview' },
       { path: 'overview', component: OverviewPageComponent },
+      { path: 'published', component: PublishedPageComponent },
+      { path: 'published/:id', component: PublishedDetailPageComponent },
       { path: 'tokens', component: TokensPageComponent },
       { path: 'repositories', component: RepositoriesPageComponent, canActivate: [adminOnly] },
       { path: 'cache', component: CachePageComponent, canActivate: [adminOnly] },

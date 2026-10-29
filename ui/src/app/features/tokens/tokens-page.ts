@@ -30,10 +30,24 @@ export class TokensPageComponent implements OnInit, OnDestroy {
   protected readonly tokens = signal<AccessToken[]>([]);
   protected readonly secret = signal('');
   protected readonly confirming = signal('');
-  protected draft = { name: '', expires_in_days: 90 };
+  protected readonly publishing = signal(false);
+  protected draft = { name: '', expires_in_days: 90, scope: 'read' };
 
   ngOnInit(): void {
     void this.load();
+    void this.loadPublishing();
+  }
+
+  /** Whether this proxy lets people publish, which adds a scope to the form. */
+  private async loadPublishing(): Promise<void> {
+    try {
+      const settings = await this.api.get<{ custom_repositories?: boolean }>(
+        '/api/v1/settings/public',
+      );
+      if (!this.destroyed) this.publishing.set(!!settings.custom_repositories);
+    } catch {
+      // Without it the form simply offers the read-only token.
+    }
   }
 
   ngOnDestroy(): void {
@@ -73,6 +87,7 @@ export class TokensPageComponent implements OnInit, OnDestroy {
       const result = await this.api.post<AccessToken & { token: string }>('/api/v1/me/tokens', {
         name,
         expires_in_days: days,
+        scope: this.publishing() ? this.draft.scope : 'read',
       });
       if (this.destroyed) return;
       this.secret.set(result.token);

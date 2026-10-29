@@ -29,7 +29,7 @@ func (s *Store) CacheStats(ctx context.Context, role, userID string) (Stats, err
 	if err := s.SQL.QueryRowContext(ctx, `SELECT COUNT(*) FROM repositories r WHERE r.deleted_at IS NULL AND `+visible, role, userID).Scan(&st.Repositories); err != nil {
 		return st, err
 	}
-	if err := s.SQL.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(b.size_bytes),0) FROM artifacts a JOIN repositories r ON r.id=a.repository_id JOIN blobs b ON b.id=a.blob_id WHERE r.deleted_at IS NULL AND `+visible, role, userID).Scan(&st.Artifacts, &st.Bytes); err != nil {
+	if err := s.SQL.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(b.size_bytes),0) FROM artifacts a JOIN repositories r ON r.id=a.repository_id JOIN blobs b ON b.id=a.blob_id WHERE r.deleted_at IS NULL AND r.origin='hub' AND `+visible, role, userID).Scan(&st.Artifacts, &st.Bytes); err != nil {
 		return st, err
 	}
 	if err := s.SQL.QueryRowContext(ctx, `SELECT COALESCE(SUM(c.hits),0),COALESCE(SUM(c.misses),0) FROM repository_download_counts c JOIN repositories r ON r.id=c.repository_id WHERE r.deleted_at IS NULL AND `+visible, role, userID).Scan(&st.Hits, &st.Misses); err != nil {
@@ -79,7 +79,7 @@ type CacheEntry struct {
 func (s *Store) SearchCache(ctx context.Context, role, userID, repoFilter, pathFilter string, limit int) ([]CacheEntry, error) {
 	rows, err := s.SQL.QueryContext(ctx, `SELECT a.id,r.repo_type,r.repo_id,a.commit_sha,a.path,b.size_bytes,b.sha256,a.etag,a.cached_at,a.last_accessed_at
 		FROM artifacts a JOIN repositories r ON r.id=a.repository_id JOIN blobs b ON b.id=a.blob_id
-		WHERE r.deleted_at IS NULL AND `+visibleRepository(1, 2)+`
+		WHERE r.deleted_at IS NULL AND r.origin='hub' AND `+visibleRepository(1, 2)+`
 		AND ($3='' OR r.repo_id=$3) AND ($4='' OR strpos(lower(a.path),lower($4))>0) ORDER BY a.cached_at DESC LIMIT $5`, role, userID, repoFilter, pathFilter, limit)
 	if err != nil {
 		return nil, err
@@ -143,7 +143,7 @@ func (s *Store) PurgeArtifact(ctx context.Context, id string) error {
 	// when that no longer matches.
 	for attempt := 0; ; attempt++ {
 		var blobID string
-		if err := tx.QueryRowContext(ctx, `SELECT blob_id FROM artifacts WHERE id=$1`, id).Scan(&blobID); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT a.blob_id FROM artifacts a JOIN repositories r ON r.id=a.repository_id WHERE a.id=$1 AND r.origin='hub'`, id).Scan(&blobID); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNotFound
 			}

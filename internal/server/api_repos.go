@@ -32,7 +32,7 @@ func (s *Server) apiRepos(w http.ResponseWriter, r *http.Request) {
 		}
 		result := make([]map[string]any, 0, len(repos))
 		for _, repo := range repos {
-			result = append(result, map[string]any{"id": repo.ID, "repo_type": repo.Type, "repo_id": repo.RepoID, "access_policy": repo.Policy, "created_at": repo.CreatedAt, "updated_at": repo.UpdatedAt})
+			result = append(result, map[string]any{"id": repo.ID, "repo_type": repo.Type, "repo_id": repo.RepoID, "access_policy": repo.Policy, "origin": repo.Origin, "created_at": repo.CreatedAt, "updated_at": repo.UpdatedAt})
 		}
 		next := ""
 		if len(result) > limit {
@@ -64,6 +64,10 @@ func (s *Server) apiRepos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, err := s.db.UpsertRepository(r.Context(), input.RepoType, input.RepoID, input.AccessPolicy, p.ID)
+	if errors.Is(err, db.ErrExists) {
+		writeProblem(w, r, http.StatusConflict, "Name taken", "A model or dataset published on this proxy already has this name.")
+		return
+	}
 	if err != nil {
 		s.fail(w, r, err, 500, "Database error", "Unable to save repository policy.")
 		return
@@ -106,7 +110,7 @@ func (s *Server) apiRepo(w http.ResponseWriter, r *http.Request, path string) {
 			s.fail(w, r, err, 500, "Database error", "Unable to load repository.")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"id": id, "repo_type": repo.Type, "repo_id": repo.RepoID, "access_policy": repo.Policy, "created_at": repo.CreatedAt, "updated_at": repo.UpdatedAt})
+		writeJSON(w, 200, map[string]any{"id": id, "repo_type": repo.Type, "repo_id": repo.RepoID, "access_policy": repo.Policy, "origin": repo.Origin, "created_at": repo.CreatedAt, "updated_at": repo.UpdatedAt})
 	case http.MethodPatch:
 		var input struct {
 			AccessPolicy string `json:"access_policy"`
@@ -129,7 +133,13 @@ func (s *Server) apiRepo(w http.ResponseWriter, r *http.Request, path string) {
 		s.audit(r.Context(), p.ID, "repository.policy.update", "repository", id, map[string]any{"access_policy": input.AccessPolicy})
 		writeJSON(w, 200, map[string]string{"id": id, "access_policy": input.AccessPolicy})
 	case http.MethodDelete:
-		if err := s.db.DeleteRepository(r.Context(), id); err != nil {
+		deleteRepository := s.db.DeleteRepository
+		if repo, err := s.db.GetRepository(r.Context(), id); err == nil && repo.Origin == "local" {
+			// A published repository is removed with its history, not hidden.
+			deleteRepository = s.db.DeleteLocalRepository
+			s.forgetCredentials(r.Context())
+		}
+		if err := deleteRepository(r.Context(), id); err != nil {
 			var stage *db.StageError
 			switch {
 			case errors.Is(err, db.ErrNotFound):

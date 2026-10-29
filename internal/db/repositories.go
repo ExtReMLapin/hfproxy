@@ -10,7 +10,10 @@ import (
 // Repository is a registered Hub repository and its access policy.
 type Repository struct {
 	ID, Type, RepoID, Policy string
-	CreatedAt, UpdatedAt     time.Time
+	// Origin is "hub" for a repository cached from the Hub and "local" for one
+	// published on this proxy; OwnerID is who published it.
+	Origin, OwnerID      string
+	CreatedAt, UpdatedAt time.Time
 }
 
 // Grant gives a user or group a permission on a repository.
@@ -27,7 +30,7 @@ func (s *Store) ListRepositories(ctx context.Context, role, userID string, after
 		args = append(args, after[0], after[1], after[2])
 	}
 	args = append(args, limit)
-	rows, err := s.SQL.QueryContext(ctx, `SELECT r.id,r.repo_type,r.repo_id,r.access_policy,r.created_at,r.updated_at
+	rows, err := s.SQL.QueryContext(ctx, `SELECT r.id,r.repo_type,r.repo_id,r.access_policy,r.origin,COALESCE(r.owner_user_id,''),r.created_at,r.updated_at
 		FROM repositories r WHERE r.deleted_at IS NULL AND ($1='admin' OR r.access_policy='public' OR (r.access_policy='allowlist' AND (EXISTS(SELECT 1 FROM repo_grants g WHERE g.repository_id=r.id AND g.subject_type='user' AND g.subject_id=$2) OR EXISTS(SELECT 1 FROM repo_grants g JOIN group_members m ON m.group_id=g.subject_id WHERE g.repository_id=r.id AND g.subject_type='group' AND m.user_id=$2))))`+cursorWhere+`
 		ORDER BY r.repo_type,r.repo_id,r.id LIMIT $`+itoa(len(args)), args...)
 	if err != nil {
@@ -37,26 +40,30 @@ func (s *Store) ListRepositories(ctx context.Context, role, userID string, after
 	var repos []Repository
 	for rows.Next() {
 		var r Repository
-		if rows.Scan(&r.ID, &r.Type, &r.RepoID, &r.Policy, &r.CreatedAt, &r.UpdatedAt) == nil {
+		if rows.Scan(&r.ID, &r.Type, &r.RepoID, &r.Policy, &r.Origin, &r.OwnerID, &r.CreatedAt, &r.UpdatedAt) == nil {
 			repos = append(repos, r)
 		}
 	}
 	return repos, rows.Err()
 }
 
-// UpsertRepository registers a repository or updates its policy and restores
-// it when it was deleted. It returns the repository's id.
+// UpsertRepository registers a repository cached from the Hub or updates its
+// policy and restores it when it was deleted. It returns the repository's id.
+// A name taken by a repository published on this proxy is ErrExists.
 func (s *Store) UpsertRepository(ctx context.Context, repoType, repoID, policy, createdBy string) (string, error) {
 	var id string
 	err := s.SQL.QueryRowContext(ctx, `INSERT INTO repositories(id,repo_type,repo_id,access_policy,created_by) VALUES($1,$2,$3,$4,$5)
-		ON CONFLICT(repo_type,repo_id) DO UPDATE SET access_policy=EXCLUDED.access_policy,deleted_at=NULL,updated_at=now() RETURNING id`, NewID(), repoType, repoID, policy, createdBy).Scan(&id)
+		ON CONFLICT(repo_type,repo_id) DO UPDATE SET access_policy=EXCLUDED.access_policy,deleted_at=NULL,updated_at=now() WHERE repositories.origin='hub' RETURNING id`, NewID(), repoType, repoID, policy, createdBy).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrExists
+	}
 	return id, err
 }
 
 // GetRepository returns a live repository by id, or ErrNotFound.
 func (s *Store) GetRepository(ctx context.Context, id string) (Repository, error) {
 	r := Repository{ID: id}
-	err := s.SQL.QueryRowContext(ctx, `SELECT repo_type,repo_id,access_policy,created_at,updated_at FROM repositories WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&r.Type, &r.RepoID, &r.Policy, &r.CreatedAt, &r.UpdatedAt)
+	err := s.SQL.QueryRowContext(ctx, `SELECT repo_type,repo_id,access_policy,origin,COALESCE(owner_user_id,''),created_at,updated_at FROM repositories WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&r.Type, &r.RepoID, &r.Policy, &r.Origin, &r.OwnerID, &r.CreatedAt, &r.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Repository{}, ErrNotFound
 	}

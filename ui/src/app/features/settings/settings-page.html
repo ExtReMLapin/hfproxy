@@ -723,6 +723,58 @@
               </div>
             </section>
           }
+          @case ('publishing') {
+            <section
+              class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] sm:p-7"
+            >
+              <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700" i18n>
+                Your own models and datasets
+              </p>
+              <h2 class="mt-1 text-lg font-semibold text-slate-950" i18n>Publishing</h2>
+              <p class="mt-1 max-w-2xl text-xs leading-5 text-slate-500" i18n>
+                Users can publish models and datasets on this proxy, under their own name or a
+                group's, with the Hugging Face tools or from the console. Nothing is pushed to
+                Hugging Face. Publishing needs an access token that can publish.
+              </p>
+              <label class="toggle-row mt-6"
+                ><input
+                  type="checkbox"
+                  name="customRepositories"
+                  [(ngModel)]="settings.custom_repositories"
+                  [disabled]="isLocked('custom_repositories')"
+                /><span i18n>Allow users to publish models and datasets</span></label
+              >
+              <div class="mt-6 grid gap-4 sm:grid-cols-2">
+                <label class="field" i18n
+                  >Largest file <span class="font-normal text-slate-400">(bytes)</span
+                  ><input
+                    class="control"
+                    name="uploadMaxFileSize"
+                    type="number"
+                    min="1"
+                    [(ngModel)]="settings.upload_max_file_size"
+                    [disabled]="isLocked('upload_max_file_size')"
+                  /><span class="mt-1 block text-[11px] font-normal leading-4 text-slate-500"
+                    >For example, 53687091200 is 50 GiB. The object store allows at most 625
+                    GiB.</span
+                  ></label
+                ><label class="field" i18n
+                  >Storage quota per user <span class="font-normal text-slate-400">(bytes)</span
+                  ><input
+                    class="control"
+                    name="uploadUserQuota"
+                    type="number"
+                    min="0"
+                    [(ngModel)]="settings.upload_user_quota"
+                    [disabled]="isLocked('upload_user_quota')"
+                  /><span class="mt-1 block text-[11px] font-normal leading-4 text-slate-500"
+                    >Counted over the repositories a user created, each distinct file once. 0 means
+                    no quota. Published files are never removed to make room.</span
+                  ></label
+                >
+              </div>
+            </section>
+          }
           @case ('observability') {
             <section
               class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-900/[0.02] sm:p-7"

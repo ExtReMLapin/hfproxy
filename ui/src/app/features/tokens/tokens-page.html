@@ -39,8 +39,8 @@
 <section class="mb-6 rounded-2xl border border-slate-200 bg-white p-6">
   <h2 class="text-sm font-semibold text-slate-900" i18n>Create an access token</h2>
   <p class="mt-2 text-sm text-slate-500" i18n>
-    Tokens created here are read-only and can download from repositories your account is allowed to
-    access.
+    A token can download from the repositories your account is allowed to read. A token that can
+    also publish may create and change the models and datasets you are allowed to publish.
   </p>
   <form
     #tokenForm="ngForm"
@@ -58,6 +58,19 @@
         class="mt-2 block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm"
       />
     </label>
+    @if (publishing()) {
+      <label class="text-xs font-semibold text-slate-600" i18n
+        >Can
+        <select
+          name="scope"
+          [(ngModel)]="draft.scope"
+          class="mt-2 block rounded-xl border border-slate-200 px-3 py-2.5 text-sm"
+        >
+          <option value="read">Download only</option>
+          <option value="publish">Download and publish</option>
+        </select>
+      </label>
+    }
     <label class="text-xs font-semibold text-slate-600" i18n
       >Expires in
       <select

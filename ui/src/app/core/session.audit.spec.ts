@@ -31,7 +31,11 @@ describe('AuditUI session handling', () => {
 
   beforeEach(async () => {
     TestBed.configureTestingModule({
-      providers: [provideHttpClient(withInterceptors([sessionInterceptor])), provideHttpClientTesting(), provideRouter([{ path: 'login', component: LoginStub }])],
+      providers: [
+        provideHttpClient(withInterceptors([sessionInterceptor])),
+        provideHttpClientTesting(),
+        provideRouter([{ path: 'login', component: LoginStub }]),
+      ],
     });
     http = TestBed.inject(HttpTestingController);
     auth = TestBed.inject(AuthService);
@@ -48,13 +52,11 @@ describe('AuditUI session handling', () => {
 
   it('AuditUI: a 401 problem+json from the admin API (expired session) signs the user out of the UI', async () => {
     const pending = api.get('/api/v1/users').catch(() => undefined);
-    http
-      .expectOne('/api/v1/users')
-      .flush(problem401, {
-        status: 401,
-        statusText: 'Unauthorized',
-        headers: { 'Content-Type': 'application/problem+json' },
-      });
+    http.expectOne('/api/v1/users').flush(problem401, {
+      status: 401,
+      statusText: 'Unauthorized',
+      headers: { 'Content-Type': 'application/problem+json' },
+    });
     await pending;
     await flushMicrotasks();
     // Expected: session expiry is detected globally (interceptor) and the UI returns to the
@@ -65,13 +67,11 @@ describe('AuditUI session handling', () => {
   it('Issue94UI: an anonymous 401 does not report an expired session', async () => {
     auth.principal.set(null);
     const pending = api.get('/api/v1/users').catch(() => undefined);
-    http
-      .expectOne('/api/v1/users')
-      .flush(problem401, {
-        status: 401,
-        statusText: 'Unauthorized',
-        headers: { 'Content-Type': 'application/problem+json' },
-      });
+    http.expectOne('/api/v1/users').flush(problem401, {
+      status: 401,
+      statusText: 'Unauthorized',
+      headers: { 'Content-Type': 'application/problem+json' },
+    });
     await pending;
     expect(auth.error()).toBe('');
   });
@@ -79,14 +79,18 @@ describe('AuditUI session handling', () => {
   it('AuditUI: sign-out reports a failure when the server refuses to revoke the session', async () => {
     document.cookie = 'hfproxy_csrf=stale-token; path=/';
     const pending = auth.signOut();
-    http
-      .expectOne('/logout')
-      .flush(
-        { title: 'CSRF validation failed', status: 403, detail: 'Reload the page and retry the action.' },
-        { status: 403, statusText: 'Forbidden' },
-      );
+    http.expectOne('/logout').flush(
+      {
+        title: 'CSRF validation failed',
+        status: 403,
+        detail: 'Reload the page and retry the action.',
+      },
+      { status: 403, statusText: 'Forbidden' },
+    );
     await flushMicrotasks();
-    http.match('/api/v1/auth/providers').forEach((r) => r.flush({ local: true, oidc: false, ldap: false }));
+    http
+      .match('/api/v1/auth/providers')
+      .forEach((r) => r.flush({ local: true, oidc: false, ldap: false }));
     await pending;
     // Expected: the user is told logout failed (the HttpOnly session cookie is still valid
     // server-side). Actual: every error is swallowed and the UI pretends to be signed out.
@@ -94,4 +98,3 @@ describe('AuditUI session handling', () => {
     expect(feedback.error()).toBe('Reload the page and retry the action.');
   });
 });
-

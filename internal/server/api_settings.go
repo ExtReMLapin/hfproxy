@@ -38,6 +38,9 @@ type settingsResponse struct {
 	DownloadMaxConcurrent  int64    `json:"download_max_concurrent"`
 	DownloadRateLimit      int64    `json:"download_rate_limit"`
 	DownloadDailyQuota     int64    `json:"download_daily_quota"`
+	CustomRepos            bool     `json:"custom_repositories"`
+	UploadMaxFileSize      int64    `json:"upload_max_file_size"`
+	UploadUserQuota        int64    `json:"upload_user_quota"`
 	CacheRefTTL            string   `json:"cache_ref_ttl"`
 	CacheNegativeTTL       string   `json:"cache_negative_ttl"`
 	CacheGCGrace           string   `json:"cache_gc_grace"`
@@ -95,6 +98,9 @@ type settingsInput struct {
 	DownloadMaxConcurrent  *int64   `json:"download_max_concurrent"`
 	DownloadRateLimit      *int64   `json:"download_rate_limit"`
 	DownloadDailyQuota     *int64   `json:"download_daily_quota"`
+	CustomRepos            *bool    `json:"custom_repositories"`
+	UploadMaxFileSize      *int64   `json:"upload_max_file_size"`
+	UploadUserQuota        *int64   `json:"upload_user_quota"`
 	CacheRefTTL            string   `json:"cache_ref_ttl"`
 	CacheNegativeTTL       string   `json:"cache_negative_ttl"`
 	CacheGCGrace           string   `json:"cache_gc_grace"`
@@ -131,7 +137,7 @@ func settingsView(cfg config.Config) settingsResponse {
 		PublicURL: cfg.PublicURL, HFBaseURL: cfg.HFBaseURL, HFProxySet: cfg.HFProxyURL != "", HFAllowedHosts: cfg.HFAllowedHosts, HFTimeout: cfg.HFTimeout.String(), HFTokenSet: cfg.HFToken != "",
 		S3Endpoint: cfg.S3Endpoint, S3Region: cfg.S3Region, S3Bucket: cfg.S3Bucket, S3Prefix: cfg.S3Prefix, S3ForcePathStyle: cfg.S3ForcePathStyle, S3ServerSideEncryption: cfg.S3ServerSideEncryption,
 		S3AccessKeySet: cfg.S3AccessKey != "", S3SecretKeySet: cfg.S3SecretKey != "", AuthMode: cfg.AuthMode, AnonymousPublicRead: cfg.AnonymousPublicRead,
-		SessionIdleTTL: cfg.SessionIdleTTL.String(), SessionAbsoluteTTL: cfg.SessionAbsoluteTTL.String(), CacheMaxFileSize: cfg.CacheMaxFileSize, CacheMaxTotalSize: cfg.CacheMaxTotalSize, DownloadMaxConcurrent: cfg.DownloadMaxConcurrent, DownloadRateLimit: cfg.DownloadRateLimit, DownloadDailyQuota: cfg.DownloadDailyQuota,
+		SessionIdleTTL: cfg.SessionIdleTTL.String(), SessionAbsoluteTTL: cfg.SessionAbsoluteTTL.String(), CacheMaxFileSize: cfg.CacheMaxFileSize, CacheMaxTotalSize: cfg.CacheMaxTotalSize, DownloadMaxConcurrent: cfg.DownloadMaxConcurrent, DownloadRateLimit: cfg.DownloadRateLimit, DownloadDailyQuota: cfg.DownloadDailyQuota, CustomRepos: cfg.CustomRepos, UploadMaxFileSize: cfg.MaxUploadFileSize(), UploadUserQuota: cfg.UploadUserQuota,
 		CacheRefTTL: cfg.CacheRefTTL.String(), CacheNegativeTTL: cfg.CacheNegativeTTL.String(), CacheGCGrace: cfg.CacheGCGrace.String(),
 		OIDCIssuer: cfg.OIDCIssuer, OIDCClientID: cfg.OIDCClientID, OIDCClientSecretSet: cfg.OIDCClientSecret != "", OIDCRedirectURL: cfg.OIDCRedirectURL,
 		OIDCAutoProvision: cfg.OIDCAutoProvision, LDAPURL: cfg.LDAPURL, LDAPStartTLS: cfg.LDAPStartTLS, LDAPBindDN: cfg.LDAPBindDN,
@@ -276,6 +282,7 @@ func (in settingsInput) apply(cfg config.Config) (config.Config, error) {
 		{"concurrent downloads per user", in.DownloadMaxConcurrent, &cfg.DownloadMaxConcurrent},
 		{"download speed limit", in.DownloadRateLimit, &cfg.DownloadRateLimit},
 		{"daily download quota", in.DownloadDailyQuota, &cfg.DownloadDailyQuota},
+		{"upload quota per user", in.UploadUserQuota, &cfg.UploadUserQuota},
 	} {
 		if limit.input == nil {
 			continue
@@ -284,6 +291,15 @@ func (in settingsInput) apply(cfg config.Config) (config.Config, error) {
 			return config.Config{}, fmt.Errorf("the %s cannot be negative", limit.name)
 		}
 		*limit.field = *limit.input
+	}
+	if in.CustomRepos != nil {
+		cfg.CustomRepos = *in.CustomRepos
+	}
+	if in.UploadMaxFileSize != nil {
+		if *in.UploadMaxFileSize < 0 || *in.UploadMaxFileSize > config.MaxCacheFileSize {
+			return config.Config{}, fmt.Errorf("the largest published file cannot be negative or above %d bytes", config.MaxCacheFileSize)
+		}
+		cfg.UploadMaxFileSize = *in.UploadMaxFileSize
 	}
 	cfg.SessionIdleTTL, err = parseDuration("session idle TTL", in.SessionIdleTTL, cfg.SessionIdleTTL)
 	if err != nil {

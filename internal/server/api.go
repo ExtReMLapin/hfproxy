@@ -119,6 +119,8 @@ func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {
 		s.apiStats(w, r)
 	case path == "downloads/active" && r.Method == http.MethodGet:
 		s.apiActiveDownloads(w, r)
+	case path == "published" || strings.HasPrefix(path, "published/"):
+		s.apiPublished(w, r, strings.TrimPrefix(path, "published"))
 	case path == "repos":
 		s.apiRepos(w, r)
 	case strings.HasPrefix(path, "repos/"):
@@ -144,7 +146,7 @@ func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {
 	case path == "audit-events" && r.Method == http.MethodGet:
 		s.apiAudit(w, r)
 	case path == "settings/public" && r.Method == http.MethodGet:
-		writeJSON(w, http.StatusOK, map[string]any{"auth_mode": s.currentConfig().AuthMode, "anonymous_public_read": s.currentConfig().AnonymousPublicRead, "oidc_enabled": s.currentOIDCConfig() != nil, "ldap_enabled": s.currentConfig().LDAPURL != "", "ldap_auto_provision": s.currentConfig().LDAPAutoProvision, "s3_enabled": true, "hub_base_url": s.currentConfig().HFBaseURL, "presigned_urls": false})
+		writeJSON(w, http.StatusOK, map[string]any{"auth_mode": s.currentConfig().AuthMode, "anonymous_public_read": s.currentConfig().AnonymousPublicRead, "oidc_enabled": s.currentOIDCConfig() != nil, "ldap_enabled": s.currentConfig().LDAPURL != "", "ldap_auto_provision": s.currentConfig().LDAPAutoProvision, "s3_enabled": true, "hub_base_url": s.currentConfig().HFBaseURL, "presigned_urls": false, "custom_repositories": s.currentConfig().CustomRepos})
 	case path == "settings":
 		s.apiSettings(w, r)
 	case path == "settings/test-s3" && r.Method == http.MethodPost:

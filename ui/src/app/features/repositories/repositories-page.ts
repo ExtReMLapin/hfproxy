@@ -1,6 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { AdminApiService } from '../../core/admin-api.service';
 import { AuthService } from '../../core/auth.service';
 import { FeedbackService } from '../../core/feedback.service';
@@ -13,7 +14,7 @@ import { PageHeadingComponent } from '../../shared/page-heading/page-heading';
 @Component({
   selector: 'app-repositories-page',
   standalone: true,
-  imports: [CommonModule, FormsModule, IconComponent, PageHeadingComponent],
+  imports: [CommonModule, FormsModule, IconComponent, PageHeadingComponent, RouterLink],
   templateUrl: './repositories-page.html',
 })
 export class RepositoriesPageComponent implements OnInit, OnDestroy {

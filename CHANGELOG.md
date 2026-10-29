@@ -6,6 +6,7 @@ All notable changes to hfproxy. The format follows [Keep a Changelog](https://ke
 
 ### Added
 
+- **Publishing models and datasets on the proxy.** Users can create, fill, read and delete their own models and datasets with `huggingface_hub`, the `hf` command or the console, under their name or a group's, public or private, with branches, tags, history, Git LFS for large files and model cards. Nothing is sent to Hugging Face. It has a storage quota per user and a file size limit, a `publish` token scope, and a *Models & datasets* page with upload, folders, README rendering and history. Commits store only what changed, with periodic snapshots. See [docs/publishing.md](docs/publishing.md). A user and a group can no longer share a name (migrations 16).
 - **First administrator from the console.** A new instance offers a setup page; the setup code is printed at start (or fixed with `HFPROXY_SETUP_TOKEN`), and the page closes once an administrator exists.
 - **API and download-path logging with a level that can be changed at run time** (`HFPROXY_LOG_LEVEL`, or Settings → Observability). Errors carry their cause, requests are logged, administrative actions are audited in the log, and the download path logs hits, Hub answers and failures.
 - **Download limits**, all off by default and editable in the console: simultaneous downloads per user (or per address), speed per transfer, and a daily quota per user, with a per-user override. A refusal is a `429` with `Retry-After` and is counted in `hfproxy_download_rejected_total`.

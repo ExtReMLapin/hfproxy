@@ -42,7 +42,7 @@ func newMetrics() *metrics {
 		"hfproxy_download_rejected_total": {"reason"}, "hfproxy_downloads_total": {"result"}, "hfproxy_download_bytes_total": {"source"}, "hfproxy_download_failures_total": {"reason"},
 		"hfproxy_storage_operations_total": {"operation", "result"}, "hfproxy_storage_errors_total": {"operation"}, "hfproxy_storage_bytes_transferred_total": {"operation"},
 		"hfproxy_retention_deleted_total": {"table"}, "hfproxy_cache_evictions_total": {},
-		"hfproxy_gc_runs_total": {"result"}, "hfproxy_gc_blobs_deleted_total": {}, "hfproxy_cache_object_repairs_total": {},
+		"hfproxy_gc_runs_total": {"result"}, "hfproxy_gc_blobs_deleted_total": {}, "hfproxy_cache_object_repairs_total": {}, "hfproxy_published_bytes_total": {}, "hfproxy_published_commits_total": {},
 		"hfproxy_api_cache_requests_total": {"result"}, "hfproxy_upstream_breaker_opened_total": {"host"}, "hfproxy_upstream_breaker_rejected_total": {"host"},
 	} {
 		v := prometheus.NewCounterVec(prometheus.CounterOpts{Name: name, Help: name + " measured by hfproxy."}, labels)

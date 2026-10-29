@@ -47,6 +47,50 @@ export class AdminApiService {
     return firstValueFrom(this.http.delete<T>(url, { headers: this.csrfHeaders() }));
   }
 
+  /**
+   * Sends a form (a file upload) and reports its progress. The browser's fetch
+   * cannot, so this uses XMLHttpRequest; the answer and the errors are read the
+   * same way as for the other calls.
+   */
+  upload<T = unknown>(
+    url: string,
+    form: FormData,
+    onProgress: (sent: number, total: number) => void,
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      request.open('POST', url);
+      request.setRequestHeader('X-CSRF-Token', this.cookie('hfproxy_csrf'));
+      request.setRequestHeader('Accept', 'application/json');
+      request.upload.onprogress = (event) => {
+        if (event.lengthComputable) onProgress(event.loaded, event.total);
+      };
+      request.onerror = () => reject(new Error($localize`The upload failed: network error.`));
+      request.onabort = () => reject(new Error($localize`The upload was cancelled.`));
+      request.onload = () => {
+        let body: unknown = request.responseText;
+        try {
+          body = JSON.parse(request.responseText);
+        } catch {
+          // Keep the text: it is read as an error message below.
+        }
+        if (request.status >= 200 && request.status < 300) {
+          resolve(body as T);
+          return;
+        }
+        reject(
+          new HttpErrorResponse({
+            status: request.status,
+            statusText: request.statusText,
+            error: body,
+            url,
+          }),
+        );
+      };
+      request.send(form);
+    });
+  }
+
   static errorMessage(error: unknown, fallback: string): string {
     if (error instanceof HttpErrorResponse) {
       const body = error.error as { detail?: string; title?: string } | string;

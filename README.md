@@ -122,6 +122,7 @@ Environment variables use the `HFPROXY_` prefix. Common settings for local Compo
 | Cache limits | CACHE_MAX_FILE_SIZE, CACHE_REF_TTL, CACHE_NEGATIVE_TTL, CACHE_GC_GRACE |
 | Capacity and retention | CACHE_MAX_TOTAL_SIZE, CACHE_FILL_CONCURRENCY, STAGING_DIR, STAGING_MIN_FREE_BYTES, RETENTION_DOWNLOADS, RETENTION_AUDIT |
 | Metrics | METRICS_ENABLED, METRICS_PATH, METRICS_ADDR |
+| Publishing | CUSTOM_REPOSITORIES, UPLOAD_MAX_FILE_SIZE, UPLOAD_USER_QUOTA (also in the console, see [Publishing](docs/publishing.md#limits)) |
 | Hub resilience | UPSTREAM_BREAKER_THRESHOLD, UPSTREAM_BREAKER_COOLDOWN, API_CACHE_MAX_BYTES, API_CACHE_MAX_STALE |
 
 PostgreSQL is required. The S3 bucket must exist, remain private, and allow the service identity to read, write, and delete objects. Standard AWS credentials (IAM role, AWS environment variables, or a mounted profile) work when the S3 access key variables are unset. Use `S3_FORCE_PATH_STYLE=true` with the local Garage endpoint. Garage does not implement S3-managed AES256 encryption, so the Compose setup disables the `S3_SERVER_SIDE_ENCRYPTION` request header; use encrypted disks for at-rest encryption. Other S3 services can keep that option enabled if they support it.
@@ -196,6 +197,10 @@ The operations API is under `/api/v1` and covers identity and providers, statist
 
 A cache hit never bypasses authorization. Anonymous reads apply only to repositories explicitly registered as public. An allowlist policy grants access to explicitly authorized local users and groups; `admin_only` is the default policy.
 
+### Publishing your own models and datasets
+
+Users can also publish models and datasets on the proxy, with the Hugging Face tools or from the console, under their own name or a group's. They are stored in your bucket, served through the same API as the Hub (`HF_ENDPOINT` is all a client needs) and never sent to Hugging Face. See [Publishing models and datasets](docs/publishing.md) for who can publish where, visibility, limits, what is not supported (Xet, `git`, pull requests) and how it is stored and backed up.
+
 ## Containers and operations
 
 The multi-stage Dockerfile builds a static binary and runs the final image as UID 65532. `docker-compose.test.yml` adds a Keycloak, a Prometheus and a Grafana to try sign-in and monitoring locally (see [docs/testing-stack.md](docs/testing-stack.md)). `docker-compose.yml` is a local development environment with PostgreSQL and single-node Garage; it binds the proxy port to loopback only. Garage's single-node development setup has no redundancy and is not a production storage deployment. The development compose file has no built-in credentials: it needs the `.env` created from `.env.example`. `docker-compose.example.yml` (with `Caddyfile.example`) demonstrates secret injection through `*_FILE`, PostgreSQL with `sslmode=verify-full`, `HFPROXY_TRUSTED_PROXIES` and TLS termination by a reverse proxy. The server refuses to start with the published development secrets unless it is bound to loopback.
@@ -237,7 +242,7 @@ Health endpoints: `/healthz` provides liveness without dependency checks; `/read
 
 See [Observability](docs/observability.md) for the Prometheus endpoint and current metric coverage.
 
-- Native Xet/CAS, uploads, repository write operations, inference, and Spaces execution are not supported.
+- Native Xet/CAS, inference, and Spaces execution are not supported. Uploads and repository writes exist only for repositories published on the proxy itself ([Publishing](docs/publishing.md)); the Hub is never written to.
 - The reference TTL applies to cache reads; a cache miss may still query the Hub API for metadata and to confirm the SHA before downloading.
 - OIDC verifies identities and sessions, but IdP group claims are not automatically mapped to local groups.
 - LDAP supports LDAPS/StartTLS and user binds; Active Directory group synchronization is not included.

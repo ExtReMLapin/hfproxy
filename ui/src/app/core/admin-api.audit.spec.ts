@@ -28,13 +28,17 @@ describe('AdminApiService cursor pagination', () => {
       next_cursor: 'opaque|cursor',
     });
     await flushMicrotasks();
-    http.expectOne((request) => {
-      const [path, query = ''] = request.urlWithParams.split('?');
-      return path === '/api/v1/groups' && new URLSearchParams(query).get('cursor') === 'opaque|cursor';
-    }).flush({
-      items: [{ id: 'second' }],
-      next_cursor: '',
-    });
+    http
+      .expectOne((request) => {
+        const [path, query = ''] = request.urlWithParams.split('?');
+        return (
+          path === '/api/v1/groups' && new URLSearchParams(query).get('cursor') === 'opaque|cursor'
+        );
+      })
+      .flush({
+        items: [{ id: 'second' }],
+        next_cursor: '',
+      });
     expect(await pending).toEqual([{ id: 'first' }, { id: 'second' }]);
   });
 });

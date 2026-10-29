@@ -61,6 +61,10 @@ func (s *Server) startRepoPreload(w http.ResponseWriter, r *http.Request, reposi
 		writeProblem(w, r, http.StatusNotFound, "Repository not found", "The repository does not exist.")
 		return
 	}
+	if err == nil && repository.Origin == "local" {
+		writeProblem(w, r, http.StatusBadRequest, "Nothing to preload", "This repository is published on this proxy: it has no copy on the Hub to fetch.")
+		return
+	}
 	if err != nil {
 		s.fail(w, r, err, http.StatusInternalServerError, "Database error", "Unable to load the repository.")
 		return

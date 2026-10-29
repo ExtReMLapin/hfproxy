@@ -14,11 +14,15 @@ func (s *Store) BlobTotals(ctx context.Context) (count, size int64, err error) {
 	return count, size, err
 }
 
-// LiveBytes is the size of the blobs that artifacts still use or may use (not
-// yet marked orphaned).
+// LiveBytes is the size of the cached blobs that eviction may reclaim: the
+// blobs of files cached from the Hub (not yet marked orphaned) that no
+// published repository uses. Published content is never evicted, so it does not
+// count against the cache size limit.
 func (s *Store) LiveBytes(ctx context.Context) (int64, error) {
 	var total int64
-	err := s.SQL.QueryRowContext(ctx, `SELECT COALESCE(SUM(size_bytes),0) FROM blobs WHERE orphaned_at IS NULL`).Scan(&total)
+	err := s.SQL.QueryRowContext(ctx, `SELECT COALESCE(SUM(b.size_bytes),0) FROM blobs b WHERE b.orphaned_at IS NULL
+		AND EXISTS (SELECT 1 FROM artifacts a JOIN repositories r ON r.id=a.repository_id WHERE a.blob_id=b.id AND r.origin='hub')
+		AND NOT EXISTS (SELECT 1 FROM artifacts a JOIN repositories r ON r.id=a.repository_id WHERE a.blob_id=b.id AND r.origin='local')`).Scan(&total)
 	return total, err
 }
 
@@ -35,8 +39,8 @@ type EvictionCandidate struct{ ArtifactID, BlobID string }
 
 // EvictionCandidates returns up to limit unpinned artifacts, oldest access first.
 func (s *Store) EvictionCandidates(ctx context.Context, limit int) ([]EvictionCandidate, error) {
-	rows, err := s.SQL.QueryContext(ctx, `SELECT a.id,a.blob_id FROM artifacts a
-		WHERE NOT EXISTS (`+PinnedArtifactSQL+`)
+	rows, err := s.SQL.QueryContext(ctx, `SELECT a.id,a.blob_id FROM artifacts a JOIN repositories r ON r.id=a.repository_id
+		WHERE r.origin='hub' AND NOT EXISTS (`+PinnedArtifactSQL+`)
 		ORDER BY a.last_accessed_at ASC, a.id LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
