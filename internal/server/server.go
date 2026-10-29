@@ -375,17 +375,49 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+		listeners := 1
 		if metricsServer != nil {
-			_ = metricsServer.Shutdown(shutdownCtx)
+			listeners++
 		}
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			_ = server.Close()
-			return err
+		s.drain(server, metricsServer, s.currentConfig().ShutdownGrace)
+		// Each listener reports http.ErrServerClosed once it is shut down: that is
+		// the expected end of a stop, not a failure.
+		var failure error
+		for i := 0; i < listeners; i++ {
+			if err := <-errCh; err != nil && !errors.Is(err, http.ErrServerClosed) && failure == nil {
+				failure = err
+			}
 		}
-		return <-errCh
+		return failure
 	}
+}
+
+// drain stops accepting connections and gives requests in progress up to grace
+// to finish. Requests still running after that, typically very long downloads,
+// are cut and counted in the log; a stop requested by the operator is not an
+// error either way.
+func (s *Server) drain(server, metricsServer *http.Server, grace time.Duration) {
+	if grace <= 0 {
+		grace = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	s.logger.Info("shutting down", "grace", grace.String())
+	if metricsServer != nil {
+		_ = metricsServer.Shutdown(ctx)
+	}
+	if err := server.Shutdown(ctx); err != nil {
+		s.metrics.mu.Lock()
+		cut := s.metrics.inFlight
+		s.metrics.mu.Unlock()
+		_ = server.Close()
+		if metricsServer != nil {
+			_ = metricsServer.Close()
+		}
+		s.logger.Warn("shutdown grace expired, requests in progress were cut", "grace", grace.String(), "requests_cut", cut, "error", err.Error())
+		return
+	}
+	s.logger.Info("shutdown complete")
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
