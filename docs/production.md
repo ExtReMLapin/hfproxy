@@ -39,3 +39,7 @@ Back up PostgreSQL and the S3 bucket together and restore them from the same poi
 - [operations.md](operations.md): upgrades, rollbacks, incidents and service levels.
 - [threat-model.md](threat-model.md): what hfproxy defends against.
 - [prometheus-alerts.yml](prometheus-alerts.yml): example alert rules.
+
+## Upstream ports
+
+hfproxy connects to the Hub, and to the hosts the Hub redirects to, on port 443 only (port 80 on loopback for development). The exception is the host and port of `HFPROXY_HF_BASE_URL` itself: pointing it at an internal mirror or artifact repository such as `https://mirror.example.com:8443` works, and only that exact host and port. Redirects to any other non-standard port are refused.

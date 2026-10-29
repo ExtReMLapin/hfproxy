@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -98,5 +99,31 @@ func TestMetricsOnThePublicPortNeedAnOperator(t *testing.T) {
 	s.metricsHandler().ServeHTTP(dedicated, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if dedicated.Code != http.StatusOK {
 		t.Fatalf("dedicated metrics listener = %d, want 200", dedicated.Code)
+	}
+}
+
+func TestUpstreamPortsAreLimitedToStandardOnesAndTheConfiguredHub(t *testing.T) {
+	base, _ := url.Parse("https://mirror.example.com:8443")
+	for target, want := range map[string]bool{
+		"https://huggingface.co/x":                true,
+		"https://huggingface.co:443/x":            true,
+		"https://mirror.example.com:8443/x":       true, // the configured Hub keeps its port
+		"https://MIRROR.example.com:8443/x":       true,
+		"https://cdn.example.com:8443/x":          false, // another host on that port
+		"https://mirror.example.com:9000/x":       false, // another port on the Hub host
+		"https://huggingface.co:8080/x":           false,
+		"http://127.0.0.1:80/x":                   true,
+		"http://example.com:80/x":                 false,
+		"https://internal.example.com:6379/redis": false,
+	} {
+		u, _ := url.Parse(target)
+		if got := upstreamPortAllowed(u, base); got != want {
+			t.Errorf("upstreamPortAllowed(%s) = %v, want %v", target, got, want)
+		}
+	}
+	plain, _ := url.Parse("https://huggingface.co")
+	other, _ := url.Parse("https://huggingface.co:8443/x")
+	if upstreamPortAllowed(other, plain) {
+		t.Error("a Hub URL without a port must not open other ports")
 	}
 }

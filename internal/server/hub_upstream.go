@@ -105,6 +105,22 @@ func (b *idleBody) Close() error {
 	return b.body.Close()
 }
 
+// upstreamPortAllowed limits the ports the proxy will connect to. HTTPS goes to
+// 443, loopback development may use 80, and the host:port of the configured
+// Hub URL is always allowed, so a mirror or an artifact repository listening
+// on another port (for example https://mirror.example.com:8443) works. A
+// redirect cannot reach any other non-standard port.
+func upstreamPortAllowed(u, base *url.URL) bool {
+	port := u.Port()
+	if port == "" || port == "443" {
+		return true
+	}
+	if port == "80" && config.IsLoopbackHost(u.Hostname()) {
+		return true
+	}
+	return base != nil && base.Port() == port && strings.EqualFold(base.Hostname(), u.Hostname())
+}
+
 func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query url.Values, headers http.Header) (*http.Response, http.Header, error) {
 	target := strings.TrimRight(s.currentConfig().HFBaseURL, "/") + requestPath
 	if len(query) > 0 {
@@ -124,7 +140,7 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 		if u.User != nil || u.Host == "" {
 			return nil, nil, fmt.Errorf("unsafe upstream URL")
 		}
-		if port := u.Port(); port != "" && port != "443" && !(port == "80" && config.IsLoopbackHost(u.Hostname())) {
+		if !upstreamPortAllowed(u, baseURL) {
 			return nil, nil, fmt.Errorf("unsafe upstream port")
 		}
 		req, err := http.NewRequestWithContext(ctx, method, u.String(), nil)
@@ -256,7 +272,7 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 		if !s.allowedRedirectHost(host) || next.User != nil || next.Scheme != "https" && !(next.Scheme == "http" && config.IsLoopbackHost(next.Hostname())) {
 			return nil, first, fmt.Errorf("upstream redirect host is not allowed")
 		}
-		if port := next.Port(); port != "" && port != "443" && !(port == "80" && config.IsLoopbackHost(next.Hostname())) {
+		if !upstreamPortAllowed(next, baseURL) {
 			return nil, first, fmt.Errorf("unsafe upstream redirect port")
 		}
 		target = next.String()
