@@ -215,6 +215,14 @@ func (s *Server) fetchHub(ctx context.Context, method, requestPath string, query
 				s.metrics.add("hfproxy_upstream_errors_total", []string{"reason=" + reason}, 1)
 				s.metrics.observe("hfproxy_upstream_request_duration_seconds", []string{"operation=" + operation}, time.Since(attemptStarted).Seconds())
 			}
+			// The cause stays in the log (without the URL, which can carry a
+			// signature); the client only learns that the upstream failed.
+			cause := err
+			var urlErr *url.Error
+			if errors.As(err, &urlErr) {
+				cause = urlErr.Err
+			}
+			s.logger.Warn("upstream request error", "request_id", requestID(ctx), "host", upstreamHost, "operation", operation, "reason", upstreamErrorReason(ctx, err), "error", cause.Error())
 			return nil, nil, fmt.Errorf("upstream request failed")
 		}
 		if s.metrics != nil {
