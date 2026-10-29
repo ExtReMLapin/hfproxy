@@ -24,7 +24,7 @@ Reference deployment: a `Deployment` running as UID 65532 with a read-only root 
          --set config.S3_BUCKET=hfproxy \
          --set ingress.enabled=true --set ingress.host=hub.example.com --set ingress.tlsSecretName=hub-tls
 
-3. Create the first administrator (see the notes printed by Helm).
+3. Create the first administrator: open the console and enter the setup code from the pod logs (`kubectl logs deploy/hfproxy`), or use the command in the notes printed by Helm. With several replicas, set a fixed code (`SETUP_TOKEN` in the secret, see `secrets.files`).
 
 ## Notes
 

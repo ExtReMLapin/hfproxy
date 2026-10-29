@@ -7,6 +7,8 @@
   </main>
 } @else if (auth.principal()) {
   <router-outlet />
+} @else if (auth.setupRequired()) {
+  <app-setup-page />
 } @else {
   <app-login-page />
 }

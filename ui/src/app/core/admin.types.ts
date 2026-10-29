@@ -12,6 +12,14 @@ export interface Principal {
   authenticated?: boolean;
 }
 
+export interface FirstAdminInput {
+  setup_code: string;
+  username: string;
+  display_name: string;
+  email: string;
+  password: string;
+}
+
 export interface AuthProviders {
   local: boolean;
   oidc: boolean;

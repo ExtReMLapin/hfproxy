@@ -31,12 +31,8 @@ func (s *Server) apiUsers(w http.ResponseWriter, r *http.Request) {
 		if input.Role == "" {
 			input.Role = "reader"
 		}
-		if !validLocalUsername(input.Username) {
-			writeProblem(w, r, http.StatusBadRequest, "Invalid username", "Use 1 to 64 letters, digits, dots, underscores, or hyphens.")
-			return
-		}
-		if len(input.Email) > 254 || (input.Email != "" && !validEmail(input.Email)) || len(input.DisplayName) > 200 {
-			writeProblem(w, r, http.StatusBadRequest, "Invalid profile", "Check the email address and keep the display name under 200 characters.")
+		if title, detail := newUserProblem(input.Username, input.Email, input.DisplayName); title != "" {
+			writeProblem(w, r, http.StatusBadRequest, title, detail)
 			return
 		}
 		if input.Role != "admin" && input.Role != "operator" && input.Role != "reader" {
@@ -155,4 +151,16 @@ func (s *Server) apiUserPatch(w http.ResponseWriter, r *http.Request, id string)
 	s.authLookups().purge()
 	s.audit(r.Context(), p.ID, "user.update", "user", id, map[string]any{"role": input.Role, "status": input.Status})
 	writeJSON(w, 200, map[string]string{"id": id, "role": input.Role, "status": input.Status})
+}
+
+// newUserProblem checks the profile of a new local account and describes the
+// first problem found, or returns empty strings when it is acceptable.
+func newUserProblem(username, email, displayName string) (title, detail string) {
+	if !validLocalUsername(username) {
+		return "Invalid username", "Use 1 to 64 letters, digits, dots, underscores, or hyphens."
+	}
+	if len(email) > 254 || (email != "" && !validEmail(email)) || len(displayName) > 200 {
+		return "Invalid profile", "Check the email address and keep the display name under 200 characters."
+	}
+	return "", ""
 }

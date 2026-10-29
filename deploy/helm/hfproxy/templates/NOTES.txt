@@ -1,6 +1,7 @@
 hfproxy {{ .Chart.AppVersion }} is installed as {{ include "hfproxy.fullname" . }}.
 
 Public address: {{ .Values.config.PUBLIC_URL | default "(set config.PUBLIC_URL)" }}
-Create the first administrator:
+Create the first administrator: open the address above and enter the setup code printed in the pod logs
+(kubectl logs deploy/{{ include "hfproxy.fullname" . }}), or fix it with HFPROXY_SETUP_TOKEN_FILE. From a shell:
 
   kubectl exec -i deploy/{{ include "hfproxy.fullname" . }} -- /usr/local/bin/hfproxy admin create-user --username admin --password-file /dev/stdin < password.txt

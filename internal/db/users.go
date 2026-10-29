@@ -120,3 +120,43 @@ func (s *Store) UpdateUser(ctx context.Context, id, role, status string) error {
 	}
 	return nil
 }
+
+// ErrSetupDone is returned by CreateFirstAdmin when an administrator exists.
+var ErrSetupDone = errors.New("an administrator already exists")
+
+// HasActiveAdmin reports whether at least one active administrator exists.
+func (s *Store) HasActiveAdmin(ctx context.Context) (bool, error) {
+	var exists bool
+	err := s.SQL.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE role='admin' AND status='active')`).Scan(&exists)
+	return exists, err
+}
+
+// CreateFirstAdmin creates an administrator only if none exists. The check and
+// the insert run under one lock, so several simultaneous setups, on this or on
+// another replica, produce exactly one administrator and the others get
+// ErrSetupDone.
+func (s *Store) CreateFirstAdmin(ctx context.Context, id, username, email, displayName, passwordHash string) error {
+	tx, err := s.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('hfproxy:first-admin', 0))`); err != nil {
+		return err
+	}
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE role='admin' AND status='active')`).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return ErrSetupDone
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO users(id,username,email,display_name,password_hash,role) VALUES($1,$2,$3,$4,$5,'admin')`, id, username, email, displayName, passwordHash)
+	if IsUniqueViolation(err) {
+		return ErrExists
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}

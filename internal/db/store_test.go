@@ -543,3 +543,53 @@ func TestResumptionLifecycle(t *testing.T) {
 		t.Fatal("the lock was not released")
 	}
 }
+
+func TestFirstAdminIsCreatedOnlyOnce(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	if has, err := store.HasActiveAdmin(ctx); err != nil || has {
+		t.Fatalf("fresh database: HasActiveAdmin = %v, %v", has, err)
+	}
+	// A reader or a disabled administrator does not count.
+	store.CreateUser(ctx, NewID(), "reader1", "", "", "h", "reader")
+	disabled := NewID()
+	store.CreateUser(ctx, disabled, "olduser", "", "", "h", "admin")
+	store.SQL.Exec(`UPDATE users SET status='disabled' WHERE id=$1`, disabled)
+	if has, _ := store.HasActiveAdmin(ctx); has {
+		t.Fatal("only an active administrator counts")
+	}
+	if err := store.CreateFirstAdmin(ctx, NewID(), "olduser", "", "", "h"); !errors.Is(err, ErrExists) {
+		t.Fatalf("a taken username = %v, want ErrExists", err)
+	}
+
+	// Many simultaneous setups: exactly one wins.
+	const attempts = 12
+	results := make(chan error, attempts)
+	for i := 0; i < attempts; i++ {
+		go func(i int) {
+			results <- store.CreateFirstAdmin(ctx, NewID(), "boss"+strings.Repeat("x", i), "", "", "h")
+		}(i)
+	}
+	created, refused := 0, 0
+	for i := 0; i < attempts; i++ {
+		switch err := <-results; {
+		case err == nil:
+			created++
+		case errors.Is(err, ErrSetupDone):
+			refused++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if created != 1 || refused != attempts-1 {
+		t.Fatalf("created %d administrators, refused %d; want exactly one created", created, refused)
+	}
+	var admins int
+	store.SQL.QueryRow(`SELECT count(*) FROM users WHERE role='admin' AND status='active'`).Scan(&admins)
+	if admins != 1 {
+		t.Fatalf("%d active administrators", admins)
+	}
+	if has, _ := store.HasActiveAdmin(ctx); !has {
+		t.Fatal("HasActiveAdmin must see the new administrator")
+	}
+}

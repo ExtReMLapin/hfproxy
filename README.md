@@ -37,7 +37,9 @@ The provided Compose setup is intended for development on a trusted machine. It 
     cp .env.example .env
     docker compose up --build -d
 
-Create the first administrator. Put the password in a protected file or send it on stdin; it is never passed as a process argument.
+Create the first administrator. The simplest way is the console: open the service, read the setup code that hfproxy prints when it starts (`docker compose logs hfproxy`), and fill in the form. See [First start](docs/operations.md#first-start).
+
+From a shell instead, put the password in a protected file or send it on stdin; it is never passed as a process argument.
 
     mkdir -p .secrets
     umask 077
@@ -70,7 +72,7 @@ When `HFPROXY_ANONYMOUS_PUBLIC_READ=true`, clients can read repositories registe
 
 ### Administration console
 
-The console is served by the Go service at `/` and is available after creating the first administrator. Open **Settings** to configure the Hugging Face Hub URL, optional upstream token and HTTP, HTTPS, SOCKS4, or SOCKS5 proxy, Garage or another S3-compatible endpoint/bucket/credentials, cache limits, public URL, and session lifetimes. Changes are validated and applied immediately; the Hub and S3 settings have connection checks. Credentials are write-only in the API and encrypted in PostgreSQL with AES-GCM.
+The console is served by the Go service at `/`. On a new instance it first offers to create the first administrator (see [First start](docs/operations.md#first-start)). Open **Settings** to configure the Hugging Face Hub URL, optional upstream token and HTTP, HTTPS, SOCKS4, or SOCKS5 proxy, Garage or another S3-compatible endpoint/bucket/credentials, cache limits, public URL, and session lifetimes. Changes are validated and applied immediately; the Hub and S3 settings have connection checks. Credentials are write-only in the API and encrypted in PostgreSQL with AES-GCM.
 
 The console is available in English (the default), French, Spanish, German, Portuguese, Simplified Chinese and Japanese. Use the language selector on the sign-in page or in the header; the choice is remembered in the browser and the page reloads in that language. Dates and numbers follow the chosen language. The text of API errors returned by the service, and the server-rendered `/login` page, stay in English. See [Translating the console](ui/README.md#translating-the-console) to fix a translation or add a language.
 
@@ -80,7 +82,7 @@ The database URL, listen address, and `SESSION_SECRET` remain bootstrap settings
 
 For a fresh installation that should configure S3 only through the console, leave `HFPROXY_S3_BUCKET` unset in the environment. hfproxy will serve the sign-in and setup pages, while `/readyz` stays unavailable until a valid bucket is saved. PostgreSQL and `SESSION_SECRET` are still needed at startup. The provided Compose setup preconfigures a single-node Garage instance and its default bucket for local use.
 
-Local username/password authentication is enabled by default. OIDC/SSO and LDAP are optional and remain disabled until configured in **Settings**. OIDC requires an issuer, client ID, client secret, and callback URL; LDAP requires an LDAPS or StartTLS URL and a search base/filter. The first administrator must still be created with the CLI; additional local users and their roles can be managed in **Users**.
+Local username/password authentication is enabled by default. OIDC/SSO and LDAP are optional and remain disabled until configured in **Settings**. OIDC requires an issuer, client ID, client secret, and callback URL; LDAP requires an LDAPS or StartTLS URL and a search base/filter. The first administrator is created from the console on first start, or with the CLI; additional local users and their roles can be managed in **Users**.
 
 ## Commands
 
@@ -109,6 +111,7 @@ Environment variables use the `HFPROXY_` prefix. Common settings for local Compo
 | Area | Main variables |
 | --- | --- |
 | HTTP and database | LISTEN_ADDR, PUBLIC_URL, DATABASE_URL, AUTO_MIGRATE, LOG_LEVEL |
+| First start | SETUP_TOKEN or SETUP_TOKEN_FILE (optional fixed setup code, 16–256 characters; see [First start](docs/operations.md#first-start)) |
 | Hugging Face | HF_BASE_URL, HF_PROXY_URL, HF_TOKEN, HF_ALLOWED_REDIRECT_HOSTS, HF_TIMEOUT |
 | S3 | S3_ENDPOINT, S3_REGION, S3_BUCKET, S3_PREFIX, S3_FORCE_PATH_STYLE, S3_SERVER_SIDE_ENCRYPTION, S3_ACCESS_KEY, S3_SECRET_KEY |
 | Authentication | AUTH_MODE=local or oidc, SESSION_SECRET, SESSION_SECRET_PREVIOUS, SESSION_IDLE_TTL, SESSION_ABSOLUTE_TTL, ANONYMOUS_PUBLIC_READ |

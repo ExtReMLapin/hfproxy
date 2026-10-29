@@ -1,0 +1,182 @@
+<main class="grid min-h-screen bg-white lg:grid-cols-[1.05fr_0.95fr]">
+  <section
+    class="relative hidden overflow-hidden bg-[#10251f] px-12 py-12 text-white lg:flex lg:flex-col lg:justify-between xl:px-20 xl:py-16"
+  >
+    <div
+      class="pointer-events-none absolute -right-48 -top-40 h-[560px] w-[560px] rounded-full border border-white/[0.06]"
+    ></div>
+    <div
+      class="pointer-events-none absolute -bottom-56 -left-36 h-[500px] w-[500px] rounded-full bg-emerald-400/[0.06] blur-3xl"
+    ></div>
+    <div class="relative flex items-center gap-3">
+      <img src="/hfproxy-mark.svg" alt="" class="h-10 w-10 rounded-xl" />
+      <span class="text-lg font-bold tracking-tight" i18n>hfproxy</span>
+    </div>
+    <div class="relative max-w-xl pb-8">
+      <div
+        class="mb-6 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-100/80"
+      >
+        <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+        <ng-container i18n>First start</ng-container>
+      </div>
+      <h1 class="max-w-lg text-4xl font-semibold leading-[1.12] tracking-tight xl:text-5xl" i18n>
+        Welcome to hfproxy.
+      </h1>
+      <p class="mt-6 max-w-md text-sm leading-7 text-white/55" i18n>
+        No administrator exists yet. Create the first one to start configuring storage, access and
+        authentication.
+      </p>
+      <ol class="mt-10 max-w-md space-y-3 border-t border-white/10 pt-6 text-xs text-white/70">
+        <li class="flex gap-3">
+          <span class="font-bold text-emerald-300">1</span
+          ><span i18n>Read the setup code in the service's output.</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="font-bold text-emerald-300">2</span
+          ><span i18n>Choose the administrator's name and password.</span>
+        </li>
+        <li class="flex gap-3">
+          <span class="font-bold text-emerald-300">3</span
+          ><span i18n>Connect the Hub and the object storage in Settings.</span>
+        </li>
+      </ol>
+    </div>
+    <p class="relative text-[11px] text-white/35" i18n>
+      This page disappears once an administrator exists.
+    </p>
+  </section>
+
+  <section class="relative flex min-h-screen items-center justify-center px-6 py-12 sm:px-10">
+    <div class="absolute right-5 top-5"><app-language-switcher /></div>
+    <div class="w-full max-w-[420px]">
+      <div class="mb-8 flex items-center gap-3 lg:hidden">
+        <img src="/favicon.svg" alt="" class="h-9 w-9 rounded-xl" />
+        <span class="font-bold tracking-tight text-slate-900" i18n>hfproxy</span>
+      </div>
+      <div class="mb-7">
+        <p class="text-xs font-bold uppercase tracking-[0.17em] text-emerald-700" i18n>
+          Admin console
+        </p>
+        <h2 class="mt-3 text-[28px] font-semibold tracking-tight text-slate-950" i18n>
+          Create the first administrator
+        </h2>
+      </div>
+
+      @if (auth.error() || problem()) {
+        <div
+          role="alert"
+          class="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-5 text-rose-800"
+        >
+          {{ auth.error() || problem() }}
+        </div>
+      }
+
+      <form class="space-y-4" (ngSubmit)="submit()" autocomplete="off">
+        <label class="block text-sm font-semibold text-slate-700" i18n
+          >Setup code
+          <input
+            class="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 font-mono text-sm font-normal text-slate-900 outline-none transition focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10"
+            name="setupCode"
+            [(ngModel)]="form.setupCode"
+            autocomplete="off"
+            spellcheck="false"
+            required
+          />
+          <span class="mt-1.5 block text-xs font-normal leading-5 text-slate-400"
+            >Printed in the service's output when it started (for example with
+            <code>docker compose logs hfproxy</code>), or the value of
+            <code>HFPROXY_SETUP_TOKEN</code>.</span
+          >
+        </label>
+        <label class="block text-sm font-semibold text-slate-700" i18n
+          >Username
+          <input
+            class="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm font-normal text-slate-900 outline-none transition focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10"
+            name="username"
+            [(ngModel)]="form.username"
+            autocomplete="username"
+            required
+            placeholder="admin"
+          />
+        </label>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <label class="block text-sm font-semibold text-slate-700" i18n
+            >Display name
+            <input
+              class="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm font-normal text-slate-900 outline-none transition focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10"
+              name="displayName"
+              [(ngModel)]="form.displayName"
+              autocomplete="name"
+            />
+          </label>
+          <label class="block text-sm font-semibold text-slate-700" i18n
+            >Email
+            <input
+              class="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm font-normal text-slate-900 outline-none transition focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10"
+              name="email"
+              type="email"
+              [(ngModel)]="form.email"
+              autocomplete="email"
+            />
+          </label>
+        </div>
+        <label class="block text-sm font-semibold text-slate-700" i18n
+          >Password
+          <input
+            class="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm font-normal text-slate-900 outline-none transition focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10"
+            name="password"
+            [type]="showPassword() ? 'text' : 'password'"
+            [(ngModel)]="form.password"
+            autocomplete="new-password"
+            required
+          />
+          <span class="mt-1.5 block text-xs font-normal text-slate-400"
+            >At least {{ minPasswordLength }} characters.</span
+          >
+        </label>
+        <label class="block text-sm font-semibold text-slate-700" i18n
+          >Confirm the password
+          <input
+            class="mt-2 block w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm font-normal text-slate-900 outline-none transition focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10"
+            name="confirmation"
+            [type]="showPassword() ? 'text' : 'password'"
+            [(ngModel)]="form.confirmation"
+            autocomplete="new-password"
+            required
+          />
+        </label>
+        <label class="flex items-center gap-2 text-xs font-medium text-slate-500" i18n
+          ><input
+            type="checkbox"
+            name="showPassword"
+            [checked]="showPassword()"
+            (change)="showPassword.set(!showPassword())"
+          />
+          Show the passwords</label
+        >
+        <button
+          class="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-60"
+          type="submit"
+          [disabled]="auth.busy()"
+        >
+          @if (auth.busy()) {
+            <ng-container i18n>Creating…</ng-container>
+          } @else {
+            <ng-container i18n>Create the administrator</ng-container>
+            <span aria-hidden="true">→</span>
+          }
+        </button>
+      </form>
+
+      <div
+        class="mt-8 flex items-start gap-2.5 border-t border-slate-100 pt-5 text-xs leading-5 text-slate-400"
+      >
+        <app-icon name="lock" [size]="15" />
+        <span i18n
+          >You can also create an administrator from a shell:
+          <code>hfproxy admin create-user</code>.</span
+        >
+      </div>
+    </div>
+  </section>
+</main>

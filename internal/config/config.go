@@ -13,10 +13,13 @@ import (
 )
 
 type Config struct {
-	ListenAddr             string
-	PublicURL              string
-	TrustedProxies         []netip.Prefix
-	LogLevel               string
+	ListenAddr     string
+	PublicURL      string
+	TrustedProxies []netip.Prefix
+	LogLevel       string
+	// SetupToken is the code asked for to create the first administrator from
+	// the console. Empty means a random one is generated and printed at start-up.
+	SetupToken             string
 	DatabaseURL            string
 	AutoMigrate            bool
 	HFBaseURL              string
@@ -149,6 +152,7 @@ func Load() (Config, error) {
 	c.S3ServerSideEncryption = boolean("S3_SERVER_SIDE_ENCRYPTION", true)
 	c.AuthMode = strings.ToLower(value("AUTH_MODE", "local"))
 	c.AnonymousPublicRead = boolean("ANONYMOUS_PUBLIC_READ", false)
+	c.SetupToken = secret("SETUP_TOKEN", "")
 	c.SessionSecret = secret("SESSION_SECRET", "")
 	c.PreviousSessionSecrets = splitSecrets(secret("SESSION_SECRET_PREVIOUS", ""))
 	c.SessionIdleTTL = duration("SESSION_IDLE_TTL", 8*time.Hour)
@@ -395,6 +399,9 @@ func (c Config) Validate() error {
 			return fmt.Errorf("HFPROXY_LDAP_BIND_PASSWORD is required when a bind DN is configured")
 		}
 	}
+	if c.SetupToken != "" && (len(c.SetupToken) < 16 || len(c.SetupToken) > 256) {
+		return fmt.Errorf("HFPROXY_SETUP_TOKEN must contain 16 to 256 characters")
+	}
 	if c.SessionSecret != "" && len(c.SessionSecret) < 32 {
 		return fmt.Errorf("HFPROXY_SESSION_SECRET must contain at least 32 bytes")
 	}
@@ -450,7 +457,7 @@ func secret(key, fallback string) string {
 func validateEnvironmentOverrides() error {
 	for _, key := range []string{
 		"DATABASE_URL", "HF_PROXY_URL", "HF_TOKEN", "S3_ACCESS_KEY", "S3_SECRET_KEY", "SESSION_SECRET", "SESSION_SECRET_PREVIOUS",
-		"OIDC_CLIENT_SECRET", "LDAP_BIND_PASSWORD",
+		"OIDC_CLIENT_SECRET", "LDAP_BIND_PASSWORD", "SETUP_TOKEN",
 	} {
 		if file := os.Getenv("HFPROXY_" + key + "_FILE"); file != "" {
 			data, err := os.ReadFile(file)

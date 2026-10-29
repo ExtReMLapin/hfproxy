@@ -49,6 +49,7 @@ secrets:
   #   HF_TOKEN: hf_token
   #   OIDC_CLIENT_SECRET: oidc_client_secret
   #   SESSION_SECRET_PREVIOUS: session_secret_previous
+  #   SETUP_TOKEN: setup_token   # fixed first-start code; needed with several replicas
 
 # Private certificate authority for the S3 endpoint, OIDC issuer, LDAP server or
 # Hub mirror. The ConfigMap (or Secret) holds PEM files; they are added to the
