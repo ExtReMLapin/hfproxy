@@ -1,0 +1,157 @@
+# TEST STACK. hfproxy signed in through Keycloak, with Prometheus and Grafana
+# watching it. Everything is local and uses fixed, public test credentials, so it
+# must never be exposed on a network: every port is bound to 127.0.0.1.
+#
+#   docker compose -f docker-compose.test.yml up --build -d
+#
+# Then open (see docs/testing-stack.md for the accounts and a walkthrough):
+#   hfproxy    http://localhost:8080   first administrator: setup code test-setup-code-0123456789
+#   Keycloak   http://localhost:8180   admin / admin; users alice and bob (password <name>-password)
+#   Grafana    http://localhost:3000   admin / admin, or "Sign in with Keycloak"
+#   Prometheus http://localhost:9091
+#
+# The development stack (docker-compose.yml) is the one to run hfproxy day to day.
+name: hfproxy-test
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: hfproxy
+      POSTGRES_PASSWORD: test-only-postgres-password
+      POSTGRES_DB: hfproxy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hfproxy -d hfproxy"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  garage:
+    image: dxflrs/garage:v2.5.0
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    environment:
+      GARAGE_DEFAULT_ACCESS_KEY: GK0123456789abcdef01234567
+      GARAGE_DEFAULT_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      GARAGE_DEFAULT_BUCKET: hfproxy
+    volumes:
+      - ./garage.toml:/etc/garage.toml:ro
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # The browser and hfproxy must reach Keycloak at the same address, because the
+  # issuer URL is part of every token. hfproxy therefore runs in Keycloak's network
+  # namespace (see below): for both of them, http://localhost:8180 is Keycloak. The
+  # published ports of hfproxy are declared here for that reason.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1.4
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HTTP_PORT: "8180"
+    volumes:
+      - ./deploy/compose/keycloak/hfproxy-realm.json:/opt/keycloak/data/import/hfproxy-realm.json:ro
+    ports:
+      - "127.0.0.1:8180:8180"
+      - "127.0.0.1:8080:8080"   # hfproxy
+    healthcheck:
+      # The image has no curl; ask for the realm over a plain TCP connection.
+      test:
+        - CMD-SHELL
+        - |-
+          exec 3<>/dev/tcp/127.0.0.1/8180 && printf 'GET /realms/hfproxy HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 && head -1 <&3 | grep -q ' 200 '
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+
+  hfproxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    network_mode: "service:keycloak"
+    environment:
+      HFPROXY_LISTEN_ADDR: 0.0.0.0:8080
+      HFPROXY_PUBLIC_URL: http://localhost:8080
+      HFPROXY_LOG_LEVEL: debug
+      HFPROXY_DATABASE_URL: postgres://hfproxy:test-only-postgres-password@postgres:5432/hfproxy?sslmode=disable
+      HFPROXY_AUTO_MIGRATE: "true"
+      HFPROXY_HF_BASE_URL: https://huggingface.co
+      HFPROXY_HF_TOKEN: ${HFPROXY_HF_TOKEN:-}
+      HFPROXY_S3_ENDPOINT: http://garage:3900
+      HFPROXY_S3_REGION: garage
+      HFPROXY_S3_BUCKET: hfproxy
+      HFPROXY_S3_PREFIX: hfproxy
+      HFPROXY_S3_FORCE_PATH_STYLE: "true"
+      HFPROXY_S3_SERVER_SIDE_ENCRYPTION: "false"
+      HFPROXY_S3_ACCESS_KEY: GK0123456789abcdef01234567
+      HFPROXY_S3_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      HFPROXY_ANONYMOUS_PUBLIC_READ: "true"
+      HFPROXY_SESSION_SECRET: test-only-session-secret-0123456789abcdef
+      HFPROXY_SETUP_TOKEN: test-setup-code-0123456789
+      # Local sign-in (the administrator) and OIDC sign-in (Keycloak users) together.
+      HFPROXY_AUTH_MODE: local
+      HFPROXY_OIDC_ISSUER: http://localhost:8180/realms/hfproxy
+      HFPROXY_OIDC_CLIENT_ID: hfproxy
+      HFPROXY_OIDC_CLIENT_SECRET: test-only-hfproxy-client-secret
+      HFPROXY_OIDC_REDIRECT_URL: http://localhost:8080/auth/callback
+      HFPROXY_OIDC_AUTO_PROVISION: "true"
+      # Metrics on their own port, scraped by Prometheus as keycloak:9090.
+      HFPROXY_METRICS_ENABLED: "true"
+      HFPROXY_METRICS_ADDR: 0.0.0.0:9090
+    depends_on:
+      postgres:
+        condition: service_healthy
+      garage:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/hfproxy", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    volumes:
+      - ./deploy/compose/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docs/prometheus-alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports:
+      - "127.0.0.1:9091:9090"
+    depends_on:
+      - keycloak
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: http://localhost:3000
+      # "Sign in with Keycloak". The browser goes to localhost:8180; Grafana, inside
+      # the compose network, reaches Keycloak as keycloak:8180.
+      GF_AUTH_GENERIC_OAUTH_ENABLED: "true"
+      GF_AUTH_GENERIC_OAUTH_NAME: Keycloak
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: grafana
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: test-only-grafana-client-secret
+      GF_AUTH_GENERIC_OAUTH_SCOPES: openid profile email
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL: http://localhost:8180/realms/hfproxy/protocol/openid-connect/auth
+      GF_AUTH_GENERIC_OAUTH_TOKEN_URL: http://keycloak:8180/realms/hfproxy/protocol/openid-connect/token
+      GF_AUTH_GENERIC_OAUTH_API_URL: http://keycloak:8180/realms/hfproxy/protocol/openid-connect/userinfo
+      GF_AUTH_GENERIC_OAUTH_USE_PKCE: "true"
+      GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP: "true"
+      GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: "contains(preferred_username, 'alice') && 'Admin' || 'Viewer'"
+    volumes:
+      - ./deploy/compose/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docs/grafana-observability.json:/var/lib/grafana/dashboards/hfproxy-observability.json:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+      - keycloak

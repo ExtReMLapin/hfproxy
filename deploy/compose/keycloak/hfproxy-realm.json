@@ -1,0 +1,86 @@
+{
+  "realm": "hfproxy",
+  "enabled": true,
+  "displayName": "hfproxy test realm",
+  "users": [
+    {
+      "username": "alice",
+      "email": "alice@example.org",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Alice",
+      "lastName": "Martin",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "alice-password",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "bob",
+      "email": "bob@example.org",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Bob",
+      "lastName": "Durand",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "bob-password",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "erin",
+      "email": "erin@example.org",
+      "emailVerified": false,
+      "enabled": true,
+      "firstName": "Erin",
+      "lastName": "Jones",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "erin-password",
+          "temporary": false
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "hfproxy",
+      "name": "hfproxy",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "test-only-hfproxy-client-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8080/auth/callback"
+      ],
+      "webOrigins": [
+        "http://localhost:8080"
+      ]
+    },
+    {
+      "clientId": "grafana",
+      "name": "Grafana",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "test-only-grafana-client-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://localhost:3000/login/generic_oauth"
+      ],
+      "webOrigins": [
+        "http://localhost:3000"
+      ]
+    }
+  ]
+}
