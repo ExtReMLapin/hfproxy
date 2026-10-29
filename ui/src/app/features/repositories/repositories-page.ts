@@ -5,6 +5,7 @@ import { AdminApiService } from '../../core/admin-api.service';
 import { AuthService } from '../../core/auth.service';
 import { FeedbackService } from '../../core/feedback.service';
 import { permissionLabel, subjectLabel } from '../../core/labels';
+import { ActivityPoll, PollState } from '../../core/activity-poll';
 import { Grant, Policy, PreloadJob, RepoType, Repository } from '../../core/admin.types';
 import { IconComponent } from '../../shared/icon/icon';
 import { PageHeadingComponent } from '../../shared/page-heading/page-heading';
@@ -29,8 +30,11 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
   protected readonly preloadJobs = signal<PreloadJob[]>([]);
   protected readonly selectedRepo = signal<Repository | null>(null);
   protected readonly grants = signal<Grant[]>([]);
-  private preloadPoll?: number;
-  private preloadPollRunning = false;
+  // Quick while a preload runs; otherwise only when the tab is shown again.
+  private readonly preloadPoll = new ActivityPoll(() => this.loadPreloads(), {
+    busyMs: 2000,
+    idleMs: null,
+  });
 
   protected repoDraft: { repo_type: RepoType; repo_id: string; access_policy: Policy } = {
     repo_type: 'models',
@@ -41,12 +45,11 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     void this.load();
-    void this.loadPreloads();
-    this.preloadPoll = window.setInterval(() => void this.loadPreloads(), 2000);
+    this.preloadPoll.start();
   }
 
   ngOnDestroy(): void {
-    if (this.preloadPoll !== undefined) window.clearInterval(this.preloadPoll);
+    this.preloadPoll.stop();
   }
 
   protected async load(): Promise<void> {
@@ -116,6 +119,7 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
         started,
         ...jobs.filter((job) => job.repo_type !== repo.repo_type || job.repo_id !== repo.repo_id),
       ]);
+      this.preloadPoll.poke();
       this.feedback.showSuccess(
         $localize`Preloading started for ${repo.repo_id}:REPOSITORY:. Follow progress on Overview.`,
       );
@@ -246,20 +250,16 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  private async loadPreloads(): Promise<void> {
-    if (this.preloadPollRunning) return;
-    this.preloadPollRunning = true;
+  private async loadPreloads(): Promise<PollState> {
     try {
       const result = await this.api.get<{ preloads: PreloadJob[] }>('/api/v1/downloads/active');
       this.preloadJobs.set(result.preloads);
+      return result.preloads.some((job) => job.status === 'queued' || job.status === 'running')
+        ? 'busy'
+        : 'idle';
     } catch {
       // Keep the most recent preload status if a poll briefly fails.
-      if (!this.auth.principal() && this.preloadPoll !== undefined) {
-        window.clearInterval(this.preloadPoll);
-        this.preloadPoll = undefined;
-      }
-    } finally {
-      this.preloadPollRunning = false;
+      return this.auth.principal() ? 'idle' : 'stop';
     }
   }
 

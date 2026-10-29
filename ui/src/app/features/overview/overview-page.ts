@@ -2,6 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { AdminApiService } from '../../core/admin-api.service';
+import { ActivityPoll, PollState } from '../../core/activity-poll';
 import { AuthService } from '../../core/auth.service';
 import { FeedbackService } from '../../core/feedback.service';
 import { ActiveDownload, PreloadJob, Repository, Stats } from '../../core/admin.types';
@@ -23,17 +24,19 @@ export class OverviewPageComponent implements OnInit, OnDestroy {
   protected readonly repositories = signal<Repository[]>([]);
   protected readonly activeDownloads = signal<ActiveDownload[]>([]);
   protected readonly preloadJobs = signal<PreloadJob[]>([]);
-  private transferPoll?: number;
-  private transferPollRunning = false;
+  // Quick while a transfer runs, every 15 s otherwise to notice one that starts.
+  private readonly transferPoll = new ActivityPoll(() => this.loadTransfers(), {
+    busyMs: 2000,
+    idleMs: 15000,
+  });
 
   ngOnInit(): void {
     void this.load();
-    void this.loadTransfers();
-    this.transferPoll = window.setInterval(() => void this.loadTransfers(), 2000);
+    this.transferPoll.start();
   }
 
   ngOnDestroy(): void {
-    if (this.transferPoll !== undefined) window.clearInterval(this.transferPoll);
+    this.transferPoll.stop();
   }
 
   protected async load(): Promise<void> {
@@ -123,23 +126,20 @@ export class OverviewPageComponent implements OnInit, OnDestroy {
     );
   }
 
-  private async loadTransfers(): Promise<void> {
-    if (this.transferPollRunning) return;
-    this.transferPollRunning = true;
+  private async loadTransfers(): Promise<PollState> {
     try {
       const result = await this.api.get<{ items: ActiveDownload[]; preloads: PreloadJob[] }>(
         '/api/v1/downloads/active',
       );
       this.activeDownloads.set(result.items);
       this.preloadJobs.set(result.preloads);
+      const preloading = result.preloads.some(
+        (job) => job.status === 'queued' || job.status === 'running',
+      );
+      return result.items.length > 0 || preloading ? 'busy' : 'idle';
     } catch {
       // Keep the most recent transfer state visible if a poll briefly fails.
-      if (!this.auth.principal() && this.transferPoll !== undefined) {
-        window.clearInterval(this.transferPoll);
-        this.transferPoll = undefined;
-      }
-    } finally {
-      this.transferPollRunning = false;
+      return this.auth.principal() ? 'idle' : 'stop';
     }
   }
 }
