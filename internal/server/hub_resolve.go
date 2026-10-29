@@ -247,6 +247,7 @@ func (s *Server) answerHead(res *fileResolution) {
 // cacheFill is the state of one download from the Hub into the cache.
 type cacheFill struct {
 	*fileResolution
+	ctx         context.Context // lifetime of the fill (see fillCache)
 	downloadID  string
 	objectStore *storage.S3
 	tmp         *os.File
@@ -294,19 +295,28 @@ func (s *Server) fillCache(res *fileResolution) {
 	}
 	defer releaseSlot()
 
-	fill := &cacheFill{fileResolution: res, downloadID: db.NewID(), objectStore: s.currentStorage()}
-	if err := s.db.StartDownload(r.Context(), fill.downloadID, res.repoPK, res.commit, res.parsed.FilePath, dbCaller(callerOf(r.Context()))); err != nil {
-		s.logger.Warn("download start could not be recorded", "request_id", requestID(r.Context()))
+	// A streamed fill belongs to the proxy: the client may hang up as soon as it
+	// has the last byte (curl, a pooled connection that closes), and that must not
+	// abort the storing and recording that follow. Fills that are not streamed
+	// keep the request's lifetime, so a client that leaves stops the download and
+	// the next attempt resumes from the stored blocks.
+	fillCtx := r.Context()
+	if shouldStreamCacheMiss(r, res.expectedLFS) {
+		fillCtx = context.WithoutCancel(fillCtx)
+	}
+	fill := &cacheFill{fileResolution: res, ctx: fillCtx, downloadID: db.NewID(), objectStore: s.currentStorage()}
+	if err := s.db.StartDownload(fill.ctx, fill.downloadID, res.repoPK, res.commit, res.parsed.FilePath, dbCaller(callerOf(fill.ctx))); err != nil {
+		s.logger.Warn("download start could not be recorded", "request_id", requestID(fill.ctx))
 	}
 	if res.meta.Size > s.currentConfig().CacheMaxFileSize {
-		s.finishDownload(r.Context(), fill.downloadID, 0, "size_limit")
+		s.finishDownload(fill.ctx, fill.downloadID, 0, "size_limit")
 		writeProblem(w, r, 413, "File too large", "The upstream file exceeds the configured cache file limit.")
 		return
 	}
 	if res.sizeKnown && res.meta.Size > 0 {
 		releaseStaging, stagingErr := s.reserveStaging(res.meta.Size)
 		if stagingErr != nil {
-			s.finishDownload(r.Context(), fill.downloadID, 0, "staging_space")
+			s.finishDownload(fill.ctx, fill.downloadID, 0, "staging_space")
 			w.Header().Set("Retry-After", "30")
 			writeProblem(w, r, http.StatusInsufficientStorage, "Insufficient staging space", "The proxy does not have enough free disk space to stage this file right now.")
 			return
@@ -315,9 +325,9 @@ func (s *Server) fillCache(res *fileResolution) {
 	}
 	// A database lock per file makes fills exclusive across all instances that
 	// share the database: the others wait here, then find the file cached.
-	unlockFill, lockErr := s.lockDownloadResume(r.Context(), res.repoPK, res.commit, res.parsed.FilePath)
+	unlockFill, lockErr := s.lockDownloadResume(fill.ctx, res.repoPK, res.commit, res.parsed.FilePath)
 	if lockErr != nil {
-		s.finishDownload(r.Context(), fill.downloadID, 0, "resume_lock")
+		s.finishDownload(fill.ctx, fill.downloadID, 0, "resume_lock")
 		writeProblem(w, r, http.StatusInternalServerError, "Cache metadata error", "Unable to coordinate the cache fill.")
 		return
 	}
@@ -346,9 +356,9 @@ func (s *Server) fillCache(res *fileResolution) {
 	}
 	if res.expectedLFS != "" && fill.digest != res.expectedLFS {
 		if fill.resume != nil {
-			_ = s.resetDownloadResume(r.Context(), fill.objectStore, fill.resume, fill.resume.ETag, fill.resume.TotalSize, fill.resume.ContentType)
+			_ = s.resetDownloadResume(fill.ctx, fill.objectStore, fill.resume, fill.resume.ETag, fill.resume.TotalSize, fill.resume.ContentType)
 		}
-		s.finishDownload(r.Context(), fill.downloadID, fill.size, "integrity")
+		s.finishDownload(fill.ctx, fill.downloadID, fill.size, "integrity")
 		writeProblem(w, r, http.StatusBadGateway, "Integrity check failed", "The downloaded file did not match the Hub's advertised SHA-256.")
 		return
 	}
@@ -378,14 +388,14 @@ func (s *Server) downloadKnownSize(fill *cacheFill) bool {
 		fill.streamed = true
 	}
 	var err error
-	fill.tmp, fill.digest, fill.resume, err = s.downloadResumable(r.Context(), fill.objectStore, fill.downloadID, res.repoPK, res.commit, res.parsed, res.meta.Size, resumeETag, res.meta.ContentType, stream)
+	fill.tmp, fill.digest, fill.resume, err = s.downloadResumable(fill.ctx, fill.objectStore, fill.downloadID, res.repoPK, res.commit, res.parsed, res.meta.Size, resumeETag, res.meta.ContentType, stream)
 	fill.size = res.meta.Size
 	if err != nil {
 		completed := int64(0)
 		if fill.resume != nil {
 			completed = fill.resume.CompletedBytes
 		}
-		s.finishDownload(r.Context(), fill.downloadID, completed, "upstream_read")
+		s.finishDownload(fill.ctx, fill.downloadID, completed, "upstream_read")
 		var statusErr *upstreamStatusError
 		if errors.As(err, &statusErr) {
 			s.hubStatus(w, r, statusErr.status, statusErr.header)
@@ -402,15 +412,15 @@ func (s *Server) downloadKnownSize(fill *cacheFill) bool {
 func (s *Server) downloadUnknownSize(fill *cacheFill) bool {
 	w, r, res := fill.w, fill.r, fill.fileResolution
 	fetchPath := upstreamResolvePath(resolvePath{RepoType: res.parsed.RepoType, RepoID: res.parsed.RepoID, Revision: res.commit, FilePath: res.parsed.FilePath})
-	body, headers, err := s.fetchHub(r.Context(), http.MethodGet, fetchPath, safeResolveQuery(r.URL.Query()), nil)
+	body, headers, err := s.fetchHub(fill.ctx, http.MethodGet, fetchPath, safeResolveQuery(r.URL.Query()), nil)
 	if err != nil {
-		s.finishDownload(r.Context(), fill.downloadID, 0, "upstream")
+		s.finishDownload(fill.ctx, fill.downloadID, 0, "upstream")
 		s.hubFailure(w, r, err)
 		return false
 	}
 	fill.body = body
 	if body.StatusCode < 200 || body.StatusCode >= 300 {
-		s.finishDownload(r.Context(), fill.downloadID, 0, "upstream_status")
+		s.finishDownload(fill.ctx, fill.downloadID, 0, "upstream_status")
 		s.hubStatus(w, r, body.StatusCode, body.Header)
 		return false
 	}
@@ -419,19 +429,19 @@ func (s *Server) downloadUnknownSize(fill *cacheFill) bool {
 		actualCommit = body.Header.Get("X-Repo-Commit")
 	}
 	if actualCommit != "" && actualCommit != res.commit {
-		s.finishDownload(r.Context(), fill.downloadID, 0, "revision_changed")
+		s.finishDownload(fill.ctx, fill.downloadID, 0, "revision_changed")
 		writeProblem(w, r, http.StatusConflict, "Revision changed", "The requested branch moved during the download; retry against the resolved revision.")
 		return false
 	}
 	maxSize := s.currentConfig().CacheMaxFileSize
 	if body.ContentLength > maxSize {
-		s.finishDownload(r.Context(), fill.downloadID, 0, "size_limit")
+		s.finishDownload(fill.ctx, fill.downloadID, 0, "size_limit")
 		writeProblem(w, r, 413, "File too large", "The upstream file exceeds the configured cache file limit.")
 		return false
 	}
 	fill.tmp, err = s.createStagingFile("hfproxy-staging-*")
 	if err != nil {
-		s.finishDownload(r.Context(), fill.downloadID, 0, "staging")
+		s.finishDownload(fill.ctx, fill.downloadID, 0, "staging")
 		writeProblem(w, r, 500, "Cache error", "Unable to stage the upstream file.")
 		return false
 	}
@@ -449,15 +459,15 @@ func (s *Server) downloadUnknownSize(fill *cacheFill) bool {
 		destination = io.MultiWriter(fill.tmp, hash, asStreamingWriter(w))
 		fill.streamed = true
 	}
-	progress := &downloadProgressWriter{ctx: r.Context(), db: s.db.SQL, id: fill.downloadID, destination: destination, lastPersist: time.Now()}
+	progress := &downloadProgressWriter{ctx: fill.ctx, db: s.db.SQL, id: fill.downloadID, destination: destination, lastPersist: time.Now()}
 	fill.size, err = io.Copy(progress, limited)
 	if err != nil {
-		s.finishDownload(r.Context(), fill.downloadID, fill.size, "upstream_read")
+		s.finishDownload(fill.ctx, fill.downloadID, fill.size, "upstream_read")
 		writeStreamAwareProblem(w, r, fill.streamed, 502, "Upstream transfer failed", "The Hub response could not be completely downloaded.")
 		return false
 	}
 	if fill.size > maxSize {
-		s.finishDownload(r.Context(), fill.downloadID, fill.size, "size_limit")
+		s.finishDownload(fill.ctx, fill.downloadID, fill.size, "size_limit")
 		writeStreamAwareProblem(w, r, fill.streamed, 413, "File too large", "The upstream file exceeds the configured cache file limit.")
 		return false
 	}
@@ -504,7 +514,7 @@ func (s *Server) publishDownload(fill *cacheFill) {
 	}
 	// Once the upstream body is complete, cache publication belongs to the
 	// proxy even if the client closes its connection after receiving the body.
-	publishCtx, cancelPublish := cachePublishContext(r.Context())
+	publishCtx, cancelPublish := cachePublishContext(fill.ctx)
 	defer cancelPublish()
 	fail := func(class string, status int, title, detail string) {
 		s.finishDownload(publishCtx, fill.downloadID, fill.size, class)

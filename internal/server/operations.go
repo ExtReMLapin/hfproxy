@@ -143,6 +143,9 @@ func (s *Server) runRetention(ctx context.Context) {
 		args  []any
 	}{
 		{"sessions", `DELETE FROM sessions WHERE token_hash IN (SELECT token_hash FROM sessions WHERE expires_at < now() LIMIT $1)`, nil},
+		// A download whose process died, or whose bookkeeping was lost, would stay
+		// "in progress" forever and inflate the console's counter.
+		{"downloads_abandoned", `UPDATE downloads SET status='failed',error_class='abandoned',completed_at=now() WHERE id IN (SELECT id FROM downloads WHERE status='downloading' AND started_at < now()-interval '12 hours' LIMIT $1)`, nil},
 		{"login_attempts", `DELETE FROM login_attempts WHERE key IN (SELECT key FROM login_attempts WHERE window_start < now()-interval '1 hour' LIMIT $1)`, nil},
 	}
 	if cfg.RetentionDownloads > 0 {

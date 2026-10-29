@@ -366,9 +366,18 @@ func (s *Server) recordDownload(ctx context.Context, repoID, commit, file, statu
 	if status == "hit" && s.enqueueHit(event) {
 		return
 	}
+	ctx, cancel := bookkeepingContext(ctx)
+	defer cancel()
 	if err := s.db.RecordDownloads(ctx, []db.DownloadEvent{event}); err != nil {
 		s.logger.Warn("download event could not be recorded")
 	}
+}
+
+// bookkeepingContext is for the small writes that record what happened (a
+// download finished, a hit): a client that disconnects must not make them fail
+// and leave a download "in progress" forever.
+func bookkeepingContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 }
 
 // callerOf returns who is making the request in ctx, or an empty value for
@@ -385,6 +394,8 @@ func (s *Server) finishDownload(ctx context.Context, id string, bytes int64, err
 	if errorClass != "" {
 		status = "failed"
 	}
+	ctx, cancel := bookkeepingContext(ctx)
+	defer cancel()
 	_, err := s.db.SQL.ExecContext(ctx, "UPDATE downloads SET status=$2,completed_at=now(),bytes=$3,error_class=$4 WHERE id=$1", id, status, bytes, errorClass)
 	if err != nil {
 		s.logger.Warn("download completion could not be recorded")
