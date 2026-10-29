@@ -51,7 +51,7 @@ func (s *Server) apiPersonalTokens(w http.ResponseWriter, r *http.Request, suffi
 			writeProblem(w, r, http.StatusNotFound, "Not found", "This access token does not exist.")
 			return
 		}
-		s.authLookups().purge()
+		s.forgetCredentials(r.Context())
 		s.audit(r.Context(), p.ID, "token.revoked", "access_token", id, nil)
 		w.WriteHeader(http.StatusNoContent)
 		return

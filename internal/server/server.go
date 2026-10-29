@@ -332,6 +332,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	// Hit events are flushed after the HTTP server has drained, so requests that
 	// finish during shutdown still get logged.
 	logCtx, stopHitLog := context.WithCancel(context.Background())
+	s.startAuthInvalidation(ctx)
 	s.startHitLog(logCtx)
 	defer func() {
 		stopHitLog()

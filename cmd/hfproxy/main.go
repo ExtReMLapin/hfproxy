@@ -329,6 +329,7 @@ func admin(args []string) error {
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("save admin password: %w", err)
 		}
+		tellInstances(ctx, store)
 		fmt.Printf("Reset password for admin user %q. Existing web sessions were revoked.\n", *username)
 		return nil
 	}
@@ -513,6 +514,7 @@ func tokenCommand(ctx context.Context, store *db.Store, cfg config.Config, args 
 		if n == 0 {
 			return fmt.Errorf("token not found")
 		}
+		tellInstances(ctx, store)
 		fmt.Println("Token revoked.")
 		return nil
 	default:
@@ -992,4 +994,12 @@ func validRefName(ref string) bool {
 		return false
 	}
 	return true
+}
+
+// tellInstances makes running instances drop their cached credentials now,
+// instead of within the cache time, after a change made from the command line.
+func tellInstances(ctx context.Context, store *db.Store) {
+	if err := store.NotifyAuthChange(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Running instances could not be notified; they pick the change up within HFPROXY_AUTH_CACHE_TTL: %v\n", err)
+	}
 }
