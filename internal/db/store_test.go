@@ -593,3 +593,57 @@ func TestFirstAdminIsCreatedOnlyOnce(t *testing.T) {
 		t.Fatal("HasActiveAdmin must see the new administrator")
 	}
 }
+
+func TestUserQuotaAndDownloadUsage(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	user := NewID()
+	store.CreateUser(ctx, user, "quota-user", "", "", "h", "reader")
+	repo, _ := store.UpsertRepository(ctx, "models", "org/quota", "public", user)
+
+	if any, _ := store.AnyUserDailyQuota(ctx); any {
+		t.Fatal("no user has a quota yet")
+	}
+	quota, used, err := store.DownloadUsage(ctx, user)
+	if err != nil || quota != nil || used != 0 {
+		t.Fatalf("a new user: quota=%v used=%d err=%v", quota, used, err)
+	}
+	// Only the last 24 hours of this user's downloads count.
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := store.SQL.Exec(query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`INSERT INTO downloads(id,repository_id,path,status,bytes,user_id,started_at) VALUES('q1',$1,'a','hit',100,$2,now()),('q2',$1,'b','hit',50,$2,now()-interval '2 hours'),('q3',$1,'c','hit',999,$2,now()-interval '3 days'),('q4',$1,'d','hit',7,'someone-else',now())`, repo, user)
+	if _, used, _ := store.DownloadUsage(ctx, user); used != 150 {
+		t.Fatalf("used = %d, want 150 (the 3-day-old and the other user's downloads do not count)", used)
+	}
+	ten := int64(10)
+	if err := store.SetUserDailyQuota(ctx, user, &ten); err != nil {
+		t.Fatal(err)
+	}
+	if quota, _, _ := store.DownloadUsage(ctx, user); quota == nil || *quota != 10 {
+		t.Fatalf("quota = %v, want 10", quota)
+	}
+	if any, _ := store.AnyUserDailyQuota(ctx); !any {
+		t.Fatal("a user has a quota")
+	}
+	zero := int64(0)
+	store.SetUserDailyQuota(ctx, user, &zero)
+	if any, _ := store.AnyUserDailyQuota(ctx); any {
+		t.Fatal("0 means unlimited and is not a limit to enforce")
+	}
+	if err := store.SetUserDailyQuota(ctx, user, nil); err != nil {
+		t.Fatal(err)
+	}
+	if quota, _, _ := store.DownloadUsage(ctx, user); quota != nil {
+		t.Fatalf("a cleared quota = %v", quota)
+	}
+	if err := store.SetUserDailyQuota(ctx, "nobody", &ten); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an unknown user = %v, want ErrNotFound", err)
+	}
+	if q, u, err := store.DownloadUsage(ctx, "nobody"); err != nil || q != nil || u != 0 {
+		t.Fatalf("an unknown user's usage = %v %d %v", q, u, err)
+	}
+}

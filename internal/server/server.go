@@ -53,6 +53,8 @@ type Server struct {
 	logger               *slog.Logger
 	logLevel             *slog.LevelVar
 	setupMu              sync.Mutex
+	downloadLimitsOnce   sync.Once
+	downloadLimiterStore *downloadLimiter
 	setupGenerated       string
 	setupOut             io.Writer
 	adminKnownUntil      atomic.Int64

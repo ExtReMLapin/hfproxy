@@ -91,9 +91,18 @@ type Config struct {
 	StagingMinFreeBytes  int64
 	CacheFillConcurrency int
 	CacheMaxTotalSize    int64
-	RetentionDownloads   time.Duration
-	RetentionAudit       time.Duration
-	MetricsAddr          string
+	// Download limits; 0 turns each one off.
+	// DownloadMaxConcurrent is how many transfers one user (or one anonymous
+	// client address) may run at once on this instance.
+	DownloadMaxConcurrent int64
+	// DownloadRateLimit caps the speed of each transfer, in bytes per second.
+	DownloadRateLimit int64
+	// DownloadDailyQuota is the default amount of data a user may download in
+	// 24 hours, in bytes. A user's own quota overrides it.
+	DownloadDailyQuota int64
+	RetentionDownloads time.Duration
+	RetentionAudit     time.Duration
+	MetricsAddr        string
 
 	// UpstreamBreakerThreshold is how many consecutive failures of one
 	// upstream host open its circuit (0 disables it); UpstreamBreakerCooldown
@@ -199,6 +208,9 @@ func Load() (Config, error) {
 	c.StagingMinFreeBytes = int64(number("STAGING_MIN_FREE_BYTES", 0))
 	c.CacheFillConcurrency = number("CACHE_FILL_CONCURRENCY", 4)
 	c.CacheMaxTotalSize = int64(number("CACHE_MAX_TOTAL_SIZE", 0))
+	c.DownloadMaxConcurrent = int64(number("DOWNLOAD_MAX_CONCURRENT_PER_USER", 0))
+	c.DownloadRateLimit = int64(number("DOWNLOAD_RATE_LIMIT", 0))
+	c.DownloadDailyQuota = int64(number("DOWNLOAD_DAILY_QUOTA", 0))
 	c.RetentionDownloads = duration("RETENTION_DOWNLOADS", 90*24*time.Hour)
 	c.RetentionAudit = duration("RETENTION_AUDIT", 365*24*time.Hour)
 	c.MetricsAddr = value("METRICS_ADDR", "")
@@ -293,6 +305,9 @@ func (c Config) Validate() error {
 	}
 	if c.StagingMinFreeBytes < 0 {
 		return fmt.Errorf("HFPROXY_STAGING_MIN_FREE_BYTES must not be negative")
+	}
+	if c.DownloadMaxConcurrent < 0 || c.DownloadRateLimit < 0 || c.DownloadDailyQuota < 0 {
+		return fmt.Errorf("the download limits (HFPROXY_DOWNLOAD_*) must not be negative")
 	}
 	if c.CacheFillConcurrency < 0 || c.CacheMaxTotalSize < 0 || c.RetentionDownloads < 0 || c.RetentionAudit < 0 {
 		return fmt.Errorf("HFPROXY_CACHE_FILL_CONCURRENCY, HFPROXY_CACHE_MAX_TOTAL_SIZE and the retention periods must not be negative")
@@ -490,7 +505,7 @@ func validateEnvironmentOverrides() error {
 			}
 		}
 	}
-	for _, key := range []string{"CACHE_MAX_FILE_SIZE", "CACHE_MAX_TOTAL_SIZE", "CACHE_FILL_CONCURRENCY", "UPSTREAM_BREAKER_THRESHOLD", "API_CACHE_MAX_BYTES", "STAGING_MIN_FREE_BYTES"} {
+	for _, key := range []string{"CACHE_MAX_FILE_SIZE", "CACHE_MAX_TOTAL_SIZE", "DOWNLOAD_MAX_CONCURRENT_PER_USER", "DOWNLOAD_RATE_LIMIT", "DOWNLOAD_DAILY_QUOTA", "CACHE_FILL_CONCURRENCY", "UPSTREAM_BREAKER_THRESHOLD", "API_CACHE_MAX_BYTES", "STAGING_MIN_FREE_BYTES"} {
 		name := "HFPROXY_" + key
 		if value, ok := os.LookupEnv(name); ok && value != "" {
 			if _, err := strconv.Atoi(value); err != nil {

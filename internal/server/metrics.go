@@ -39,7 +39,7 @@ func newMetrics() *metrics {
 		"hfproxy_http_requests_total": {"method", "route", "status_code"}, "hfproxy_http_response_bytes_total": {"route"}, "hfproxy_http_request_bytes_total": {"route"},
 		"hfproxy_cache_requests_total": {"result"}, "hfproxy_cache_bytes_served_total": {},
 		"hfproxy_upstream_requests_total": {"operation", "status_class"}, "hfproxy_upstream_errors_total": {"reason"}, "hfproxy_upstream_bytes_received_total": {"operation"}, "hfproxy_upstream_retries_total": {"operation"},
-		"hfproxy_downloads_total": {"result"}, "hfproxy_download_bytes_total": {"source"}, "hfproxy_download_failures_total": {"reason"},
+		"hfproxy_download_rejected_total": {"reason"}, "hfproxy_downloads_total": {"result"}, "hfproxy_download_bytes_total": {"source"}, "hfproxy_download_failures_total": {"reason"},
 		"hfproxy_storage_operations_total": {"operation", "result"}, "hfproxy_storage_errors_total": {"operation"}, "hfproxy_storage_bytes_transferred_total": {"operation"},
 		"hfproxy_retention_deleted_total": {"table"}, "hfproxy_cache_evictions_total": {},
 		"hfproxy_gc_runs_total": {"result"}, "hfproxy_gc_blobs_deleted_total": {},

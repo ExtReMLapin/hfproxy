@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/mail"
@@ -78,7 +79,7 @@ func (s *Server) apiUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]map[string]any, 0, len(users))
 	for _, u := range users {
-		items = append(items, map[string]any{"id": u.ID, "username": u.Username, "email": u.Email, "display_name": u.DisplayName, "role": u.Role, "status": u.Status, "created_at": u.CreatedAt})
+		items = append(items, map[string]any{"id": u.ID, "username": u.Username, "email": u.Email, "display_name": u.DisplayName, "role": u.Role, "status": u.Status, "created_at": u.CreatedAt, "daily_quota_bytes": u.DailyQuotaBytes})
 	}
 	next := ""
 	if len(items) > limit {
@@ -114,9 +115,22 @@ func (s *Server) apiUserPatch(w http.ResponseWriter, r *http.Request, id string)
 	var input struct {
 		Role   string `json:"role"`
 		Status string `json:"status"`
+		// DailyQuotaBytes is absent to leave the quota alone, null to fall back
+		// to the default, 0 for unlimited, or a number of bytes.
+		DailyQuotaBytes json.RawMessage `json:"daily_quota_bytes"`
 	}
 	if !decodeJSON(w, r, &input) {
 		return
+	}
+	quotaGiven := input.DailyQuotaBytes != nil
+	var quota *int64
+	if quotaGiven && string(input.DailyQuotaBytes) != "null" {
+		var value int64
+		if err := json.Unmarshal(input.DailyQuotaBytes, &value); err != nil || value < 0 {
+			writeProblem(w, r, 400, "Invalid quota", "daily_quota_bytes must be null, 0 (unlimited) or a number of bytes.")
+			return
+		}
+		quota = &value
 	}
 	if input.Role != "" && input.Role != "admin" && input.Role != "operator" && input.Role != "reader" {
 		writeProblem(w, r, 400, "Invalid role", "role must be admin, operator, or reader.")
@@ -126,8 +140,24 @@ func (s *Server) apiUserPatch(w http.ResponseWriter, r *http.Request, id string)
 		writeProblem(w, r, 400, "Invalid status", "status must be active or disabled.")
 		return
 	}
+	if input.Role == "" && input.Status == "" && !quotaGiven {
+		writeProblem(w, r, 400, "Empty update", "Set role, status or daily_quota_bytes.")
+		return
+	}
+	if quotaGiven {
+		if err := s.db.SetUserDailyQuota(r.Context(), id, quota); err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				writeProblem(w, r, 404, "User not found", "The user does not exist.")
+			} else {
+				s.fail(w, r, err, 500, "Database error", "Unable to update the quota.")
+			}
+			return
+		}
+		s.downloadLimits().forget(id)
+		s.audit(r.Context(), p.ID, "user.quota", "user", id, map[string]any{"daily_quota_bytes": quota})
+	}
 	if input.Role == "" && input.Status == "" {
-		writeProblem(w, r, 400, "Empty update", "Set role or status.")
+		writeJSON(w, 200, map[string]any{"id": id, "daily_quota_bytes": quota})
 		return
 	}
 	if err := s.db.UpdateUser(r.Context(), id, input.Role, input.Status); err != nil {

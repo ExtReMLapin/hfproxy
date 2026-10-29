@@ -116,13 +116,14 @@
           <th class="px-4 py-3 font-semibold" i18n>Email</th>
           <th class="px-4 py-3 font-semibold" i18n>Role</th>
           <th class="px-4 py-3 font-semibold" i18n>Status</th>
+          <th class="px-4 py-3 font-semibold" i18n>Daily quota (GiB)</th>
           <th class="px-5 py-3 text-right font-semibold" i18n>Action</th>
         </tr>
       </thead>
       <tbody>
         @if (loading()) {
           <tr>
-            <td colspan="5" class="px-5 py-12 text-center text-sm text-slate-400" i18n>
+            <td colspan="6" class="px-5 py-12 text-center text-sm text-slate-400" i18n>
               Loading accounts…
             </td>
           </tr>
@@ -174,6 +175,21 @@
                 <option value="disabled" i18n>Disabled</option>
               </select>
             </td>
+            <td class="px-4 py-3.5">
+              <input
+                type="number"
+                min="0"
+                step="any"
+                class="w-24 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-emerald-600"
+                [name]="'quota-' + user.id"
+                [ngModel]="quotaText(user)"
+                (ngModelChange)="setQuota(user, $event)"
+                placeholder="default"
+                i18n-placeholder
+                aria-label="Daily download quota in GiB; empty uses the default, 0 is unlimited"
+                i18n-aria-label
+              />
+            </td>
             <td class="px-5 py-3.5 text-right">
               <button
                 type="button"
@@ -189,7 +205,7 @@
         } @empty {
           @if (!loading()) {
             <tr>
-              <td colspan="5" class="px-5 py-12 text-center text-sm text-slate-400" i18n>
+              <td colspan="6" class="px-5 py-12 text-center text-sm text-slate-400" i18n>
                 No local accounts found.
               </td>
             </tr>

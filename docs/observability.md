@@ -34,6 +34,7 @@ HTTP route labels are normalized templates. No metric labels contain repository 
 | `hfproxy_download_bytes_total` | Counter | source | Bytes written to clients, source cache or upstream |
 | `hfproxy_downloads_in_flight` | Gauge | — | Active resolve GET sessions |
 | `hfproxy_download_failures_total` | Counter | reason | `http_error`, `client_disconnect`, or `cancelled` client sessions |
+| `hfproxy_download_rejected_total` | Counter | reason | Downloads refused by a limit: `concurrency` or `quota` (see [Download limits](operations.md#download-limits)) |
 | `hfproxy_storage_operations_total` | Counter | operation, result | S3 read, write, delete, and metadata operations |
 | `hfproxy_storage_operation_duration_seconds` | Histogram | operation | S3 operation duration |
 | `hfproxy_storage_errors_total` | Counter | operation | Failed S3 operations |

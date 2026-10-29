@@ -35,6 +35,9 @@ type settingsResponse struct {
 	SessionAbsoluteTTL     string   `json:"session_absolute_ttl"`
 	CacheMaxFileSize       int64    `json:"cache_max_file_size"`
 	CacheMaxTotalSize      int64    `json:"cache_max_total_size"`
+	DownloadMaxConcurrent  int64    `json:"download_max_concurrent"`
+	DownloadRateLimit      int64    `json:"download_rate_limit"`
+	DownloadDailyQuota     int64    `json:"download_daily_quota"`
 	CacheRefTTL            string   `json:"cache_ref_ttl"`
 	CacheNegativeTTL       string   `json:"cache_negative_ttl"`
 	CacheGCGrace           string   `json:"cache_gc_grace"`
@@ -86,6 +89,9 @@ type settingsInput struct {
 	SessionAbsoluteTTL     string   `json:"session_absolute_ttl"`
 	CacheMaxFileSize       int64    `json:"cache_max_file_size"`
 	CacheMaxTotalSize      *int64   `json:"cache_max_total_size"`
+	DownloadMaxConcurrent  *int64   `json:"download_max_concurrent"`
+	DownloadRateLimit      *int64   `json:"download_rate_limit"`
+	DownloadDailyQuota     *int64   `json:"download_daily_quota"`
 	CacheRefTTL            string   `json:"cache_ref_ttl"`
 	CacheNegativeTTL       string   `json:"cache_negative_ttl"`
 	CacheGCGrace           string   `json:"cache_gc_grace"`
@@ -120,7 +126,7 @@ func settingsView(cfg config.Config) settingsResponse {
 		PublicURL: cfg.PublicURL, HFBaseURL: cfg.HFBaseURL, HFProxySet: cfg.HFProxyURL != "", HFAllowedHosts: cfg.HFAllowedHosts, HFTimeout: cfg.HFTimeout.String(), HFTokenSet: cfg.HFToken != "",
 		S3Endpoint: cfg.S3Endpoint, S3Region: cfg.S3Region, S3Bucket: cfg.S3Bucket, S3Prefix: cfg.S3Prefix, S3ForcePathStyle: cfg.S3ForcePathStyle, S3ServerSideEncryption: cfg.S3ServerSideEncryption,
 		S3AccessKeySet: cfg.S3AccessKey != "", S3SecretKeySet: cfg.S3SecretKey != "", AuthMode: cfg.AuthMode, AnonymousPublicRead: cfg.AnonymousPublicRead,
-		SessionIdleTTL: cfg.SessionIdleTTL.String(), SessionAbsoluteTTL: cfg.SessionAbsoluteTTL.String(), CacheMaxFileSize: cfg.CacheMaxFileSize, CacheMaxTotalSize: cfg.CacheMaxTotalSize,
+		SessionIdleTTL: cfg.SessionIdleTTL.String(), SessionAbsoluteTTL: cfg.SessionAbsoluteTTL.String(), CacheMaxFileSize: cfg.CacheMaxFileSize, CacheMaxTotalSize: cfg.CacheMaxTotalSize, DownloadMaxConcurrent: cfg.DownloadMaxConcurrent, DownloadRateLimit: cfg.DownloadRateLimit, DownloadDailyQuota: cfg.DownloadDailyQuota,
 		CacheRefTTL: cfg.CacheRefTTL.String(), CacheNegativeTTL: cfg.CacheNegativeTTL.String(), CacheGCGrace: cfg.CacheGCGrace.String(),
 		OIDCIssuer: cfg.OIDCIssuer, OIDCClientID: cfg.OIDCClientID, OIDCClientSecretSet: cfg.OIDCClientSecret != "", OIDCRedirectURL: cfg.OIDCRedirectURL,
 		OIDCAutoProvision: cfg.OIDCAutoProvision, LDAPURL: cfg.LDAPURL, LDAPStartTLS: cfg.LDAPStartTLS, LDAPBindDN: cfg.LDAPBindDN,
@@ -231,6 +237,24 @@ func (in settingsInput) apply(cfg config.Config) (config.Config, error) {
 			return config.Config{}, errors.New("the total cache size limit cannot be negative")
 		}
 		cfg.CacheMaxTotalSize = *in.CacheMaxTotalSize
+	}
+	// Like the cache limit, a limit left out of the request stays as it is and 0 turns it off.
+	for _, limit := range []struct {
+		name  string
+		input *int64
+		field *int64
+	}{
+		{"concurrent downloads per user", in.DownloadMaxConcurrent, &cfg.DownloadMaxConcurrent},
+		{"download speed limit", in.DownloadRateLimit, &cfg.DownloadRateLimit},
+		{"daily download quota", in.DownloadDailyQuota, &cfg.DownloadDailyQuota},
+	} {
+		if limit.input == nil {
+			continue
+		}
+		if *limit.input < 0 {
+			return config.Config{}, fmt.Errorf("the %s cannot be negative", limit.name)
+		}
+		*limit.field = *limit.input
 	}
 	cfg.SessionIdleTTL, err = parseDuration("session idle TTL", in.SessionIdleTTL, cfg.SessionIdleTTL)
 	if err != nil {

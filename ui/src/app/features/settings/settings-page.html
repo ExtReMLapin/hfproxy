@@ -669,6 +669,51 @@
                     placeholder="1h"
                 /></label>
               </div>
+              <h3 class="mt-8 text-sm font-semibold text-slate-900" i18n>Download limits</h3>
+              <p class="mt-1 max-w-2xl text-xs leading-5 text-slate-500" i18n>
+                Keep one client from taking all the bandwidth. 0 turns a limit off. Preloads started
+                by an administrator are not limited.
+              </p>
+              <div class="mt-4 grid gap-4 sm:grid-cols-3">
+                <label class="field" i18n
+                  >Simultaneous downloads per user<input
+                    class="control"
+                    name="downloadMaxConcurrent"
+                    type="number"
+                    min="0"
+                    [(ngModel)]="settings.download_max_concurrent"
+                    [disabled]="isLocked('download_max_concurrent')"
+                  /><span class="mt-1 block text-[11px] font-normal leading-4 text-slate-500"
+                    >Counted on each instance. Anonymous clients count per address.</span
+                  ></label
+                ><label class="field" i18n
+                  >Speed limit per download
+                  <span class="font-normal text-slate-400">(bytes per second)</span
+                  ><input
+                    class="control"
+                    name="downloadRateLimit"
+                    type="number"
+                    min="0"
+                    [(ngModel)]="settings.download_rate_limit"
+                    [disabled]="isLocked('download_rate_limit')"
+                  /><span class="mt-1 block text-[11px] font-normal leading-4 text-slate-500"
+                    >For example, 52428800 is 50 MiB/s.</span
+                  ></label
+                ><label class="field" i18n
+                  >Daily quota per user <span class="font-normal text-slate-400">(bytes)</span
+                  ><input
+                    class="control"
+                    name="downloadDailyQuota"
+                    type="number"
+                    min="0"
+                    [(ngModel)]="settings.download_daily_quota"
+                    [disabled]="isLocked('download_daily_quota')"
+                  /><span class="mt-1 block text-[11px] font-normal leading-4 text-slate-500"
+                    >Over the last 24 hours, for all instances. A user's own quota, set on the Users
+                    page, replaces it.</span
+                  ></label
+                >
+              </div>
               <div
                 class="mt-6 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-800"
                 i18n

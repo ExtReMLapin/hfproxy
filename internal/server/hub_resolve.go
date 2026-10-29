@@ -61,6 +61,12 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 		s.accessProblem(w, r, err)
 		return
 	}
+	r, w, releaseDownload, admitted := s.admitDownload(w, r, p)
+	if !admitted {
+		return
+	}
+	defer releaseDownload()
+	s.logger.Debug("file request", "request_id", requestID(r.Context()), "method", r.Method, "repo_type", parsed.RepoType, "repo_id", parsed.RepoID, "revision", safeLogValue(parsed.Revision, 100), "path", safeLogValue(parsed.FilePath, 300), "policy", policy, "authenticated", p != nil)
 	res := &fileResolution{w: w, r: r, parsed: parsed, principal: p, policy: policy, repoPK: repoPK}
 	defer res.closeUpstream()
 
@@ -118,6 +124,7 @@ func (s *Server) serveCacheHit(res *fileResolution, commit, errorDetail string) 
 	cached, err := s.findArtifact(res.r.Context(), res.repoPK, commit, res.parsed.FilePath)
 	if err == nil {
 		s.touchArtifact(res.r.Context(), cached.ID)
+		s.logger.Debug("cache hit", "request_id", requestID(res.r.Context()), "repo_id", res.parsed.RepoID, "path", safeLogValue(res.parsed.FilePath, 300), "commit", commit, "bytes", cached.Size)
 		s.recordDownload(res.r.Context(), res.repoPK, commit, res.parsed.FilePath, "hit", cached.Size, "")
 		s.serveOrAcknowledgePreload(res.w, res.r, cached, "HIT")
 		return true
@@ -159,6 +166,11 @@ func (s *Server) probeUpstream(res *fileResolution) bool {
 		return false
 	}
 	res.upstream, res.firstHeaders = upstream, firstHeaders
+	if upstream.StatusCode == http.StatusTooManyRequests || upstream.StatusCode >= 500 {
+		s.logger.Warn("the Hub answered with an error", "request_id", requestID(r.Context()), "repo_id", parsed.RepoID, "path", safeLogValue(parsed.FilePath, 300), "status", upstream.StatusCode)
+	} else {
+		s.logger.Debug("the Hub answered", "request_id", requestID(r.Context()), "repo_id", parsed.RepoID, "path", safeLogValue(parsed.FilePath, 300), "status", upstream.StatusCode)
+	}
 	if upstream.StatusCode == http.StatusTooManyRequests || upstream.StatusCode >= 500 {
 		if s.serveStale(w, r, res.repoPK, res.staleCommit, parsed) {
 			return false
@@ -516,13 +528,14 @@ func (s *Server) publishDownload(fill *cacheFill) {
 	// proxy even if the client closes its connection after receiving the body.
 	publishCtx, cancelPublish := cachePublishContext(fill.ctx)
 	defer cancelPublish()
-	fail := func(class string, status int, title, detail string) {
+	fail := func(class string, cause error, status int, title, detail string) {
+		s.logger.Error("cache publication failed", "request_id", requestID(r.Context()), "repo_id", res.parsed.RepoID, "path", safeLogValue(res.parsed.FilePath, 300), "step", class, "error", safeLogValue(cause.Error(), 300))
 		s.finishDownload(publishCtx, fill.downloadID, fill.size, class)
 		writeStreamAwareProblem(w, r, fill.streamed, status, title, detail)
 	}
 	if fill.resume == nil {
 		if err := fill.tmp.Sync(); err != nil {
-			fail("staging", 500, "Cache error", "Unable to finalize the staged file.")
+			fail("staging", err, 500, "Cache error", "Unable to finalize the staged file.")
 			return
 		}
 	}
@@ -531,12 +544,12 @@ func (s *Server) publishDownload(fill *cacheFill) {
 	// their progress writers need connections of their own.
 	blobExists, err := s.db.BlobExists(publishCtx, fill.digest)
 	if err != nil {
-		fail("metadata", 500, "Cache metadata error", "Unable to check blob metadata.")
+		fail("metadata", err, 500, "Cache metadata error", "Unable to check blob metadata.")
 		return
 	}
 	if !blobExists {
 		if err := objectStore.UploadFile(publishCtx, fill.tmp, key, contentType, fill.size); err != nil {
-			fail("storage", 502, "Storage error", "The downloaded file could not be published to object storage.")
+			fail("storage", err, 502, "Storage error", "The downloaded file could not be published to object storage.")
 			return
 		}
 	}
@@ -572,11 +585,11 @@ func (s *Server) publishDownload(fill *cacheFill) {
 		var publishErr *db.PublishError
 		switch {
 		case errors.As(err, &stepErr):
-			fail(stepErr.class, http.StatusBadGateway, "Storage error", stepErr.message)
+			fail(stepErr.class, err, http.StatusBadGateway, "Storage error", stepErr.message)
 		case errors.As(err, &publishErr):
-			fail("metadata", 500, "Cache metadata error", publishmentMessages[publishErr.Stage])
+			fail("metadata", err, 500, "Cache metadata error", publishmentMessages[publishErr.Stage])
 		default:
-			fail("metadata", 500, "Cache metadata error", "Unable to publish artifact metadata.")
+			fail("metadata", err, 500, "Cache metadata error", "Unable to publish artifact metadata.")
 		}
 		return
 	}
@@ -586,6 +599,7 @@ func (s *Server) publishDownload(fill *cacheFill) {
 		cancel()
 	}
 	s.finishDownload(publishCtx, fill.downloadID, fill.size, "")
+	s.logger.Info("file cached", "request_id", requestID(r.Context()), "repo_id", res.parsed.RepoID, "path", safeLogValue(res.parsed.FilePath, 300), "commit", res.commit, "bytes", fill.size, "streamed", fill.streamed, "resumed", fill.resume != nil)
 	if fill.streamed {
 		return
 	}
