@@ -59,7 +59,18 @@ wait_http() { # url expected-status [tries]
 }
 
 log "create the cluster"
-"$KIND" create cluster --name "$CLUSTER" --wait 120s
+# The proxy refuses to call private addresses (its protection against being
+# used to reach internal services), and a real Hub is public. Give the cluster's
+# Services public-looking addresses (a documentation range, never routed) so the
+# Hub stand-in is reachable without weakening that rule.
+KIND_CONFIG="$(mktemp)"
+cat >"$KIND_CONFIG" <<'EOF'
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  serviceSubnet: "198.51.100.0/24"
+EOF
+"$KIND" create cluster --name "$CLUSTER" --config "$KIND_CONFIG" --wait 120s
 kind_image_load() { "$KIND" load docker-image "$IMAGE" --name "$CLUSTER"; }
 kind_image_load
 
