@@ -1,0 +1,12 @@
+# Test stack only. hfproxy runs in Keycloak's network namespace, so its metrics
+# port (9090) is reached as keycloak:9090.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+rule_files:
+  - /etc/prometheus/alerts.yml
+scrape_configs:
+  - job_name: hfproxy
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["keycloak:9090"]
