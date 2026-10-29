@@ -52,6 +52,10 @@ func putSettings(t *testing.T, s *Server, admin *Principal, payload map[string]a
 	rec := auditAPIDoAs(s, admin, http.MethodPut, "/api/v1/settings", string(body))
 	var out map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if rec.Code == http.StatusOK {
+		// The console keeps the revision of what it just saved.
+		payload["revision"] = out["revision"]
+	}
 	return rec.Code, out
 }
 
@@ -158,5 +162,43 @@ func TestLockedSettingsCannotBeChangedFromTheConsole(t *testing.T) {
 	}
 	if got := s.currentConfig().CacheMaxTotalSize; got != 0 {
 		t.Fatalf("a refused change was applied: %d", got)
+	}
+}
+
+// Two administrators editing at once, or one on a replica that missed the
+// other's save, must not silently overwrite each other.
+func TestSettingsSavedFromOutdatedSettingsAreRefused(t *testing.T) {
+	store := auditAPIFreshStore(t)
+	s := auditAPINewServer(t, store, auditAPIConfig())
+	admin := settingsAdmin(t, store)
+
+	one := settingsPayload(t, s, admin) // both read the same settings
+	two := settingsPayload(t, s, admin)
+	one["cache_max_total_size"] = 111
+	if code, out := putSettings(t, s, admin, one); code != http.StatusOK {
+		t.Fatalf("first save = %d %v", code, out)
+	}
+	two["download_rate_limit"] = 222
+	if code, _ := putSettings(t, s, admin, two); code != http.StatusConflict {
+		t.Fatalf("a save made on outdated settings = %d, want 409", code)
+	}
+	current := settingsPayload(t, s, admin)
+	if current["cache_max_total_size"] != float64(111) || current["download_rate_limit"] != float64(0) {
+		t.Fatalf("the refused save must change nothing, and the first must stay: %v %v", current["cache_max_total_size"], current["download_rate_limit"])
+	}
+	current["download_rate_limit"] = 222
+	if code, out := putSettings(t, s, admin, current); code != http.StatusOK {
+		t.Fatalf("a save made on the current settings = %d %v", code, out)
+	}
+
+	// A replica that missed those saves adopts them when asked, instead of
+	// serving, and saving over, a stale copy.
+	replica := auditAPINewServer(t, store, auditAPIConfig())
+	view := settingsPayload(t, replica, admin)
+	if view["cache_max_total_size"] != float64(111) || view["download_rate_limit"] != float64(222) {
+		t.Fatalf("the replica shows stale settings: %v %v", view["cache_max_total_size"], view["download_rate_limit"])
+	}
+	if code, out := putSettings(t, replica, admin, view); code != http.StatusOK {
+		t.Fatalf("a save from the refreshed replica = %d %v", code, out)
 	}
 }

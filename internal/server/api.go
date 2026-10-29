@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hfproxy/hfproxy/internal/bytesize"
 	"github.com/hfproxy/hfproxy/internal/db"
 )
 
@@ -39,7 +40,7 @@ func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, r, http.StatusUnauthorized, "Authentication required", "A valid access token is required.")
 			return
 		}
-		if p.TokenID == "" || (!hasScope(p, "write") && !hasScope(p, "admin")) {
+		if p.TokenID == "" || !tokenAllowsAdministration(p) {
 			writeProblem(w, r, http.StatusForbidden, "Forbidden", "This token is read-only and cannot modify the administration API.")
 			return
 		}
@@ -182,7 +183,7 @@ func (s *Server) apiStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repos, artifacts, totalBytes, hits, misses, active := stats.Repositories, stats.Artifacts, stats.Bytes, stats.Hits, stats.Misses, stats.Active
-	writeJSON(w, http.StatusOK, map[string]any{"repositories": repos, "artifacts": artifacts, "cache_bytes": totalBytes, "cache_size": formatBytes(totalBytes), "cache_hits": hits, "cache_misses": misses, "hit_ratio": func() float64 {
+	writeJSON(w, http.StatusOK, map[string]any{"repositories": repos, "artifacts": artifacts, "cache_bytes": totalBytes, "cache_size": bytesize.Format(totalBytes), "cache_hits": hits, "cache_misses": misses, "hit_ratio": func() float64 {
 		if hits+misses == 0 {
 			return 0
 		}
@@ -294,7 +295,7 @@ func (s *Server) apiPurge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if dry || !confirm {
-		writeJSON(w, 200, map[string]any{"dry_run": true, "entries": count, "bytes": size, "size": formatBytes(size), "confirmation_required": true})
+		writeJSON(w, 200, map[string]any{"dry_run": true, "entries": count, "bytes": size, "size": bytesize.Format(size), "confirmation_required": true})
 		return
 	}
 	ids, err := s.db.PurgeCandidates(r.Context(), p.Role, p.ID, repoID, path)

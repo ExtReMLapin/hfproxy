@@ -17,10 +17,6 @@ export function permissionLabel(permission: string): string {
   switch (permission) {
     case 'read':
       return $localize`Read`;
-    case 'write':
-      return $localize`Write`;
-    case 'admin':
-      return $localize`Admin`;
     default:
       return permission;
   }

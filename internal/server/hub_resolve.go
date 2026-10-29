@@ -84,10 +84,6 @@ func (s *Server) resolveFile(w http.ResponseWriter, r *http.Request) {
 		s.answerHead(res)
 		return
 	}
-	if policy == "admin_only" && p == nil {
-		writeProblem(w, r, 401, "Authentication required", "Sign in to access this repository.")
-		return
-	}
 	s.fillCache(res)
 }
 
@@ -337,7 +333,24 @@ func (s *Server) fillCache(res *fileResolution) {
 	}
 	// A database lock per file makes fills exclusive across all instances that
 	// share the database: the others wait here, then find the file cached.
-	unlockFill, lockErr := s.lockDownloadResume(fill.ctx, res.repoPK, res.commit, res.parsed.FilePath)
+	// The wait is bounded: behind a slow fill on another instance it would hold
+	// this fill slot, a staging reservation and a connection for hours. After the
+	// bound the client is served straight from the Hub instead.
+	lockCtx, stopLockWait := context.WithTimeout(fill.ctx, fillLockWait)
+	unlockFill, lockErr := s.lockDownloadResume(lockCtx, res.repoPK, res.commit, res.parsed.FilePath)
+	waited := lockCtx.Err() != nil
+	stopLockWait()
+	if lockErr != nil && waited && fill.ctx.Err() == nil {
+		s.logger.Info("another instance is filling this file; serving it from the Hub meanwhile", "request_id", requestID(fill.ctx), "wait", fillLockWait.String())
+		s.finishDownload(fill.ctx, fill.downloadID, 0, "resume_lock_wait")
+		if r.Method == http.MethodGet && res.expectedLFS == "" {
+			s.streamUncachedMiss(w, r, res.parsed, res.meta, res.commit)
+			return
+		}
+		w.Header().Set("Retry-After", "30")
+		writeProblem(w, r, http.StatusServiceUnavailable, "File is being cached", "Another instance is still fetching this file; retry shortly.")
+		return
+	}
 	if lockErr != nil {
 		s.finishDownload(fill.ctx, fill.downloadID, 0, "resume_lock")
 		writeProblem(w, r, http.StatusInternalServerError, "Cache metadata error", "Unable to coordinate the cache fill.")

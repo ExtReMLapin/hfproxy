@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"net/url"
 	"os"
 	"strings"
@@ -61,7 +62,7 @@ func TestSavedSettingsFollowASessionSecretRotation(t *testing.T) {
 	ctx := context.Background()
 	saved := persistBase(persistOld)
 	saved.S3Bucket = "console-bucket"
-	if err := SavePersisted(ctx, sqlDB, saved, ""); err != nil {
+	if _, err := SavePersisted(ctx, sqlDB, saved, ""); err != nil {
 		t.Fatal(err)
 	}
 	var raw []byte
@@ -176,5 +177,38 @@ func TestSavedSettingsWithoutTheCacheLimitKeepTheEnvironmentValue(t *testing.T) 
 	}
 	if got := saved.apply(Config{CacheMaxTotalSize: 9}).CacheMaxTotalSize; got != 123 {
 		t.Fatalf("saved limit = %d, want 123", got)
+	}
+}
+
+func TestASaveBasedOnOutdatedSettingsIsRefused(t *testing.T) {
+	sqlDB := persistDatabase(t)
+	ctx := context.Background()
+	base := persistBase(persistOld)
+
+	// Two editors read the same (empty) state.
+	first, second := base, base
+	first.S3Bucket, second.HFToken = "first-bucket", "second-token"
+	revision, err := SavePersisted(ctx, sqlDB, first, "")
+	if err != nil || revision == "" {
+		t.Fatalf("first save = %q %v", revision, err)
+	}
+	if _, err := SavePersisted(ctx, sqlDB, second, ""); !errors.Is(err, ErrSettingsConflict) {
+		t.Fatalf("a save made on settings that were replaced = %v, want ErrSettingsConflict", err)
+	}
+	if got, _ := PersistedRevision(ctx, sqlDB); got != revision {
+		t.Fatalf("the refused save changed the revision to %q", got)
+	}
+	// Reading the saved settings gives the revision a later save must carry.
+	loaded, err := LoadPersisted(ctx, sqlDB, base)
+	if err != nil || loaded.SettingsRevision != revision || loaded.S3Bucket != "first-bucket" {
+		t.Fatalf("loaded %q %q %v", loaded.SettingsRevision, loaded.S3Bucket, err)
+	}
+	loaded.HFToken = "second-token"
+	next, err := SavePersisted(ctx, sqlDB, loaded, "")
+	if err != nil || next == revision {
+		t.Fatalf("a save based on the current settings = %q %v", next, err)
+	}
+	if again, err := LoadPersisted(ctx, sqlDB, base); err != nil || again.S3Bucket != "first-bucket" || again.HFToken != "second-token" {
+		t.Fatalf("both changes must survive: %+v %v", again, err)
 	}
 }

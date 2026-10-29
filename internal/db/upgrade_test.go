@@ -69,6 +69,11 @@ func TestUpgradeFromEveryPreviousVersion(t *testing.T) {
 			exec(`INSERT INTO sessions(token_hash,user_id,csrf_hash,expires_at) VALUES('\x02','u1','\x03',now()+interval '1 hour')`)
 			exec(`INSERT INTO downloads(id,repository_id,path,status) VALUES('d1','r1','config.json','hit')`)
 			exec(`INSERT INTO audit_events(id,action) VALUES('e1','test')`)
+			if from < 14 {
+				exec(`INSERT INTO repo_grants(repository_id,subject_type,subject_id,permission) VALUES('r1','user','u1','admin')`)
+			} else {
+				exec(`INSERT INTO repo_grants(repository_id,subject_type,subject_id,permission) VALUES('r1','user','u1','read')`)
+			}
 			if from >= 10 {
 				exec(`INSERT INTO cache_pins(repository_id,commit_sha) VALUES('r1','')`)
 			}
@@ -95,6 +100,14 @@ func TestUpgradeFromEveryPreviousVersion(t *testing.T) {
 				if n := count(`SELECT COUNT(*) FROM ` + table); n != 1 {
 					t.Errorf("%s holds %d rows after the upgrade, want the 1 seeded", table, n)
 				}
+			}
+			// The totals of the console start from what the downloads table held,
+			// and a grant that promised more than reading now says what it gives.
+			if n := count(`SELECT COALESCE(SUM(hits),0) FROM repository_download_counts WHERE repository_id='r1'`); n != 1 {
+				t.Errorf("the hit counter holds %d after the upgrade, want the 1 seeded download", n)
+			}
+			if n := count(`SELECT COUNT(*) FROM repo_grants WHERE permission='read'`); n != 1 {
+				t.Error("a grant of a higher permission must become a read grant")
 			}
 			// Columns added later get their defaults on old rows.
 			if n := count(`SELECT COUNT(*) FROM access_tokens WHERE key_id=''`); n != 1 {

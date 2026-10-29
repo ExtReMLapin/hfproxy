@@ -19,13 +19,27 @@ All notable changes to hfproxy. The format follows [Keep a Changelog](https://ke
 
 ### Changed
 
+- **A repository grant can only give `read`.** `write` and `admin` were accepted but enforced as `read`, which looked like a feature. The API refuses them, the console no longer offers them, and migration 14 turns existing ones into `read`.
+- **The hit and miss totals of the console are counters kept per repository** (migration 15, filled from the downloads table). Reading them no longer scans the downloads table, and they no longer shrink when old download records are pruned.
 - **LDAP accounts are found by their stable identifier, not by the directory's address.** Changing `ldap://` for `ldaps://`, renaming the server or changing its port used to make every user a stranger (duplicates with auto-provisioning, no sign-in without it). The recorded address now follows the configured one.
 - **Connections to the OIDC issuer and the LDAP server are filtered**: cloud metadata services, link-local, unspecified and multicast addresses (and loopback outside development) are refused on the address actually connected to. OIDC calls now have a timeout and follow at most three redirects. Private addresses stay allowed.
-- **Dashboard statistics are kept for 15 seconds** per viewer, and computed once for simultaneous requests. Counting hits and misses reads the whole downloads table (0.8 s at five million rows) and the console asked at every page.
+- **Dashboard statistics are kept for 15 seconds** per viewer, and computed once for simultaneous requests: the console asked at every page.
 - A failed Hub request now logs why (without the URL, which can carry a signature).
 - The Helm chart's `appVersion` is kept in line with the latest release.
 
 ### Fixed
+
+- **A purge could deadlock with a fill of the same file.** The purge (console and `hfproxy cache purge`) locked the catalog entry then the blob, a fill the other way round; PostgreSQL ended one of them, sometimes a fill after hours of download. Both now lock the blob first. The CLI purge shares the code of the console's.
+- **The cleanup of abandoned resumptions never respected a fill in progress.** It used another lock key than the fill, so a fill stuck on a dead connection could have its stored blocks deleted under it after seven days. They now share one key.
+- **Saving the settings overwrote other people's changes.** Two administrators, or a replica that had not seen a change, silently replaced each other's settings, secrets included. The console now sends the revision it read, a save on an outdated one is refused (`409`), and an instance adopts the saved settings when the console opens them.
+- **Waiting for another instance's fill no longer blocks a slot for hours.** The wait for the file's cluster-wide lock is bounded to one minute; after that the file is streamed from the Hub, or the client is told to retry (`503`, `Retry-After`).
+- **`hfproxy admin reset-password` now revokes the administrator's access tokens**, not only their web sessions: a stolen token no longer survives the reset.
+- **Signing out reports a failure** (`500`) when the session could not be ended, instead of claiming success while the session stays valid.
+- **After signing out, signing in again as another user no longer shows the previous page**, and an error banner no longer outlives the session that caused it.
+- **One `Secure` rule for every cookie** (https public URL or https OIDC redirect): the CSRF cookie could be unprotected next to a Secure session cookie.
+- **A revoked credential could be cached again** by a lookup that began before the revocation; it is now ignored.
+- The cache refuses a `HFPROXY_CACHE_MAX_FILE_SIZE` above 625 GiB (10000 parts of 64 MiB, the object store's limit) instead of failing after hours of transfer.
+- Finished preload jobs are forgotten after 24 hours; the negative cache no longer scans all its entries on every insert; the admission of downloads no longer waits for a database query when its quota answer expires; stopping no longer spends minutes writing queued download events when the database is down (15 s at most, the rest is reported).
 
 - **A file could be listed in the cache whose object was gone for good.** If a file was downloaded again at the moment the hourly collector deleted its orphaned blob, the new catalog entry could be recorded without the object being restored, and every later download of that file answered 502 until the entry was purged by hand. The object is now checked and restored when the download did not upload it itself. Present in 0.1.0; the window is a few milliseconds per orphaned blob and collection pass, so it is rare. If you suspect it, `hfproxy cache verify` lists the affected files and `hfproxy cache purge` drops their entries.
 - The log line for a cached object that cannot be read now says why, and whether the object is missing.

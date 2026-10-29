@@ -24,7 +24,6 @@ import (
 	"github.com/go-ldap/ldap/v3"
 	"github.com/hfproxy/hfproxy/internal/config"
 	"github.com/hfproxy/hfproxy/internal/db"
-	"github.com/hfproxy/hfproxy/internal/keyring"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/oauth2"
 )
@@ -51,7 +50,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		cookie, err := r.Cookie("hfproxy_login_csrf")
 		if err != nil || cookie.Value == "" {
-			cookie = &http.Cookie{Name: "hfproxy_login_csrf", Value: randomSecret(24), Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: strings.HasPrefix(s.currentConfig().PublicURL, "https://"), MaxAge: 600}
+			cookie = &http.Cookie{Name: "hfproxy_login_csrf", Value: randomSecret(24), Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: cookieSecure(s.currentConfig()), MaxAge: 600}
 			http.SetCookie(w, cookie)
 		}
 		data.CSRF = cookie.Value
@@ -159,7 +158,11 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		candidates := s.keyRing().HashCandidates(cookie.Value)
 		actorID = s.db.SessionOwner(r.Context(), candidates)
 		if err := s.db.DeleteSessions(r.Context(), candidates); err != nil {
-			s.logger.Error("session could not be deleted at logout; it stays valid until it expires", "request_id", requestID(r.Context()))
+			// Saying "signed out" while the session stays valid would leave a copy
+			// of the cookie working; the cookie is kept so the user can retry.
+			s.logger.Error("session could not be deleted at logout; it stays valid until it expires", "request_id", requestID(r.Context()), "error", err.Error())
+			writeProblem(w, r, http.StatusInternalServerError, "Sign-out failed", "Your session could not be ended. Try again.")
+			return
 		}
 	}
 	s.forgetCredentials(r.Context())
@@ -187,7 +190,7 @@ func (s *Server) oidcLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	state := oidcState{State: randomSecret(24), Nonce: randomSecret(24), Verifier: oauth2.GenerateVerifier(), Expires: time.Now().Add(10 * time.Minute)}
 	encoded, _ := json.Marshal(state)
-	http.SetCookie(w, &http.Cookie{Name: "hfproxy_oidc", Value: base64.RawURLEncoding.EncodeToString(encoded), Path: "/", HttpOnly: true, Secure: strings.HasPrefix(s.currentConfig().OIDCRedirectURL, "https://"), SameSite: http.SameSiteLaxMode, MaxAge: 600})
+	http.SetCookie(w, &http.Cookie{Name: "hfproxy_oidc", Value: base64.RawURLEncoding.EncodeToString(encoded), Path: "/", HttpOnly: true, Secure: cookieSecure(s.currentConfig()), SameSite: http.SameSiteLaxMode, MaxAge: 600})
 	url := s.currentOIDCConfig().AuthCodeURL(state.State, oauth2.S256ChallengeOption(state.Verifier), oauth2.SetAuthURLParam("nonce", state.Nonce))
 	http.Redirect(w, r, url, http.StatusFound)
 }
@@ -203,7 +206,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// Clear the state cookie before any redirect: headers set after
 	// http.Redirect has written the response are silently dropped.
-	http.SetCookie(w, &http.Cookie{Name: "hfproxy_oidc", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: strings.HasPrefix(s.currentConfig().OIDCRedirectURL, "https://"), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: "hfproxy_oidc", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: cookieSecure(s.currentConfig()), SameSite: http.SameSiteLaxMode})
 	cookie, err := r.Cookie("hfproxy_oidc")
 	if err != nil {
 		http.Redirect(w, r, "/login?error=invalid_state", http.StatusSeeOther)
@@ -412,14 +415,18 @@ func usernameFromLogin(value string) string {
 	return base + "-" + randomSecret(4)
 }
 
+// cookieSecure says whether cookies carry the Secure flag. One rule for all of
+// them: they are set on the same host, and a Secure session cookie next to a
+// CSRF cookie that is not defeats the point. It holds when either the public
+// URL or the OIDC redirect URL is https (the proxy may sit behind a TLS
+// terminator that hides it from the request).
+func cookieSecure(cfg config.Config) bool {
+	return strings.HasPrefix(cfg.PublicURL, "https://") || strings.HasPrefix(cfg.OIDCRedirectURL, "https://")
+}
+
 func clearCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 }
-
-// HashToken is the original token hash, HMAC-SHA256 keyed with the raw session
-// secret. New tokens use keys derived from the secret (see internal/keyring);
-// this form is still accepted so existing tokens keep working.
-func HashToken(token, pepper string) []byte { return keyring.LegacyHash(token, pepper) }
 
 func HashPassword(password string) (string, error) {
 	if len(password) < 12 || len(password) > 1024 {

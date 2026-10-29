@@ -61,6 +61,9 @@ type settingsResponse struct {
 	OTLPEndpoint           string   `json:"otlp_endpoint"`
 	CacheInventoryRefresh  string   `json:"cache_inventory_refresh"`
 	LogLevel               string   `json:"log_level"`
+	// Revision names the saved version these settings come from; saving sends it
+	// back, and is refused when the settings changed in between.
+	Revision string `json:"revision"`
 	// Locked lists the settings pinned to the environment (read-only here).
 	Locked []string `json:"locked"`
 }
@@ -117,6 +120,8 @@ type settingsInput struct {
 	OTLPEndpoint           string   `json:"otlp_endpoint"`
 	CacheInventoryRefresh  string   `json:"cache_inventory_refresh"`
 	LogLevel               string   `json:"log_level"`
+	// Revision is the one read with the settings being edited.
+	Revision string `json:"revision"`
 	// Locked is part of what the console reads back; it is ignored on input.
 	Locked []string `json:"locked"`
 }
@@ -132,7 +137,8 @@ func settingsView(cfg config.Config) settingsResponse {
 		OIDCAutoProvision: cfg.OIDCAutoProvision, LDAPURL: cfg.LDAPURL, LDAPStartTLS: cfg.LDAPStartTLS, LDAPBindDN: cfg.LDAPBindDN,
 		LDAPBindPasswordSet: cfg.LDAPBindPassword != "", LDAPBaseDN: cfg.LDAPBaseDN, LDAPUserFilter: cfg.LDAPUserFilter, LDAPAutoProvision: cfg.LDAPAutoProvision,
 		MetricsEnabled: cfg.MetricsEnabled, MetricsPath: cfg.MetricsPath, TracingEnabled: cfg.TracingEnabled, TracingServiceName: cfg.TracingServiceName, TracingSamplingRatio: cfg.TracingSamplingRatio, OTLPEndpoint: cfg.OTLPEndpoint, CacheInventoryRefresh: cfg.CacheInventoryRefresh.String(), LogLevel: cfg.LogLevel,
-		Locked: config.LockedNames(cfg.LockedSettings),
+		Revision: cfg.SettingsRevision,
+		Locked:   config.LockedNames(cfg.LockedSettings),
 	}
 }
 
@@ -143,6 +149,10 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		// Settings saved from another instance are not seen otherwise.
+		if err := s.reloadSavedSettings(r.Context()); err != nil {
+			s.logger.Warn("saved settings could not be reloaded", "request_id", requestID(r.Context()), "error", safeLogValue(err.Error(), 300))
+		}
 		writeJSON(w, http.StatusOK, settingsView(s.currentConfig()))
 	case http.MethodPut:
 		var input settingsInput
@@ -150,6 +160,10 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		current := s.currentConfig()
+		if input.Revision != current.SettingsRevision {
+			s.settingsChanged(w, r)
+			return
+		}
 		cfg, err := input.apply(current)
 		if err != nil {
 			writeProblem(w, r, http.StatusBadRequest, "Invalid settings", err.Error())
@@ -160,6 +174,10 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.applyConfig(r.Context(), cfg, p.ID); err != nil {
+			if errors.Is(err, config.ErrSettingsConflict) {
+				s.settingsChanged(w, r)
+				return
+			}
 			s.logger.Warn("settings update failed", "request_id", requestID(r.Context()), "actor_id", p.ID, "error", safeLogValue(err.Error(), 300))
 			writeProblem(w, r, http.StatusBadRequest, "Settings could not be applied", "Check provider availability and configuration, then retry.")
 			return
@@ -167,12 +185,23 @@ func (s *Server) apiSettings(w http.ResponseWriter, r *http.Request) {
 		s.logger.Info("settings applied", "request_id", requestID(r.Context()), "actor_id", p.ID, "changed", config.OverriddenFields(current, cfg))
 		fields := []string{"public_url", "huggingface", "s3", "authentication", "cache", "observability", "logging"}
 		s.audit(r.Context(), p.ID, "settings.update", "settings", "runtime", map[string]any{"updated_sections": fields})
-		writeJSON(w, http.StatusOK, settingsView(cfg))
+		// The running copy carries the new revision the console must send next.
+		writeJSON(w, http.StatusOK, settingsView(s.currentConfig()))
 	case http.MethodDelete:
 		writeProblem(w, r, http.StatusNotImplemented, "Reset unavailable", "Edit settings directly; environment settings are not reloaded while the process is running.")
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+// settingsChanged answers a save made on settings that have changed since the
+// console read them. This instance adopts the saved version first, so the
+// console's reload shows what is really saved.
+func (s *Server) settingsChanged(w http.ResponseWriter, r *http.Request) {
+	if err := s.reloadSavedSettings(r.Context()); err != nil {
+		s.logger.Warn("saved settings could not be reloaded", "request_id", requestID(r.Context()), "error", safeLogValue(err.Error(), 300))
+	}
+	writeProblem(w, r, http.StatusConflict, "Settings changed", "The settings were changed by someone else since you opened them. Reload the page to see the current values, then apply your change again.")
 }
 
 func (in settingsInput) apply(cfg config.Config) (config.Config, error) {

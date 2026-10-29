@@ -2,7 +2,9 @@ package config
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,10 +66,38 @@ type managedSettings struct {
 	LogLevel               string        `json:"log_level"`
 }
 
+// ErrSettingsConflict means the saved settings changed since the caller read
+// them: saving would overwrite someone else's change.
+var ErrSettingsConflict = errors.New("the saved settings changed since they were read")
+
+// settingsRevision identifies one saved version of the settings; "" is none
+// saved. It is a digest of the sealed value, so it carries no secret.
+func settingsRevision(ciphertext []byte) string {
+	if len(ciphertext) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(ciphertext)
+	return hex.EncodeToString(sum[:16])
+}
+
+// PersistedRevision returns the revision of the settings saved now.
+func PersistedRevision(ctx context.Context, sqlDB *sql.DB) (string, error) {
+	var ciphertext []byte
+	err := sqlDB.QueryRowContext(ctx, `SELECT ciphertext FROM app_settings WHERE setting_key='runtime'`).Scan(&ciphertext)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read saved settings revision: %w", err)
+	}
+	return settingsRevision(ciphertext), nil
+}
+
 func LoadPersisted(ctx context.Context, sqlDB *sql.DB, base Config) (Config, error) {
 	var ciphertext []byte
 	err := sqlDB.QueryRowContext(ctx, `SELECT ciphertext FROM app_settings WHERE setting_key='runtime'`).Scan(&ciphertext)
 	if errors.Is(err, sql.ErrNoRows) {
+		base.SettingsRevision = ""
 		return base, nil
 	}
 	if err != nil {
@@ -82,24 +112,55 @@ func LoadPersisted(ctx context.Context, sqlDB *sql.DB, base Config) (Config, err
 		return Config{}, fmt.Errorf("saved settings are invalid")
 	}
 	saved.pinToEnvironment(base)
-	return saved.apply(base), nil
+	loaded := saved.apply(base)
+	loaded.SettingsRevision = settingsRevision(ciphertext)
+	return loaded, nil
 }
 
-func SavePersisted(ctx context.Context, sqlDB *sql.DB, cfg Config, actorID string) error {
+// SavePersisted saves the settings and returns their new revision. cfg must
+// carry the revision it was derived from (SettingsRevision); when the saved
+// settings are no longer that version the save is refused with
+// ErrSettingsConflict instead of overwriting the other change.
+func SavePersisted(ctx context.Context, sqlDB *sql.DB, cfg Config, actorID string) (string, error) {
 	plaintext, err := json.Marshal(managedFromConfig(cfg))
 	if err != nil {
-		return fmt.Errorf("encode settings")
+		return "", fmt.Errorf("encode settings")
 	}
 	ciphertext, err := secretRing(cfg).Seal(plaintext)
 	if err != nil {
-		return fmt.Errorf("encrypt settings")
+		return "", fmt.Errorf("encrypt settings")
 	}
-	_, err = sqlDB.ExecContext(ctx, `INSERT INTO app_settings(setting_key,ciphertext,updated_by,updated_at)
-		VALUES('runtime',$1,NULLIF($2,''),now()) ON CONFLICT(setting_key) DO UPDATE SET ciphertext=EXCLUDED.ciphertext,updated_by=EXCLUDED.updated_by,updated_at=now()`, ciphertext, actorID)
+	tx, err := sqlDB.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("save settings: %w", err)
+		return "", fmt.Errorf("save settings: %w", err)
 	}
-	return nil
+	defer tx.Rollback()
+	// Nothing saved yet has no row to lock; two first saves are ordered by the
+	// insert below, whose conflict is reported as a conflict too.
+	var stored []byte
+	err = tx.QueryRowContext(ctx, `SELECT ciphertext FROM app_settings WHERE setting_key='runtime' FOR UPDATE`).Scan(&stored)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("save settings: %w", err)
+	}
+	if settingsRevision(stored) != cfg.SettingsRevision {
+		return "", ErrSettingsConflict
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		result, err := tx.ExecContext(ctx, `INSERT INTO app_settings(setting_key,ciphertext,updated_by,updated_at)
+			VALUES('runtime',$1,NULLIF($2,''),now()) ON CONFLICT(setting_key) DO NOTHING`, ciphertext, actorID)
+		if err != nil {
+			return "", fmt.Errorf("save settings: %w", err)
+		}
+		if n, _ := result.RowsAffected(); n == 0 {
+			return "", ErrSettingsConflict
+		}
+	} else if _, err := tx.ExecContext(ctx, `UPDATE app_settings SET ciphertext=$1,updated_by=NULLIF($2,''),updated_at=now() WHERE setting_key='runtime'`, ciphertext, actorID); err != nil {
+		return "", fmt.Errorf("save settings: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("save settings: %w", err)
+	}
+	return settingsRevision(ciphertext), nil
 }
 
 func secretRing(cfg Config) *keyring.Ring {

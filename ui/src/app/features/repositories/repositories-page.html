@@ -264,7 +264,7 @@
         </button>
       </div>
       <div class="p-5 sm:p-6">
-        <form class="grid gap-3 sm:grid-cols-[110px_1fr_110px_auto]" (ngSubmit)="addGrant()">
+        <form class="grid gap-3 sm:grid-cols-[110px_1fr_auto]" (ngSubmit)="addGrant()">
           <select
             class="rounded-lg border border-slate-200 px-2.5 py-2.5 text-xs outline-none focus:border-emerald-600"
             name="subjectType"
@@ -281,15 +281,6 @@
             placeholder="Paste ID"
             i18n-placeholder
           />
-          <select
-            class="rounded-lg border border-slate-200 px-2.5 py-2.5 text-xs outline-none focus:border-emerald-600"
-            name="permission"
-            [(ngModel)]="grantDraft.permission"
-          >
-            <option value="read" i18n>Read</option>
-            <option value="write" i18n>Write</option>
-            <option value="admin" i18n>Admin</option>
-          </select>
           <button
             class="rounded-lg bg-emerald-700 px-3 py-2.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
             type="submit"

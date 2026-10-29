@@ -70,7 +70,7 @@ func (s *Store) FindRepository(ctx context.Context, repoType, repoID string) (Re
 func (s *Store) HasReadGrant(ctx context.Context, repositoryID, userID string) (bool, error) {
 	var allowed bool
 	err := s.SQL.QueryRowContext(ctx, `SELECT EXISTS(
-		SELECT 1 FROM repo_grants g WHERE g.repository_id=$1 AND g.permission IN ('read','write','admin') AND (
+		SELECT 1 FROM repo_grants g WHERE g.repository_id=$1 AND (
 		(g.subject_type='user' AND g.subject_id=$2) OR (g.subject_type='group' AND EXISTS(SELECT 1 FROM group_members m WHERE m.group_id=g.subject_id AND m.user_id=$2))))`, repositoryID, userID).Scan(&allowed)
 	return allowed, err
 }

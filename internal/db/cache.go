@@ -86,19 +86,20 @@ func (s *Store) StartDownload(ctx context.Context, id, repoID, commit, path stri
 	return err
 }
 
-// RecordDownload logs a finished download in a single statement.
-func (s *Store) RecordDownload(ctx context.Context, repoID, commit, path, status string, bytes int64, errorClass string, caller Caller) error {
-	_, err := s.SQL.ExecContext(ctx, "INSERT INTO downloads(id,repository_id,commit_sha,path,status,completed_at,bytes,error_class,user_id,token_id,client_ip) VALUES($1,$2,$3,$4,$5,now(),$6,$7,NULLIF($8,''),NULLIF($9,''),NULLIF($10,''))", NewID(), repoID, commit, path, status, bytes, errorClass, caller.UserID, caller.TokenID, caller.ClientIP)
-	return err
-}
-
 // FinishDownload closes a download started with StartDownload.
 func (s *Store) FinishDownload(ctx context.Context, id string, bytes int64, errorClass string) error {
 	status := "miss"
 	if errorClass != "" {
 		status = "failed"
 	}
-	_, err := s.SQL.ExecContext(ctx, "UPDATE downloads SET status=$2,completed_at=now(),bytes=$3,error_class=$4 WHERE id=$1", id, status, bytes, errorClass)
+	// A fill that succeeded is a miss; it is counted for its repository in the
+	// same statement. Closing a download twice counts it once.
+	_, err := s.SQL.ExecContext(ctx, `WITH closed AS (
+		UPDATE downloads SET status=$2,completed_at=now(),bytes=$3,error_class=$4 WHERE id=$1 AND status='downloading' RETURNING repository_id,status
+	)
+	INSERT INTO repository_download_counts(repository_id,hits,misses)
+	SELECT repository_id,0,1 FROM closed WHERE status='miss'
+	ON CONFLICT (repository_id) DO UPDATE SET misses=repository_download_counts.misses+1`, id, status, bytes, errorClass)
 	return err
 }
 
@@ -208,7 +209,7 @@ func (s *Store) RecordDownloads(ctx context.Context, events []DownloadEvent) err
 	}
 	const columns = 10
 	var query strings.Builder
-	query.WriteString("INSERT INTO downloads(id,repository_id,commit_sha,path,status,completed_at,bytes,error_class,user_id,token_id,client_ip) VALUES ")
+	query.WriteString("WITH inserted AS (INSERT INTO downloads(id,repository_id,commit_sha,path,status,completed_at,bytes,error_class,user_id,token_id,client_ip) VALUES ")
 	args := make([]any, 0, len(events)*columns)
 	for i, event := range events {
 		if i > 0 {
@@ -218,6 +219,13 @@ func (s *Store) RecordDownloads(ctx context.Context, events []DownloadEvent) err
 		fmt.Fprintf(&query, "($%d,$%d,$%d,$%d,$%d,now(),$%d,$%d,NULLIF($%d,''),NULLIF($%d,''),NULLIF($%d,''))", n, n+1, n+2, n+3, n+4, n+5, n+6, n+7, n+8, n+9)
 		args = append(args, NewID(), event.RepoID, event.Commit, event.Path, event.Status, event.Bytes, event.ErrorClass, event.Caller.UserID, event.Caller.TokenID, event.Caller.ClientIP)
 	}
+	// Hits and misses are counted per repository in the same statement. The
+	// repositories are taken in a fixed order so that two batches updating
+	// several of them cannot wait on each other.
+	query.WriteString(` RETURNING repository_id,status)
+		INSERT INTO repository_download_counts(repository_id,hits,misses)
+		SELECT repository_id,COUNT(*) FILTER(WHERE status='hit'),COUNT(*) FILTER(WHERE status='miss') FROM inserted GROUP BY repository_id ORDER BY repository_id
+		ON CONFLICT (repository_id) DO UPDATE SET hits=repository_download_counts.hits+EXCLUDED.hits,misses=repository_download_counts.misses+EXCLUDED.misses`)
 	_, err := s.SQL.ExecContext(ctx, query.String(), args...)
 	return err
 }

@@ -8,10 +8,9 @@ import (
 	"github.com/hfproxy/hfproxy/internal/db"
 )
 
-// statsCacheTTL is how long the dashboard figures are reused. Counting hits and
-// misses reads the whole downloads table (kept for the retention period, 90 days
-// by default): about 0.8 s at five million rows, growing with traffic, and the
-// console asks every time a page is opened.
+// statsCacheTTL is how long the dashboard figures are reused. The console asks
+// every time a page is opened, and the figures need several queries; hits and
+// misses come from per-repository counters, not from the downloads table.
 const statsCacheTTL = 15 * time.Second
 
 // statsCache keeps the figures for a short time per viewer. Concurrent requests

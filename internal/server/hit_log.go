@@ -62,7 +62,14 @@ func (s *Server) startHitLog(ctx context.Context) {
 	}()
 }
 
+// hitLogDrainBudget bounds how long a stop spends writing the events still
+// queued. With the database down every batch waits out its own timeout, which
+// for a full queue would add minutes to the stop; what could not be written in
+// time is dropped, and said so.
+var hitLogDrainBudget = 15 * time.Second
+
 func (s *Server) drainHitLog(h *hitLog) {
+	deadline := time.Now().Add(hitLogDrainBudget)
 	for {
 		batch := make([]db.DownloadEvent, 0, hitLogBatch)
 		for len(batch) < hitLogBatch {
@@ -70,19 +77,34 @@ func (s *Server) drainHitLog(h *hitLog) {
 			case event := <-h.events:
 				batch = append(batch, event)
 			default:
-				s.writeHitBatch(batch)
+				s.writeHitBatchWithin(batch, time.Until(deadline))
 				return
 			}
 		}
-		s.writeHitBatch(batch)
+		if time.Until(deadline) <= 0 {
+			s.logger.Warn("download events were dropped at shutdown: the database did not take them in time", "events", len(batch)+len(h.events))
+			return
+		}
+		s.writeHitBatchWithin(batch, time.Until(deadline))
 	}
 }
 
 func (s *Server) writeHitBatch(batch []db.DownloadEvent) {
+	s.writeHitBatchWithin(batch, 10*time.Second)
+}
+
+func (s *Server) writeHitBatchWithin(batch []db.DownloadEvent, limit time.Duration) {
 	if len(batch) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if limit > 10*time.Second {
+		limit = 10 * time.Second
+	}
+	if limit <= 0 {
+		s.logger.Warn("download events were dropped at shutdown: the database did not take them in time", "events", len(batch))
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	if err := s.db.RecordDownloads(ctx, batch); err != nil {
 		s.logger.Warn("download events could not be recorded", "events", len(batch))

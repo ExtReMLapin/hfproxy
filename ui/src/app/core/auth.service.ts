@@ -126,9 +126,11 @@ export class AuthService {
         }),
       );
       this.principal.set(null);
+      this.feedback.clear();
     } catch (error) {
       if (error instanceof HttpErrorResponse && error.status === 401) {
         this.principal.set(null);
+        this.feedback.clear();
       } else {
         const message = AdminApiService.errorMessage(
           error,
@@ -145,6 +147,8 @@ export class AuthService {
 
   expireSession(): void {
     this.principal.set(null);
+    // A message about the previous session must not outlive it.
+    this.feedback.clear();
     this.error.set($localize`Your session has expired. Please sign in again.`);
   }
 

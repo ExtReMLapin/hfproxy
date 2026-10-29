@@ -31,17 +31,29 @@ func (s *Server) negativeStore(key string, status int, headers http.Header) {
 		s.negative = make(map[string]negativeCacheEntry)
 	}
 	now := time.Now()
-	for existing, entry := range s.negative {
-		if !now.Before(entry.expires) {
-			delete(s.negative, existing)
+	// Expired entries are swept at most once a second: sweeping on every insert
+	// made each 404 cost a pass over up to negativeCacheMaxEntries entries, which
+	// a flood of unique URLs turns into the dominant cost.
+	if now.Sub(s.negativeSwept) >= time.Second {
+		s.negativeSwept = now
+		for existing, entry := range s.negative {
+			if !now.Before(entry.expires) {
+				delete(s.negative, existing)
+			}
 		}
 	}
 	if _, exists := s.negative[key]; !exists && len(s.negative) >= negativeCacheMaxEntries {
+		// Make room by dropping the entry closest to expiring among a few picked
+		// at random (map order is random), not by searching them all.
 		oldestKey := ""
 		var oldestExpiry time.Time
+		sampled := 0
 		for existing, entry := range s.negative {
 			if oldestKey == "" || entry.expires.Before(oldestExpiry) {
 				oldestKey, oldestExpiry = existing, entry.expires
+			}
+			if sampled++; sampled >= 16 {
+				break
 			}
 		}
 		delete(s.negative, oldestKey)
@@ -110,11 +122,6 @@ func (s *Server) runBlobGC(ctx context.Context) {
 		s.metrics.add("hfproxy_gc_blobs_deleted_total", nil, float64(deleted))
 		s.metrics.setGauge("hfproxy_gc_last_run_timestamp_seconds", float64(time.Now().Unix()))
 	}
-}
-
-func (s *Server) collectOrphanedBlobs(ctx context.Context) error {
-	_, err := s.collectOrphanedBlobsCounted(ctx)
-	return err
 }
 
 // collectOrphanedBlobsCounted deletes every orphaned blob past the grace

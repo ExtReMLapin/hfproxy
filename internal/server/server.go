@@ -66,6 +66,7 @@ type Server struct {
 	loginMu              sync.Mutex
 	loginBuckets         map[string]loginBucket
 	loginHashSlots       chan struct{}
+	negativeSwept        time.Time // guarded by negativeMu
 	negativeMu           sync.Mutex
 	negative             map[string]negativeCacheEntry
 	missMu               sync.Mutex
@@ -252,6 +253,29 @@ func (s *Server) oidcContext(ctx context.Context) context.Context {
 }
 
 func (s *Server) applyConfig(ctx context.Context, cfg config.Config, actorID string) error {
+	return s.installConfig(ctx, cfg, actorID, true)
+}
+
+// reloadSavedSettings adopts the settings saved by another instance, or by
+// another save here, when they are not the ones this instance runs on. The
+// environment keeps winning for the settings it locks.
+func (s *Server) reloadSavedSettings(ctx context.Context) error {
+	current := s.currentConfig()
+	revision, err := config.PersistedRevision(ctx, s.db.SQL)
+	if err != nil || revision == current.SettingsRevision {
+		return err
+	}
+	saved, err := config.LoadPersisted(ctx, s.db.SQL, current)
+	if err != nil {
+		return err
+	}
+	return s.installConfig(ctx, saved, "", false)
+}
+
+// installConfig validates cfg, builds what depends on it and makes it the
+// running configuration; with persist it saves it first, refusing to
+// overwrite settings that changed since cfg was read.
+func (s *Server) installConfig(ctx context.Context, cfg config.Config, actorID string, persist bool) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -271,15 +295,19 @@ func (s *Server) applyConfig(ctx context.Context, cfg config.Config, actorID str
 	if objects != nil {
 		objects.SetObserver(s.metrics)
 	}
-	if err := config.SavePersisted(ctx, s.db.SQL, cfg, actorID); err != nil {
-		if traceProcessor != nil {
-			_ = traceProcessor.Shutdown(ctx)
+	if persist {
+		revision, err := config.SavePersisted(ctx, s.db.SQL, cfg, actorID)
+		if err != nil {
+			if traceProcessor != nil {
+				_ = traceProcessor.Shutdown(ctx)
+			}
+			return err
 		}
-		return err
+		state.config.SettingsRevision = revision
 	}
 	s.runtime.Store(state)
-	s.applyLogLevel(cfg.LogLevel)
-	activatePreparedTracing(ctx, traceProcessor, cfg)
+	s.applyLogLevel(state.config.LogLevel)
+	activatePreparedTracing(ctx, traceProcessor, state.config)
 	select {
 	case s.inventoryRefreshWake <- struct{}{}:
 	default:
@@ -464,15 +492,6 @@ func (s *Server) serveMainListenerMetrics(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) dashboardOrResolve(w http.ResponseWriter, r *http.Request) {
-	cfg := s.currentConfig()
-	metricsPath := cfg.MetricsPath
-	if metricsPath == "" {
-		metricsPath = "/metrics"
-	}
-	if cfg.MetricsEnabled && metricsOnMainListener(cfg.MetricsAddr) && r.URL.Path == metricsPath {
-		s.serveMainListenerMetrics(w, r)
-		return
-	}
 	if r.URL.Path == "/" {
 		s.frontend(w, r)
 		return
@@ -839,6 +858,7 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 		if cached, ok := s.authLookups().get(cacheKey); ok {
 			return cached, nil
 		}
+		generation := s.authLookups().currentGeneration()
 		ring := s.keyRing()
 		found, err := s.db.LookupToken(r.Context(), ring.HashCandidates(token))
 		if err != nil || found.Status != "active" {
@@ -858,7 +878,7 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 		if err := s.db.TouchToken(r.Context(), p.TokenID); err != nil {
 			s.logger.Warn("token last use could not be recorded", "request_id", requestID(r.Context()))
 		}
-		s.authLookups().put(cacheKey, &p)
+		s.authLookups().put(cacheKey, &p, generation)
 		return &p, nil
 	}
 	cookie, err := r.Cookie("hfproxy_session")
@@ -872,6 +892,7 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 	if cached, ok := s.authLookups().get(sessionKey); ok {
 		return cached, nil
 	}
+	generation := s.authLookups().currentGeneration()
 	found, err := s.db.LookupSession(r.Context(), s.keyRing().HashCandidates(cookie.Value))
 	if err != nil || found.Status != "active" {
 		return nil, errUnauthenticated
@@ -880,7 +901,7 @@ func (s *Server) authenticateCredentials(r *http.Request) (*Principal, error) {
 	if err := s.db.TouchSession(r.Context(), found.Hash, s.currentConfig().SessionIdleTTL, s.currentConfig().SessionAbsoluteTTL); err != nil {
 		s.logger.Warn("session activity could not be recorded", "request_id", requestID(r.Context()))
 	}
-	s.authLookups().put(sessionKey, &p)
+	s.authLookups().put(sessionKey, &p, generation)
 	return &p, nil
 }
 
@@ -920,7 +941,7 @@ func (s *Server) createSession(ctx context.Context, userID string, w http.Respon
 }
 
 func newSessionCookies(token, csrf string, cfg config.Config) []*http.Cookie {
-	secure := strings.HasPrefix(cfg.PublicURL, "https://") || strings.HasPrefix(cfg.OIDCRedirectURL, "https://")
+	secure := cookieSecure(cfg)
 	maxAge := int(cfg.SessionAbsoluteTTL.Seconds())
 	return []*http.Cookie{
 		{Name: "hfproxy_session", Value: token, Path: "/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: maxAge},

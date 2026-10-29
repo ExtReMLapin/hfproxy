@@ -21,7 +21,8 @@ type Stats struct {
 }
 
 // CacheStats counts repositories, cached files, hits and misses visible to the
-// user. A failure to count active downloads is not an error: it reads as zero.
+// user. Hits and misses are the totals kept per repository since it was first
+// served (they do not shrink when old download records are pruned). A failure to count active downloads is not an error: it reads as zero.
 func (s *Store) CacheStats(ctx context.Context, role, userID string) (Stats, error) {
 	var st Stats
 	visible := visibleRepository(1, 2)
@@ -31,7 +32,7 @@ func (s *Store) CacheStats(ctx context.Context, role, userID string) (Stats, err
 	if err := s.SQL.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(b.size_bytes),0) FROM artifacts a JOIN repositories r ON r.id=a.repository_id JOIN blobs b ON b.id=a.blob_id WHERE r.deleted_at IS NULL AND `+visible, role, userID).Scan(&st.Artifacts, &st.Bytes); err != nil {
 		return st, err
 	}
-	if err := s.SQL.QueryRowContext(ctx, `SELECT COUNT(*) FILTER(WHERE d.status='hit'),COUNT(*) FILTER(WHERE d.status='miss') FROM downloads d JOIN repositories r ON r.id=d.repository_id WHERE r.deleted_at IS NULL AND `+visible, role, userID).Scan(&st.Hits, &st.Misses); err != nil {
+	if err := s.SQL.QueryRowContext(ctx, `SELECT COALESCE(SUM(c.hits),0),COALESCE(SUM(c.misses),0) FROM repository_download_counts c JOIN repositories r ON r.id=c.repository_id WHERE r.deleted_at IS NULL AND `+visible, role, userID).Scan(&st.Hits, &st.Misses); err != nil {
 		return st, err
 	}
 	_ = s.SQL.QueryRowContext(ctx, `SELECT COUNT(*) FROM downloads d JOIN repositories r ON r.id=d.repository_id WHERE d.status='downloading' AND r.deleted_at IS NULL AND `+visible, role, userID).Scan(&st.Active)
@@ -135,18 +136,36 @@ func (s *Store) PurgeArtifact(ctx context.Context, id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	var blobID string
-	if err := tx.QueryRowContext(ctx, `SELECT b.id FROM artifacts a JOIN blobs b ON b.id=a.blob_id WHERE a.id=$1 FOR UPDATE OF a`, id).Scan(&blobID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
+	// Lock the blob before the artifact, the order publication and eviction use:
+	// the reverse order deadlocks with a fill publishing the same blob. The
+	// artifact can be re-published onto another blob between the lookup and the
+	// lock, so the delete names the blob it locked and the lookup is repeated
+	// when that no longer matches.
+	for attempt := 0; ; attempt++ {
+		var blobID string
+		if err := tx.QueryRowContext(ctx, `SELECT blob_id FROM artifacts WHERE id=$1`, id).Scan(&blobID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
 		}
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM artifacts WHERE id=$1`, id); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE blobs SET orphaned_at=now() WHERE id=$1`, blobID); err != nil {
-		return err
+		if _, err := tx.ExecContext(ctx, `SELECT 1 FROM blobs WHERE id=$1 FOR UPDATE`, blobID); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `DELETE FROM artifacts WHERE id=$1 AND blob_id=$2`, id, blobID)
+		if err != nil {
+			return err
+		}
+		if n, _ := result.RowsAffected(); n == 0 {
+			if attempt >= 3 {
+				return fmt.Errorf("purge artifact %s: it keeps changing", id)
+			}
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE blobs SET orphaned_at=now() WHERE id=$1`, blobID); err != nil {
+			return err
+		}
+		break
 	}
 	return tx.Commit()
 }

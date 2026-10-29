@@ -46,7 +46,7 @@ From a shell instead, put the password in a protected file or send it on stdin; 
     # Write the password to .secrets/admin-password using your secrets manager.
     docker compose exec -T hfproxy hfproxy admin create-user --username admin --password-file - < .secrets/admin-password
 
-If the admin account already exists and you need to change its password, use `reset-password`. This keeps the database and other settings; existing web sessions for that admin are revoked.
+If the admin account already exists and you need to change its password, use `reset-password`. This keeps the database and other settings; its web sessions and access tokens are revoked.
 
     docker compose exec -T hfproxy hfproxy admin reset-password --username admin --password-file - < .secrets/admin-password
 

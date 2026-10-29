@@ -155,6 +155,11 @@ func TestRepositoriesGrantsStatsAndAuditAPI(t *testing.T) {
 	if rec := do(admin, http.MethodPost, "/api/v1/repos/"+repo+"/grants", body); rec.Code != http.StatusCreated {
 		t.Fatalf("grant = %d %s", rec.Code, rec.Body.String())
 	}
+	for _, permission := range []string{"write", "admin", ""} {
+		if rec := do(admin, http.MethodPost, "/api/v1/repos/"+repo+"/grants", `{"subject_type":"user","subject_id":"`+admin.ID+`","permission":"`+permission+`"}`); rec.Code != http.StatusBadRequest {
+			t.Fatalf("a %q grant = %d, want 400: the proxy only ever reads", permission, rec.Code)
+		}
+	}
 	if rec := do(admin, http.MethodPost, "/api/v1/repos/"+repo+"/grants", `{"subject_type":"user","subject_id":"ghost","permission":"read"}`); rec.Code != http.StatusNotFound {
 		t.Fatalf("grant to an unknown subject = %d, want 404", rec.Code)
 	}

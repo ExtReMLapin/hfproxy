@@ -125,6 +125,7 @@ func (s *S3) UploadFile(ctx context.Context, file *os.File, key, contentType str
 		defer cancel()
 		_, _ = s.client.AbortMultipartUpload(cleanup, &s3.AbortMultipartUploadInput{Bucket: aws.String(s.bucket), Key: aws.String(key), UploadId: upload.UploadId})
 	}
+	// 10000 parts is S3's limit, which is where config.MaxCacheFileSize comes from.
 	const partSize int64 = 64 << 20
 	parts := make([]types.CompletedPart, 0, (size+partSize-1)/partSize)
 	for offset, partNumber := int64(0), int32(1); offset < size; offset, partNumber = offset+partSize, partNumber+1 {

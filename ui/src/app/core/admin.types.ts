@@ -124,6 +124,8 @@ export interface AuditItem {
 }
 
 export interface ManagedSettings {
+  /** Version of the saved settings these come from; sent back when saving. */
+  revision: string;
   public_url: string;
   hf_base_url: string;
   hf_proxy_set: boolean;

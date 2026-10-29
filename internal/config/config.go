@@ -14,6 +14,10 @@ import (
 	"github.com/hfproxy/hfproxy/internal/logging"
 )
 
+// MaxCacheFileSize is the largest file the cache can store: an S3 multipart
+// upload takes at most 10000 parts and storage.S3.Put sends 64 MiB parts.
+const MaxCacheFileSize = 10000 * (64 << 20)
+
 type Config struct {
 	ListenAddr     string
 	PublicURL      string
@@ -108,6 +112,9 @@ type Config struct {
 	RetentionAudit     time.Duration
 	MetricsAddr        string
 	ShutdownGrace      time.Duration
+	// SettingsRevision is the saved version these settings were read from (see
+	// SavePersisted); it is not itself saved.
+	SettingsRevision string
 
 	// UpstreamBreakerThreshold is how many consecutive failures of one
 	// upstream host open its circuit (0 disables it); UpstreamBreakerCooldown
@@ -394,6 +401,9 @@ func (c Config) Validate() error {
 	}
 	if c.HFTimeout <= 0 || c.CacheMaxFileSize <= 0 {
 		return fmt.Errorf("HFPROXY_HF_TIMEOUT and HFPROXY_CACHE_MAX_FILE_SIZE must be positive")
+	}
+	if c.CacheMaxFileSize > MaxCacheFileSize {
+		return fmt.Errorf("HFPROXY_CACHE_MAX_FILE_SIZE cannot exceed %d bytes (625 GiB): object storage accepts at most 10000 parts of 64 MiB per file, so a larger limit would only fail after hours of transfer", MaxCacheFileSize)
 	}
 	if c.CacheRefTTL <= 0 || c.CacheNegativeTTL < 0 || c.CacheGCGrace < 0 {
 		return fmt.Errorf("cache TTL and garbage collection grace values are invalid")

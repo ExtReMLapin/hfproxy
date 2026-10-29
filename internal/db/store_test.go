@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"sync"
@@ -752,5 +753,156 @@ func TestPublishChecksTheObjectOnlyWhenTheCallerDidNotStoreIt(t *testing.T) {
 	in.Path, in.SHA256, in.StorageKey, in.ObjectStored = "b", "c2", "blobs/c2", false
 	if err := store.PublishArtifact(ctx, in, check); err != nil || calls != 1 {
 		t.Fatalf("a new blob the caller did not upload must be checked: err=%v calls=%d", err, calls)
+	}
+}
+
+// A purge and a fill publishing the same blob must take the blob's lock before
+// the artifact's, or PostgreSQL kills one of them with a deadlock (40P01).
+func TestPurgeDoesNotDeadlockWithAPublicationOfTheSameBlob(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	owner := NewID()
+	store.CreateUser(ctx, owner, "purge", "", "", "h", "admin")
+	repo, _ := store.UpsertRepository(ctx, "models", "org/purge", "public", owner)
+	commit := "0123456789abcdef0123456789abcdef01234567"
+	in := PublishInput{RepoID: repo, Commit: commit, Path: "f.bin", SHA256: "purge", Size: 3, StorageKey: "blobs/purge", ContentType: "x", ObjectStored: true}
+	if err := store.PublishArtifact(ctx, in, func(context.Context, string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	var artifactID, blobID string
+	if err := store.SQL.QueryRow(`SELECT id,blob_id FROM artifacts WHERE path='f.bin'`).Scan(&artifactID, &blobID); err != nil {
+		t.Fatal(err)
+	}
+
+	// The publication: it holds the blob, as PublishArtifact does first.
+	tx, err := store.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT 1 FROM blobs WHERE id=$1 FOR UPDATE`, blobID); err != nil {
+		t.Fatal(err)
+	}
+	purged := make(chan error, 1)
+	go func() { purged <- store.PurgeArtifact(ctx, artifactID) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting int
+		store.SQL.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FOR UPDATE%'`).Scan(&waiting)
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the purge never waited for the blob")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// It then updates the artifact, as the publication's upsert does. With the
+	// purge holding the artifact first, this is the deadlock.
+	if _, err := tx.ExecContext(ctx, `UPDATE artifacts SET etag='new' WHERE id=$1`, artifactID); err != nil {
+		t.Fatalf("the publication was killed: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-purged; err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if _, err := store.FindArtifact(ctx, repo, commit, "f.bin"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("the artifact should be purged: %v", err)
+	}
+	if err := store.PurgeArtifact(ctx, artifactID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("purging again = %v, want ErrNotFound", err)
+	}
+}
+
+// The cleanup of stale resumptions must stay away from a file being filled.
+func TestCleanupOfStaleResumptionsRespectsTheFillLock(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	owner := NewID()
+	store.CreateUser(ctx, owner, "stale", "", "", "h", "admin")
+	repo, _ := store.UpsertRepository(ctx, "models", "org/stale", "public", owner)
+	r := &Resumption{ID: NewID(), RepositoryID: repo, CommitSHA: "c", Path: "f", ETag: "e", TotalSize: 100, ContentType: "x", ChunkSize: 50}
+	if err := store.CreateResumption(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	store.SQL.Exec(`UPDATE download_resumptions SET updated_at=now()-interval '9 days' WHERE id=$1`, r.ID)
+	stale, _ := store.StaleResumptions(ctx, time.Hour, 10)
+	if len(stale) != 1 {
+		t.Fatalf("stale = %v", stale)
+	}
+	unlock, err := store.LockResume(ctx, repo, "c", "f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	discarded := false
+	discard := func(context.Context, *Resumption) error { discarded = true; return nil }
+	if removed, err := store.CleanupStaleResumption(ctx, stale[0], time.Hour, discard); removed || err != nil || discarded {
+		t.Fatalf("cleanup during a fill = %v %v discarded=%v, want it to leave the state alone", removed, err, discarded)
+	}
+	unlock()
+	if removed, err := store.CleanupStaleResumption(ctx, stale[0], time.Hour, discard); !removed || err != nil {
+		t.Fatalf("cleanup after the fill = %v %v", removed, err)
+	}
+}
+
+// The hit and miss totals of the console are kept as downloads finish, so
+// showing them never scans the downloads table.
+func TestDownloadCountsFollowFinishedDownloads(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	owner := NewID()
+	store.CreateUser(ctx, owner, "counts", "", "", "h", "admin")
+	repo, _ := store.UpsertRepository(ctx, "models", "org/counts", "public", owner)
+	commit := "0123456789abcdef0123456789abcdef01234567"
+	totals := func() (int64, int64) {
+		t.Helper()
+		stats, err := store.CacheStats(ctx, "admin", owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stats.Hits, stats.Misses
+	}
+
+	if err := store.RecordDownloads(ctx, []DownloadEvent{
+		{RepoID: repo, Commit: commit, Path: "a", Status: "hit"},
+		{RepoID: repo, Commit: commit, Path: "b", Status: "hit"},
+		{RepoID: repo, Commit: commit, Path: "c", Status: "failed", ErrorClass: "x"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if hits, misses := totals(); hits != 2 || misses != 0 {
+		t.Fatalf("after two hits and a failure: %d hits, %d misses", hits, misses)
+	}
+
+	for _, tc := range []struct{ errorClass string }{{""}, {"upstream"}} {
+		id := NewID()
+		if err := store.StartDownload(ctx, id, repo, commit, "fill", Caller{}); err != nil {
+			t.Fatal(err)
+		}
+		_, before := totals()
+		defer func() {
+			if _, after := totals(); after > before+1 {
+				t.Errorf("one download added %d misses", after-before)
+			}
+		}()
+		if err := store.FinishDownload(ctx, id, 10, tc.errorClass); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.FinishDownload(ctx, id, 10, tc.errorClass); err != nil { // closing twice
+			t.Fatal(err)
+		}
+	}
+	if hits, misses := totals(); hits != 2 || misses != 1 {
+		t.Fatalf("after one finished fill and one failed: %d hits, %d misses, want 2 and 1", hits, misses)
+	}
+
+	// Pruning old download records does not erase the totals.
+	if _, err := store.SQL.Exec(`DELETE FROM downloads`); err != nil {
+		t.Fatal(err)
+	}
+	if hits, misses := totals(); hits != 2 || misses != 1 {
+		t.Fatalf("after retention removed the records: %d hits, %d misses", hits, misses)
 	}
 }
