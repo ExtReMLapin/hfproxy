@@ -4,7 +4,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { AdminApiService } from './admin-api.service';
 import { FeedbackService } from './feedback.service';
-import { AuthProviders, Principal } from './admin.types';
+import { AuthProviders, FirstAdminInput, Principal } from './admin.types';
 
 @Injectable({ providedIn: 'root' })
 export class AuthService {
@@ -15,6 +15,8 @@ export class AuthService {
 
   readonly principal = signal<Principal | null>(null);
   readonly providers = signal<AuthProviders>({ local: true, oidc: false, ldap: false });
+  /** True while the instance has no administrator and offers to create one. */
+  readonly setupRequired = signal(false);
   readonly loading = signal(true);
   readonly busy = signal(false);
   readonly error = signal('');
@@ -32,8 +34,43 @@ export class AuthService {
     } catch {
       this.principal.set(null);
       await this.loadProviders();
+      await this.loadSetupStatus();
     } finally {
       this.loading.set(false);
+    }
+  }
+
+  private async loadSetupStatus(): Promise<void> {
+    try {
+      this.setupRequired.set(
+        (await this.api.get<{ required: boolean }>('/api/v1/setup/status')).required,
+      );
+    } catch {
+      this.setupRequired.set(false);
+    }
+  }
+
+  /**
+   * Creates the first administrator. The service signs the new administrator
+   * in, so the console opens as soon as the principal is loaded.
+   */
+  async createFirstAdmin(input: FirstAdminInput): Promise<void> {
+    this.error.set('');
+    this.busy.set(true);
+    try {
+      await this.api.post('/api/v1/setup', input);
+      this.setupRequired.set(false);
+      this.principal.set(await this.api.get<Principal>('/api/v1/me'));
+    } catch (error) {
+      if (error instanceof HttpErrorResponse && error.status === 409) {
+        // Someone else finished the setup first: the sign-in page takes over.
+        this.setupRequired.set(false);
+      }
+      this.error.set(
+        AdminApiService.errorMessage(error, $localize`The administrator could not be created.`),
+      );
+    } finally {
+      this.busy.set(false);
     }
   }
 

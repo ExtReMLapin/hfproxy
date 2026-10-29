@@ -19,6 +19,10 @@ func (s *Server) apiV1(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if rest := strings.TrimPrefix(r.URL.Path, "/api/v1/"); rest == "setup" || rest == "setup/status" {
+		s.apiSetup(w, r, rest)
+		return
+	}
 	if isMutation(r.Method) && !hasBearer(r) && !s.checkCSRF(r) {
 		writeProblem(w, r, http.StatusForbidden, "CSRF validation failed", "Reload the page and retry the action.")
 		return

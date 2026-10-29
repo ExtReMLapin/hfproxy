@@ -1,5 +1,16 @@
 # Operations runbook
 
+## First start
+
+A new instance has no administrator. Opening the console shows a setup page that creates the first one and signs them in.
+
+- **Setup code.** The page asks for a code, because a fresh instance may be reachable before anyone has claimed it. When no administrator exists, hfproxy prints the code on its standard error output at start-up, whatever the log level (`docker compose logs hfproxy`, `kubectl logs deploy/hfproxy`). A new random code is generated at each start.
+- **Fixed code.** Set `HFPROXY_SETUP_TOKEN` (16 to 256 characters, or `HFPROXY_SETUP_TOKEN_FILE`) to choose the code yourself. It is then never printed. Use this with several replicas, which would otherwise each print a different code, and for automated installs.
+- **Guessing.** Attempts share one limit (10 per minute) across all clients; a wrong code is logged as a warning with the client address.
+- **Only once.** The setup is refused as soon as an active administrator exists, even if two people submit at the same time: the check and the creation happen under one database lock. The setup page and endpoints then answer "already completed".
+- **CLI.** `hfproxy admin create-user` still works and also closes the setup page.
+- **Recovery.** If every administrator was disabled directly in the database, the setup page reappears within 30 seconds and a code is printed on the output at that moment.
+
 ## Logging
 
 Logs are JSON lines on standard output. The level is `debug`, `info`, `warn` (or `warning`) or `error`; the default is `info`.

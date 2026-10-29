@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -160,5 +161,29 @@ func TestLogLevelNamesAndSavedLevel(t *testing.T) {
 	locked.pinToEnvironment(environment)
 	if got := locked.apply(environment).LogLevel; got != "info" {
 		t.Fatalf("a locked level followed the saved value: %q", got)
+	}
+}
+
+func TestSetupTokenIsBoundedAndHidden(t *testing.T) {
+	cfg := validBaseConfig()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("no token is fine: %v", err)
+	}
+	cfg.SetupToken = "too-short"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a short setup token was accepted")
+	}
+	cfg.SetupToken = strings.Repeat("x", 257)
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("an oversized setup token was accepted")
+	}
+	cfg.SetupToken = "a-sixteen-char-token"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a valid token was rejected: %v", err)
+	}
+	for _, entry := range DescribeSources(cfg, cfg) {
+		if entry.Name == "SetupToken" && entry.Value != "(set, hidden)" {
+			t.Fatalf("the setup token is shown by config show: %q", entry.Value)
+		}
 	}
 }

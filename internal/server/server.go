@@ -52,6 +52,10 @@ type Server struct {
 	db                   *db.Store
 	logger               *slog.Logger
 	logLevel             *slog.LevelVar
+	setupMu              sync.Mutex
+	setupGenerated       string
+	setupOut             io.Writer
+	adminKnownUntil      atomic.Int64
 	preloadsMu           sync.RWMutex
 	preloads             map[string]*preloadJob
 	preloadSlots         chan struct{}
@@ -116,7 +120,7 @@ func New(ctx context.Context, cfg config.Config, store *db.Store, objectStore *s
 		return nil, fmt.Errorf("configure trace exporter")
 	}
 	s := &Server{
-		db: store, logger: logger, metrics: newMetrics(), inventoryRefreshWake: make(chan struct{}, 1), preloads: make(map[string]*preloadJob),
+		db: store, logger: logger, setupOut: os.Stderr, metrics: newMetrics(), inventoryRefreshWake: make(chan struct{}, 1), preloads: make(map[string]*preloadJob),
 		preloadSlots: make(chan struct{}, 2), loginBuckets: make(map[string]loginBucket), loginHashSlots: make(chan struct{}, 4), negative: make(map[string]negativeCacheEntry), misses: make(map[string]*cacheMiss),
 	}
 	s.runtime.Store(state)
@@ -336,6 +340,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	errCh := make(chan error, 2)
 	go func() { errCh <- server.ListenAndServe() }()
 	s.logger.Info("http server started", "address", s.currentConfig().ListenAddr)
+	s.announceSetup(ctx)
 	var metricsServer *http.Server
 	if addr := s.currentConfig().MetricsAddr; addr != "" {
 		metricsServer = &http.Server{Addr: addr, Handler: s.metricsHandler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second}
