@@ -121,8 +121,16 @@ func (s *Server) serveCacheHit(res *fileResolution, commit, errorDetail string) 
 	if err == nil {
 		s.touchArtifact(res.r.Context(), cached.ID)
 		s.logger.Debug("cache hit", "request_id", requestID(res.r.Context()), "repo_id", res.parsed.RepoID, "path", safeLogValue(res.parsed.FilePath, 300), "commit", commit, "bytes", cached.Size)
-		s.recordDownload(res.r.Context(), res.repoPK, commit, res.parsed.FilePath, "hit", cached.Size, "")
-		s.serveOrAcknowledgePreload(res.w, res.r, cached, "HIT")
+		recordHit := func() {
+			s.recordDownload(res.r.Context(), res.repoPK, commit, res.parsed.FilePath, "hit", cached.Size, "")
+		}
+		if s.serveOrAcknowledgePreloadReporting(res.w, res.r, cached, "HIT", recordHit) {
+			// The catalog lists a file whose object is gone from the bucket (it was
+			// deleted there, or lost to a race). Drop the entry and go on as for a
+			// miss: the file is fetched again and its object restored, instead of
+			// answering an error until an operator purges it by hand.
+			return !s.healMissingObject(res, cached, commit)
+		}
 		return true
 	}
 	if !isNoRows(err) {
@@ -130,6 +138,25 @@ func (s *Server) serveCacheHit(res *fileResolution, commit, errorDetail string) 
 		return true
 	}
 	return false
+}
+
+// healMissingObject removes the catalog entry of a file whose object is missing
+// from the bucket, so that the request that found out refills it.
+// It reports whether the entry was dropped; when it was not, an error response
+// has been written.
+func (s *Server) healMissingObject(res *fileResolution, cached artifact, commit string) bool {
+	ctx := res.r.Context()
+	err := s.db.PurgeArtifact(ctx, cached.ID)
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		s.logger.Error("a catalog entry whose object is missing could not be dropped", "request_id", requestID(ctx), "repo_id", res.parsed.RepoID, "path", safeLogValue(res.parsed.FilePath, 300), "error", safeLogValue(err.Error(), 200))
+		writeProblem(res.w, res.r, http.StatusBadGateway, "Storage error", "The cached artifact is temporarily unavailable.")
+		return false
+	}
+	s.logger.Warn("the object of a cached file was missing; its entry was dropped and the file is fetched again", "request_id", requestID(ctx), "repo_id", res.parsed.RepoID, "path", safeLogValue(res.parsed.FilePath, 300), "commit", commit, "sha256", cached.SHA256)
+	if s.metrics != nil {
+		s.metrics.add("hfproxy_cache_object_repairs_total", nil, 1)
+	}
+	return true
 }
 
 // touchArtifact records an access; a failure only costs LRU accuracy, so it is

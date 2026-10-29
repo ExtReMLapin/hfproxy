@@ -29,6 +29,7 @@ All notable changes to hfproxy. The format follows [Keep a Changelog](https://ke
 
 ### Fixed
 
+- **A cached file whose object vanished from the bucket repairs itself.** The request that finds the object missing drops the catalog entry and fetches the file again (no more `502` until an operator purges it); the repair is logged and counted in `hfproxy_cache_object_repairs_total`.
 - **A purge could deadlock with a fill of the same file.** The purge (console and `hfproxy cache purge`) locked the catalog entry then the blob, a fill the other way round; PostgreSQL ended one of them, sometimes a fill after hours of download. Both now lock the blob first. The CLI purge shares the code of the console's.
 - **The cleanup of abandoned resumptions never respected a fill in progress.** It used another lock key than the fill, so a fill stuck on a dead connection could have its stored blocks deleted under it after seven days. They now share one key.
 - **Saving the settings overwrote other people's changes.** Two administrators, or a replica that had not seen a change, silently replaced each other's settings, secrets included. The console now sends the revision it read, a save on an outdated one is refused (`409`), and an instance adopts the saved settings when the console opens them.

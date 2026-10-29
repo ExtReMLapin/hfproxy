@@ -75,12 +75,23 @@ func attachmentDisposition(filePath string) string {
 	return "attachment"
 }
 
-func (s *Server) serveArtifact(w http.ResponseWriter, r *http.Request, a artifact, cacheResult string) {
-	setHeaders := func() { s.setArtifactHeaders(w, a, nil); w.Header().Set("X-Cache", cacheResult) }
+// writeArtifact answers with a cached file. served, when not nil, is called once
+// the file is certain to be answered (before the response starts). It reports
+// true, without having written anything, when the catalog lists the file but its object is gone from
+// the bucket, so that the caller can repair the entry instead of failing.
+func (s *Server) writeArtifact(w http.ResponseWriter, r *http.Request, a artifact, cacheResult string, served func()) (objectMissing bool) {
+	setHeaders := func() {
+		if served != nil {
+			served()
+			served = nil
+		}
+		s.setArtifactHeaders(w, a, nil)
+		w.Header().Set("X-Cache", cacheResult)
+	}
 	if ifNoneMatch(r.Header.Get("If-None-Match"), a.ETag) || (r.Header.Get("If-None-Match") == "" && a.LastMod.Valid && notModifiedSince(r.Header.Get("If-Modified-Since"), a.LastMod.Time)) {
 		setHeaders()
 		w.WriteHeader(http.StatusNotModified)
-		return
+		return false
 	}
 	start, end, partial, rangeOK := parseByteRange(r.Header.Get("Range"), a.Size)
 	if r.Header.Get("If-Range") != "" && partial {
@@ -92,7 +103,7 @@ func (s *Server) serveArtifact(w http.ResponseWriter, r *http.Request, a artifac
 		setHeaders()
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", a.Size))
 		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
-		return
+		return false
 	}
 	byteRange := ""
 	status := http.StatusOK
@@ -109,16 +120,19 @@ func (s *Server) serveArtifact(w http.ResponseWriter, r *http.Request, a artifac
 			w.Header().Set("Content-Length", strconv.FormatInt(a.Size, 10))
 		}
 		w.WriteHeader(status)
-		return
+		return false
 	}
 	out, err := s.currentStorage().Get(r.Context(), a.StorageKey, byteRange)
 	if err != nil {
 		// A missing object (as opposed to an unreachable store) means the catalog
-		// and the bucket disagree for this file: it stays that way until the entry
-		// is purged (hfproxy cache verify, then hfproxy cache purge).
-		s.logger.Error("cache object read failed", "request_id", requestID(r.Context()), "sha256", a.SHA256, "object_missing", storage.IsNotFound(err), "error", safeLogValue(err.Error(), 200))
+		// and the bucket disagree for this file; the caller repairs the entry.
+		missing := storage.IsNotFound(err)
+		s.logger.Error("cache object read failed", "request_id", requestID(r.Context()), "sha256", a.SHA256, "object_missing", missing, "error", safeLogValue(err.Error(), 200))
+		if missing {
+			return true
+		}
 		writeProblem(w, r, 502, "Storage error", "The cached artifact is temporarily unavailable.")
-		return
+		return false
 	}
 	defer out.Body.Close()
 	setHeaders()
@@ -133,6 +147,7 @@ func (s *Server) serveArtifact(w http.ResponseWriter, r *http.Request, a artifac
 	if s.metrics != nil {
 		s.metrics.add("hfproxy_cache_bytes_served_total", []string{"source=cache"}, float64(n))
 	}
+	return false
 }
 
 func parseByteRange(value string, size int64) (int64, int64, bool, bool) {
