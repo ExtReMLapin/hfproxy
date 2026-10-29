@@ -17,9 +17,23 @@ CREATE TABLE IF NOT EXISTS local_commits (
     summary TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- A commit stores only what it changed (artifacts for files added or changed,
+    -- local_tombstones for files removed), so that a big dataset uploaded in many
+    -- small commits does not copy its whole tree each time. Every so often a
+    -- commit is a snapshot: it stores the complete tree and ends the chain that
+    -- reading a tree has to follow. depth counts commits since the last snapshot.
+    snapshot BOOLEAN NOT NULL DEFAULT true,
+    depth INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (repository_id, sha)
 );
 CREATE INDEX IF NOT EXISTS local_commits_parent_idx ON local_commits(repository_id, parent_sha);
+
+CREATE TABLE IF NOT EXISTS local_tombstones (
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    commit_sha TEXT NOT NULL,
+    path TEXT NOT NULL,
+    PRIMARY KEY (repository_id, commit_sha, path)
+);
 
 CREATE TABLE IF NOT EXISTS local_refs (
     repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,

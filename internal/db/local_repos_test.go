@@ -247,3 +247,108 @@ func TestUsersAndGroupsDoNotShareNames(t *testing.T) {
 		t.Fatalf("groups = %v", names)
 	}
 }
+
+// Many small commits must read back exactly as a full copy of the tree would,
+// while storing only what each commit changed.
+func TestLongHistoriesAreStoredAsDeltasAndReadBackExactly(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	repo, _ := localTestRepo(t, store, "delta")
+
+	// A fixed pool of contents; commits add, replace and remove files among them.
+	contents := make([]struct {
+		sum  string
+		size int64
+	}, 6)
+	for i := range contents {
+		contents[i].sum, contents[i].size = localTestBlob(t, store, strings.Repeat(string(rune('a'+i)), i+1), time.Hour)
+	}
+	model := map[string]string{} // path -> content sum, the tree after the last commit
+	var history []struct {
+		sha  string
+		tree map[string]string
+	}
+	copyTree := func() map[string]string {
+		out := make(map[string]string, len(model))
+		for k, v := range model {
+			out[k] = v
+		}
+		return out
+	}
+	step := 0
+	next := func(n int) int { step = (step*7 + 13 + n) % 1009; return step }
+	const commits = 100
+	for c := 0; c < commits; c++ {
+		var ops []CommitOp
+		for k := 0; k < 3; k++ {
+			path := "dir" + string(rune('0'+next(k)%3)) + "/file" + string(rune('a'+next(k+3)%8))
+			switch next(k+5) % 4 {
+			case 0: // remove
+				ops = append(ops, CommitOp{Kind: OpDeleteFile, Path: path})
+				delete(model, path)
+			case 1: // remove a folder
+				folder := "dir" + string(rune('0'+next(k)%3))
+				ops = append(ops, CommitOp{Kind: OpDeleteFolder, Path: folder})
+				for p := range model {
+					if strings.HasPrefix(p, folder+"/") {
+						delete(model, p)
+					}
+				}
+			default: // add or replace
+				content := contents[next(k+7)%len(contents)]
+				ops = append(ops, CommitOp{Kind: OpAdd, Path: path, SHA256: content.sum, OID: content.sum, Size: content.size})
+				model[path] = content.sum
+			}
+		}
+		commit, err := store.CommitLocal(ctx, CommitInput{RepositoryID: repo, Branch: "main", Summary: "c", Ops: ops})
+		if err != nil {
+			t.Fatalf("commit %d: %v", c, err)
+		}
+		history = append(history, struct {
+			sha  string
+			tree map[string]string
+		}{commit.SHA, copyTree()})
+	}
+
+	for i, h := range history {
+		files, err := store.LocalFilesAt(ctx, repo, h.sha)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]string{}
+		for _, f := range files {
+			got[f.Path] = f.SHA256
+		}
+		if len(got) != len(h.tree) {
+			t.Fatalf("commit %d: %d files, want %d\n got %v\nwant %v", i, len(got), len(h.tree), got, h.tree)
+		}
+		for path, sum := range h.tree {
+			if got[path] != sum {
+				t.Fatalf("commit %d: %s = %q, want %q", i, path, got[path], sum)
+			}
+			single, err := store.LocalFileAt(ctx, repo, h.sha, path)
+			if err != nil || single.SHA256 != sum {
+				t.Fatalf("commit %d: LocalFileAt(%s) = %+v %v", i, path, single, err)
+			}
+		}
+		if _, err := store.LocalFileAt(ctx, repo, h.sha, "dir9/none"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("a file that never existed = %v", err)
+		}
+	}
+
+	// Storage: far fewer rows than a copy of the tree per commit, and snapshots
+	// bound how far a read walks.
+	var rows, snapshots, maxDepth int
+	store.SQL.QueryRow(`SELECT count(*) FROM artifacts WHERE repository_id=$1`, repo).Scan(&rows)
+	store.SQL.QueryRow(`SELECT count(*) FILTER (WHERE snapshot), max(depth) FROM local_commits WHERE repository_id=$1`, repo).Scan(&snapshots, &maxDepth)
+	fullCopies := 0
+	for _, h := range history {
+		fullCopies += len(h.tree)
+	}
+	if rows >= fullCopies/2 {
+		t.Errorf("%d artifact rows for %d commits: the history is not stored as deltas (a copy per commit would be %d)", rows, commits, fullCopies)
+	}
+	if snapshots < commits/snapshotEvery || maxDepth >= snapshotEvery {
+		t.Errorf("snapshots = %d, deepest chain = %d, want a snapshot every %d commits", snapshots, maxDepth, snapshotEvery)
+	}
+}

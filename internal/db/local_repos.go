@@ -200,21 +200,38 @@ func (s *Store) BlobBySHA256(ctx context.Context, sha256 string) (size int64, st
 	return size, storageKey, err
 }
 
+// snapshotEvery is how many commits may follow a snapshot before the next one is
+// stored whole: reading a tree follows at most this many commits.
+const snapshotEvery = 32
+
+// localTreeSQL resolves the tree of a commit: it follows the chain of commits
+// back to the last snapshot and takes, for each path, the nearest entry (a file
+// or a removal). %[1]s and %[2]s restrict the files and the removals, for
+// reading a single path.
+const localTreeSQL = `WITH RECURSIVE chain AS (
+		SELECT sha,parent_sha,snapshot,0 AS pos FROM local_commits WHERE repository_id=$1 AND sha=$2
+		UNION ALL
+		SELECT c.sha,c.parent_sha,c.snapshot,chain.pos+1 FROM local_commits c JOIN chain ON c.repository_id=$1 AND c.sha=chain.parent_sha WHERE NOT chain.snapshot
+	), events AS (
+		SELECT a.path,chain.pos,false AS gone,a.id,a.blob_id,a.etag,a.lfs,a.last_modified,a.cached_at
+			FROM artifacts a JOIN chain ON chain.sha=a.commit_sha WHERE a.repository_id=$1 %[1]s
+		UNION ALL
+		SELECT t.path,chain.pos,true,''::text,''::text,''::text,false,NULL::timestamptz,NULL::timestamptz
+			FROM local_tombstones t JOIN chain ON chain.sha=t.commit_sha WHERE t.repository_id=$1 %[2]s
+	), latest AS (SELECT DISTINCT ON (path) * FROM events ORDER BY path,pos)
+	SELECT l.id,l.path,l.blob_id,b.sha256,b.storage_key,b.content_type,l.etag,b.size_bytes,l.lfs,COALESCE(l.last_modified,l.cached_at)
+	FROM latest l JOIN blobs b ON b.id=l.blob_id WHERE NOT l.gone ORDER BY l.path`
+
 // LocalFilesAt lists the files of a commit, ordered by path.
 func (s *Store) LocalFilesAt(ctx context.Context, repositoryID, sha string) ([]LocalFile, error) {
-	return localFilesAt(ctx, s.SQL, repositoryID, sha, "")
+	return localFilesAt(ctx, s.SQL, repositoryID, sha)
 }
 
 type queryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-func localFilesAt(ctx context.Context, q queryer, repositoryID, sha, lock string) ([]LocalFile, error) {
-	rows, err := q.QueryContext(ctx, `SELECT a.id,a.path,a.blob_id,b.sha256,b.storage_key,b.content_type,a.etag,b.size_bytes,a.lfs,COALESCE(a.last_modified,a.cached_at)
-		FROM artifacts a JOIN blobs b ON b.id=a.blob_id WHERE a.repository_id=$1 AND a.commit_sha=$2 ORDER BY a.path`+lock, repositoryID, sha)
-	if err != nil {
-		return nil, err
-	}
+func scanLocalFiles(rows *sql.Rows) ([]LocalFile, error) {
 	defer rows.Close()
 	var files []LocalFile
 	for rows.Next() {
@@ -225,6 +242,30 @@ func localFilesAt(ctx context.Context, q queryer, repositoryID, sha, lock string
 		files = append(files, f)
 	}
 	return files, rows.Err()
+}
+
+func localFilesAt(ctx context.Context, q queryer, repositoryID, sha string) ([]LocalFile, error) {
+	rows, err := q.QueryContext(ctx, fmt.Sprintf(localTreeSQL, "", ""), repositoryID, sha)
+	if err != nil {
+		return nil, err
+	}
+	return scanLocalFiles(rows)
+}
+
+// LocalFileAt returns one file of a commit, or ErrNotFound.
+func (s *Store) LocalFileAt(ctx context.Context, repositoryID, sha, filePath string) (LocalFile, error) {
+	rows, err := s.SQL.QueryContext(ctx, fmt.Sprintf(localTreeSQL, "AND a.path=$3", "AND t.path=$3"), repositoryID, sha, filePath)
+	if err != nil {
+		return LocalFile{}, err
+	}
+	files, err := scanLocalFiles(rows)
+	if err != nil {
+		return LocalFile{}, err
+	}
+	if len(files) == 0 {
+		return LocalFile{}, ErrNotFound
+	}
+	return files[0], nil
 }
 
 // ResolveLocalRevision turns a branch, a tag or a commit hash into the commit it
@@ -278,10 +319,10 @@ func (s *Store) LocalCommitBySHA(ctx context.Context, repositoryID, sha string) 
 // LocalHistory lists the commits that lead to sha, newest first.
 func (s *Store) LocalHistory(ctx context.Context, repositoryID, sha string, limit int) ([]LocalCommit, error) {
 	rows, err := s.SQL.QueryContext(ctx, `WITH RECURSIVE history AS (
-			SELECT c.*,1 AS depth FROM local_commits c WHERE c.repository_id=$1 AND c.sha=$2
+			SELECT c.*,1 AS generation FROM local_commits c WHERE c.repository_id=$1 AND c.sha=$2
 			UNION ALL
-			SELECT c.*,h.depth+1 FROM local_commits c JOIN history h ON c.repository_id=h.repository_id AND c.sha=h.parent_sha WHERE h.depth<$3)
-		SELECT sha,parent_sha,COALESCE(author_id,''),author_name,summary,description,created_at FROM history ORDER BY depth`, repositoryID, sha, limit)
+			SELECT c.*,h.generation+1 FROM local_commits c JOIN history h ON c.repository_id=h.repository_id AND c.sha=h.parent_sha WHERE h.generation<$3)
+		SELECT sha,parent_sha,COALESCE(author_id,''),author_name,summary,description,created_at FROM history ORDER BY generation`, repositoryID, sha, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +424,9 @@ func (s *Store) CommitLocal(ctx context.Context, in CommitInput) (LocalCommit, e
 		return LocalCommit{}, err
 	}
 	var head string
-	err = tx.QueryRowContext(ctx, `SELECT commit_sha FROM local_refs WHERE repository_id=$1 AND kind='branch' AND name=$2`, in.RepositoryID, in.Branch).Scan(&head)
+	var headDepth int
+	err = tx.QueryRowContext(ctx, `SELECT r.commit_sha,c.depth FROM local_refs r JOIN local_commits c ON c.repository_id=r.repository_id AND c.sha=r.commit_sha
+		WHERE r.repository_id=$1 AND r.kind='branch' AND r.name=$2`, in.RepositoryID, in.Branch).Scan(&head, &headDepth)
 	if errors.Is(err, sql.ErrNoRows) {
 		return LocalCommit{}, ErrRevisionNotFound
 	}
@@ -430,13 +473,15 @@ func (s *Store) CommitLocal(ctx context.Context, in CommitInput) (LocalCommit, e
 		rows.Close()
 	}
 
-	base, err := localFilesAt(ctx, tx, in.RepositoryID, head, "")
+	base, err := localFilesAt(ctx, tx, in.RepositoryID, head)
 	if err != nil {
 		return LocalCommit{}, err
 	}
 	tree := make(map[string]LocalFile, len(base)+len(in.Ops))
+	baseTree := make(map[string]LocalFile, len(base))
 	for _, f := range base {
 		tree[f.Path] = f
+		baseTree[f.Path] = f
 	}
 	now := time.Now().UTC()
 	for _, op := range in.Ops {
@@ -476,24 +521,53 @@ func (s *Store) CommitLocal(ctx context.Context, in CommitInput) (LocalCommit, e
 		manifest = append(manifest, path+"\x00"+f.SHA256)
 	}
 	sha := commitName(in.Summary+"\n"+in.Description, in.RepositoryID, head, manifest, now)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO local_commits(repository_id,sha,parent_sha,author_id,author_name,summary,description,created_at) VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8)`,
-		in.RepositoryID, sha, head, in.AuthorID, in.AuthorName, in.Summary, in.Description, now); err != nil {
+
+	// Store what changed since the parent, or the whole tree every
+	// snapshotEvery commits so that reading a tree stays a short walk.
+	snapshot := headDepth+1 >= snapshotEvery
+	depth := headDepth + 1
+	if snapshot {
+		depth = 0
+	}
+	var stored []string
+	for _, path := range paths {
+		f := tree[path]
+		if before, existed := baseTree[path]; snapshot || !existed || before.BlobID != f.BlobID || before.OID != f.OID || before.LFS != f.LFS {
+			stored = append(stored, path)
+		}
+	}
+	var removed []string
+	if !snapshot {
+		for path := range baseTree {
+			if _, kept := tree[path]; !kept {
+				removed = append(removed, path)
+			}
+		}
+		sort.Strings(removed)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO local_commits(repository_id,sha,parent_sha,author_id,author_name,summary,description,created_at,snapshot,depth) VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10)`,
+		in.RepositoryID, sha, head, in.AuthorID, in.AuthorName, in.Summary, in.Description, now, snapshot, depth); err != nil {
 		return LocalCommit{}, err
 	}
-	if len(paths) > 0 {
-		ids := make([]string, len(paths))
-		blobIDs := make([]string, len(paths))
-		etags := make([]string, len(paths))
-		lfs := make([]bool, len(paths))
-		times := make([]time.Time, len(paths))
-		for i, path := range paths {
+	if len(stored) > 0 {
+		ids := make([]string, len(stored))
+		blobIDs := make([]string, len(stored))
+		etags := make([]string, len(stored))
+		lfs := make([]bool, len(stored))
+		times := make([]time.Time, len(stored))
+		for i, path := range stored {
 			f := tree[path]
 			ids[i], blobIDs[i], etags[i], lfs[i], times[i] = NewID(), f.BlobID, f.OID, f.LFS, f.LastModified
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO artifacts(id,repository_id,commit_sha,path,blob_id,etag,last_modified,upstream_size,lfs)
 			SELECT t.id,$1,$2,t.path,t.blob_id,t.etag,t.modified,b.size_bytes,t.lfs
 			FROM unnest($3::text[],$4::text[],$5::text[],$6::text[],$7::boolean[],$8::timestamptz[]) AS t(id,path,blob_id,etag,lfs,modified)
-			JOIN blobs b ON b.id=t.blob_id`, in.RepositoryID, sha, ids, paths, blobIDs, etags, lfs, times); err != nil {
+			JOIN blobs b ON b.id=t.blob_id`, in.RepositoryID, sha, ids, stored, blobIDs, etags, lfs, times); err != nil {
+			return LocalCommit{}, err
+		}
+	}
+	if len(removed) > 0 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO local_tombstones(repository_id,commit_sha,path) SELECT $1,$2,unnest($3::text[])`, in.RepositoryID, sha, removed); err != nil {
 			return LocalCommit{}, err
 		}
 	}
@@ -628,16 +702,4 @@ func (s *Store) BlobIsRetained(ctx context.Context, sha256 string) (bool, error)
 	var retained bool
 	err := s.SQL.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM blobs WHERE sha256=$1 AND (orphaned_at IS NULL OR orphaned_at > now()))`, sha256).Scan(&retained)
 	return retained, err
-}
-
-// LocalFileAt returns one file of a commit, or ErrNotFound.
-func (s *Store) LocalFileAt(ctx context.Context, repositoryID, sha, filePath string) (LocalFile, error) {
-	var f LocalFile
-	err := s.SQL.QueryRowContext(ctx, `SELECT a.id,a.path,a.blob_id,b.sha256,b.storage_key,b.content_type,a.etag,b.size_bytes,a.lfs,COALESCE(a.last_modified,a.cached_at)
-		FROM artifacts a JOIN blobs b ON b.id=a.blob_id WHERE a.repository_id=$1 AND a.commit_sha=$2 AND a.path=$3`, repositoryID, sha, filePath).
-		Scan(&f.ArtifactID, &f.Path, &f.BlobID, &f.SHA256, &f.StorageKey, &f.ContentType, &f.OID, &f.Size, &f.LFS, &f.LastModified)
-	if errors.Is(err, sql.ErrNoRows) {
-		return f, ErrNotFound
-	}
-	return f, err
 }
