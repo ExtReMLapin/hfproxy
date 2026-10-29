@@ -92,13 +92,7 @@ Tokens created before this key separation existed (hashed straight from the secr
 
 ## Service levels
 
-Suggested starting points, to adjust to your traffic:
-
-- **Availability**: 99.5% of non-5xx responses on download routes over 30 days.
-- **Latency**: 95% of cache hits start streaming within 500 ms.
-- **Freshness**: a ref is confirmed with the Hub at least every `HFPROXY_CACHE_REF_TTL` while the Hub is reachable.
-
-[prometheus-alerts.yml](prometheus-alerts.yml) contains matching alert rules, and [grafana-observability.json](grafana-observability.json) the dashboard.
+Suggested objectives, the indicators that measure them and the burn-rate alerts are in [slo.md](slo.md). In short: 99.5% of download requests without a 5xx and 95% of cache hits with the first byte within 500 ms, over 30 days. [prometheus-alerts.yml](prometheus-alerts.yml) holds the cause-based alerts (with a [runbook](runbooks.md) each), [prometheus-slo-rules.yml](prometheus-slo-rules.yml) the SLO rules, and the [Grafana dashboards](observability.md#kubernetes-and-grafana) show both.
 
 ## Running several replicas
 

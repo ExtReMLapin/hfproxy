@@ -50,7 +50,7 @@ func newMetrics() *metrics {
 		m.counters[name] = v
 		m.counterLabels[name] = labels
 	}
-	for name, labels := range map[string][]string{"hfproxy_http_request_duration_seconds": {"method", "route"}, "hfproxy_cache_lookup_duration_seconds": {}, "hfproxy_upstream_request_duration_seconds": {"operation"}, "hfproxy_download_duration_seconds": {"result"}, "hfproxy_storage_operation_duration_seconds": {"operation"}} {
+	for name, labels := range map[string][]string{"hfproxy_http_request_duration_seconds": {"method", "route"}, "hfproxy_cache_lookup_duration_seconds": {}, "hfproxy_upstream_request_duration_seconds": {"operation"}, "hfproxy_download_duration_seconds": {"result"}, "hfproxy_download_ttfb_seconds": {"cache"}, "hfproxy_storage_operation_duration_seconds": {"operation"}} {
 		v := prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: name, Help: name + " measured by hfproxy.", Buckets: metricBuckets}, labels)
 		m.registry.MustRegister(v)
 		m.histograms[name] = v
@@ -170,6 +170,11 @@ type measuredWriter struct {
 	status   int
 	bytes    int64
 	writeErr error
+	started  time.Time
+	// firstByte is the delay until the response headers were sent, and cache the
+	// X-Cache value they carried: together they give the time to first byte.
+	firstByte time.Duration
+	cache     string
 }
 
 type measuredRequestBody struct {
@@ -186,6 +191,10 @@ func (b *measuredRequestBody) Read(p []byte) (int, error) {
 func (w *measuredWriter) WriteHeader(code int) {
 	if w.status == 0 {
 		w.status = code
+		if !w.started.IsZero() {
+			w.firstByte = time.Since(w.started)
+		}
+		w.cache = w.ResponseWriter.Header().Get("X-Cache")
 		w.ResponseWriter.WriteHeader(code)
 	}
 }
@@ -252,7 +261,7 @@ func (m *metrics) middlewareDynamic(metricsPath func() string, next http.Handler
 			requestBody = &measuredRequestBody{ReadCloser: r.Body}
 			r.Body = requestBody
 		}
-		mw := &measuredWriter{ResponseWriter: w}
+		mw := &measuredWriter{ResponseWriter: w, started: start}
 		download := r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/resolve/")
 		m.mu.Lock()
 		m.inFlight++
@@ -297,6 +306,13 @@ func (m *metrics) middlewareDynamic(metricsPath func() string, next http.Handler
 					result = "partial"
 				}
 				m.add("hfproxy_downloads_total", []string{"result=" + result}, 1)
+				if status < 400 && r.Context().Err() == nil {
+					cache := strings.ToLower(mw.cache)
+					if cache != "hit" && cache != "miss" && cache != "stale" {
+						cache = "other"
+					}
+					m.observe("hfproxy_download_ttfb_seconds", []string{"cache=" + cache}, mw.firstByte.Seconds())
+				}
 				m.observe("hfproxy_download_duration_seconds", []string{"result=" + result}, time.Since(start).Seconds())
 				source := "upstream"
 				if mw.Header().Get("X-Cache") == "HIT" {
