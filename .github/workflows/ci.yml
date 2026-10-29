@@ -72,8 +72,8 @@ jobs:
         run: |
           total=$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%","",$3); print $3}')
           echo "Total statement coverage: ${total}%"
-          # Measured at 54% when the threshold was set; raise it as coverage grows.
-          awk -v t="$total" 'BEGIN { exit (t >= 50.0) ? 0 : 1 }' || { echo "Coverage ${total}% is below the 50% minimum."; exit 1; }
+          # Measured at 65% when the threshold was last raised; raise it as coverage grows.
+          awk -v t="$total" 'BEGIN { exit (t >= 60.0) ? 0 : 1 }' || { echo "Coverage ${total}% is below the 60% minimum."; exit 1; }
       - name: Build
         run: go build -trimpath ./cmd/hfproxy
       - name: The build is reproducible
