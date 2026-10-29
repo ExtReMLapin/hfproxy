@@ -141,6 +141,18 @@ jobs:
           persist-credentials: false
       - name: Build image (not published)
         run: docker build --tag hfproxy:ci .
+      - name: Smoke-test the image
+        run: |
+          set -eu
+          docker run --rm hfproxy:ci version
+          # Runs as UID 65532 and ships no shell.
+          test "$(docker inspect --format '{{.Config.User}}' hfproxy:ci)" = "65532:65532"
+          if docker run --rm --entrypoint /bin/sh hfproxy:ci -c true 2>/dev/null; then echo "the image must not contain a shell"; exit 1; fi
+          # The binary starts, reads its configuration and refuses a bad one.
+          docker run --rm \
+            -e HFPROXY_DATABASE_URL=postgres://u:p@db:5432/app -e HFPROXY_SESSION_SECRET=0123456789abcdef0123456789abcdef \
+            -e HFPROXY_S3_BUCKET=b -e HFPROXY_S3_REGION=r hfproxy:ci config validate
+          if docker run --rm -e HFPROXY_SESSION_SECRET=short hfproxy:ci config validate 2>/dev/null; then echo "a short session secret must be refused"; exit 1; fi
       - name: Scan image for known vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
