@@ -32,17 +32,19 @@ func isPreloadFetch(ctx context.Context) bool {
 }
 
 type preloadJob struct {
-	ID             string    `json:"id"`
-	RepoType       string    `json:"repo_type"`
-	RepoID         string    `json:"repo_id"`
-	CommitSHA      string    `json:"commit_sha,omitempty"`
-	Status         string    `json:"status"`
-	FilesTotal     int       `json:"files_total"`
-	FilesProcessed int       `json:"files_processed"`
-	FailedFiles    int       `json:"failed_files"`
-	Error          string    `json:"error,omitempty"`
-	StartedAt      time.Time `json:"started_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             string `json:"id"`
+	RepoType       string `json:"repo_type"`
+	RepoID         string `json:"repo_id"`
+	CommitSHA      string `json:"commit_sha,omitempty"`
+	Status         string `json:"status"`
+	FilesTotal     int    `json:"files_total"`
+	FilesProcessed int    `json:"files_processed"`
+	FailedFiles    int    `json:"failed_files"`
+	// SkippedFiles were left out because the safe-formats setting refuses them.
+	SkippedFiles int       `json:"skipped_files"`
+	Error        string    `json:"error,omitempty"`
+	StartedAt    time.Time `json:"started_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type hubTreeEntry struct {
@@ -124,7 +126,7 @@ func (s *Server) runRepoPreload(jobID, repositoryPK, repoType, repoID string, pr
 			job.Status = "failed"
 			job.Error = err.Error()
 		})
-		s.recordPreloadCompletion(ctx, principal.ID, repositoryPK, jobID, repoType, repoID, "failed", "", 0, 0, 0, err.Error())
+		s.recordPreloadCompletion(ctx, principal.ID, repositoryPK, jobID, repoType, repoID, "failed", "", 0, 0, 0, 0, err.Error())
 		return
 	}
 	if !validCommit(commit) {
@@ -137,12 +139,29 @@ func (s *Server) runRepoPreload(jobID, repositoryPK, repoType, repoID string, pr
 				job.FilesTotal = len(files)
 				job.Error = message
 			})
-			s.recordPreloadCompletion(ctx, principal.ID, repositoryPK, jobID, repoType, repoID, "failed", "", len(files), 0, len(files), message)
+			s.recordPreloadCompletion(ctx, principal.ID, repositoryPK, jobID, repoType, repoID, "failed", "", len(files), 0, len(files), 0, message)
 			return
 		}
 	}
+	allowUnsafe := false
+	if repo, repoErr := s.db.GetRepository(ctx, repositoryPK); repoErr == nil {
+		allowUnsafe = repo.AllowUnsafeFormats
+	}
+	kept := files[:0:0]
+	skipped := 0
+	for _, file := range files {
+		if s.formatRefusal(allowUnsafe, file) != "" {
+			skipped++
+			s.countRefusedFormat("preload")
+			s.logger.Info("preload: a file was skipped because only safe formats are served", "job_id", jobID, "repo_id", repoID, "path", safeLogValue(file, 300))
+			continue
+		}
+		kept = append(kept, file)
+	}
+	files = kept
 	s.updatePreload(jobID, func(job *preloadJob) {
 		job.FilesTotal = len(files)
+		job.SkippedFiles = skipped
 		job.CommitSHA = commit
 	})
 
@@ -185,15 +204,15 @@ func (s *Server) runRepoPreload(jobID, repositoryPK, repoType, repoID string, pr
 	if failed > 0 {
 		s.logger.Warn("preload finished with errors", "job_id", jobID, "repo_id", repoID, "files", len(files), "failed", failed)
 	}
-	s.recordPreloadCompletion(ctx, principal.ID, repositoryPK, jobID, repoType, repoID, status, commit, len(files), processed, failed, message)
+	s.recordPreloadCompletion(ctx, principal.ID, repositoryPK, jobID, repoType, repoID, status, commit, len(files), processed, failed, skipped, message)
 }
 
-func (s *Server) recordPreloadCompletion(ctx context.Context, actorID, repositoryPK, jobID, repoType, repoID, status, commit string, total, processed, failed int, message string) {
+func (s *Server) recordPreloadCompletion(ctx context.Context, actorID, repositoryPK, jobID, repoType, repoID, status, commit string, total, processed, failed, skipped int, message string) {
 	s.audit(ctx, actorID, "repository.preload.finished", "repository", repositoryPK, map[string]any{
 		"job_id": jobID, "repo_type": repoType, "repo_id": repoID,
 		"commit_sha": commit,
 		"status":     status, "files_total": total, "files_processed": processed,
-		"failed_files": failed, "error": message,
+		"failed_files": failed, "skipped_files": skipped, "error": message,
 	})
 }
 
@@ -336,6 +355,7 @@ func (s *Server) preloadSnapshots(ctx context.Context, principal *Principal) ([]
 			FilesTotal     int    `json:"files_total"`
 			FilesProcessed int    `json:"files_processed"`
 			FailedFiles    int    `json:"failed_files"`
+			SkippedFiles   int    `json:"skipped_files"`
 			Error          string `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(encodedMetadata), &metadata); err != nil {
@@ -358,7 +378,7 @@ func (s *Server) preloadSnapshots(ctx context.Context, principal *Principal) ([]
 		items = append(items, preloadJob{
 			ID: metadata.JobID, RepoType: repoType, RepoID: repoID, CommitSHA: metadata.CommitSHA, Status: status,
 			FilesTotal: metadata.FilesTotal, FilesProcessed: metadata.FilesProcessed,
-			FailedFiles: metadata.FailedFiles, Error: metadata.Error,
+			FailedFiles: metadata.FailedFiles, SkippedFiles: metadata.SkippedFiles, Error: metadata.Error,
 			StartedAt: updatedAt, UpdatedAt: updatedAt,
 		})
 		known[key] = true

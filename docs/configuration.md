@@ -54,6 +54,7 @@ Environment variables use the `HFPROXY_` prefix. Common settings for local Compo
 | Cache limits | CACHE_MAX_FILE_SIZE, CACHE_REF_TTL, CACHE_NEGATIVE_TTL, CACHE_GC_GRACE |
 | Capacity and retention | CACHE_MAX_TOTAL_SIZE, CACHE_FILL_CONCURRENCY, STAGING_DIR, STAGING_MIN_FREE_BYTES, RETENTION_DOWNLOADS, RETENTION_AUDIT |
 | Metrics | METRICS_ENABLED, METRICS_PATH, METRICS_ADDR |
+| Safe formats | SAFE_FORMATS_ONLY (also in the console; see [Safe formats](safe-formats.md)) |
 | Publishing | CUSTOM_REPOSITORIES, UPLOAD_MAX_FILE_SIZE, UPLOAD_USER_QUOTA (also in the console, see [Publishing](publishing.md#limits)) |
 | Hub resilience | UPSTREAM_BREAKER_THRESHOLD, UPSTREAM_BREAKER_COOLDOWN, API_CACHE_MAX_BYTES, API_CACHE_MAX_STALE |
 

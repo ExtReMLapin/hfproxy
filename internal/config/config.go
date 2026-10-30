@@ -122,7 +122,11 @@ type Config struct {
 	// CustomRepos lets users publish their own models and datasets on the proxy.
 	// UploadMaxFileSize bounds one published file and UploadUserQuota the bytes a
 	// user may keep in repositories they own (0 turns the quota off).
-	CustomRepos        bool
+	CustomRepos bool
+	// SafeFormatsOnly refuses files that can run code when a client loads them
+	// (pickle-based weights such as .bin, .pt or .ckpt) unless a repository is
+	// exempted.
+	SafeFormatsOnly    bool
 	UploadMaxFileSize  int64
 	UploadUserQuota    int64
 	RetentionDownloads time.Duration
@@ -245,6 +249,7 @@ func Load() (Config, error) {
 	c.DownloadRateLimit = int64(number("DOWNLOAD_RATE_LIMIT", 0))
 	c.DownloadDailyQuota = int64(number("DOWNLOAD_DAILY_QUOTA", 0))
 	c.CustomRepos = boolean("CUSTOM_REPOSITORIES", true)
+	c.SafeFormatsOnly = boolean("SAFE_FORMATS_ONLY", false)
 	c.UploadMaxFileSize = int64(number("UPLOAD_MAX_FILE_SIZE", DefaultUploadMaxFileSize))
 	c.UploadUserQuota = int64(number("UPLOAD_USER_QUOTA", 0))
 	c.RetentionDownloads = duration("RETENTION_DOWNLOADS", 90*24*time.Hour)

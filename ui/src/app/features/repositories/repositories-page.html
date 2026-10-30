@@ -166,6 +166,13 @@
                 <option value="allowlist" i18n>Allowlist</option>
                 <option value="public" i18n>Public</option></select
               ><span class="sr-only">{{ policyLabel(repo.access_policy) }}</span>
+              <label class="mt-2 flex items-center gap-1.5 text-[11px] text-slate-500"
+                ><input
+                  type="checkbox"
+                  [name]="'unsafe-' + repo.id"
+                  [(ngModel)]="repo.allow_unsafe_formats"
+                /><span i18n>Allow pickle-based files</span></label
+              >
             </td>
             <td class="px-4 py-4 text-xs text-slate-400">{{ repo.updated_at | date: 'medium' }}</td>
             <td class="px-5 py-4">

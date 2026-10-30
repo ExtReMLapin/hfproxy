@@ -60,6 +60,8 @@ export interface PreloadJob {
   files_total: number;
   files_processed: number;
   failed_files: number;
+  /** Files left out because only safe formats are served. */
+  skipped_files?: number;
   error?: string;
   started_at: string;
   updated_at: string;
@@ -72,6 +74,8 @@ export interface Repository {
   access_policy: Policy;
   /** "hub" for a repository cached from the Hub, "local" for one published here. */
   origin?: 'hub' | 'local';
+  /** Exempt from the safe-formats setting. */
+  allow_unsafe_formats?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -209,6 +213,7 @@ export interface ManagedSettings {
   download_rate_limit: number;
   download_daily_quota: number;
   custom_repositories: boolean;
+  safe_formats_only: boolean;
   upload_max_file_size: number;
   upload_user_quota: number;
   cache_ref_ttl: string;

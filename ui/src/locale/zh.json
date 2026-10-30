@@ -144,7 +144,6 @@
     "1272083541231470128": "传输状态每两秒刷新一次。",
     "2242514549789875087": "{VAR_PLURAL, plural, other {{INTERPOLATION} 个活动文件}}",
     "3410345226999041013": "仓库预加载 · {$INTERPOLATION}",
-    "8035528960825246576": "{$INTERPOLATION} / {$INTERPOLATION_1} 个文件 {$START_BLOCK_IF} · {$INTERPOLATION_2} 个失败 {$CLOSE_BLOCK_IF}",
     "5332514962398710199": "正在读取仓库文件列表…",
     "6754149208333360805": "已传输 {$INTERPOLATION}",
     "2394137387964305929": "开始于 {$INTERPOLATION}",
@@ -478,6 +477,11 @@
     "6033652155320780889": "每位用户的存储配额 {$START_TAG_SPAN}(字节){$CLOSE_TAG_SPAN}{$TAG_INPUT}{$START_TAG_SPAN_1}按用户创建的仓库统计,每个不同的文件只计一次。0 表示无配额。已发布的文件绝不会为腾出空间而被删除。{$CLOSE_TAG_SPAN}",
     "3512954007194665286": " 令牌可以从您的账户有权读取的仓库下载内容。同时具有发布权限的令牌还可以创建和修改您有权发布的模型和数据集。 ",
     "564683172741275649": "权限 {$START_TAG_SELECT}{$START_TAG_OPTION}仅下载{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_1}下载和发布{$CLOSE_TAG_OPTION}{$CLOSE_TAG_SELECT}",
-    "7709092880907042153": "模型和数据集"
+    "7709092880907042153": "模型和数据集",
+    "4117811657959514887": "{$INTERPOLATION} / {$INTERPOLATION_1} 个文件 {$START_BLOCK_IF} · {$INTERPOLATION_2} 个失败 {$CLOSE_BLOCK_IF}{$START_BLOCK_IF_1} · {$INTERPOLATION_3} 个已跳过（不安全格式） {$CLOSE_BLOCK_IF}",
+    "4307083037322311423": "允许基于 pickle 的文件",
+    "386650655182357616": "安全格式",
+    "7405367696944963881": " 基于 pickle 的文件（.bin、.pt、.pth、.ckpt、.pkl、.joblib）在客户端加载时可能执行代码。启用后，这些文件不会被提供、预加载或发布；如果客户端也能找到 safetensors 文件，则会使用后者。名为 .safetensors 的文件必须确实是 safetensors 文件。可以在“仓库”页面为某个仓库设置例外。 ",
+    "4541376937628624108": "仅提供安全的模型格式"
   }
 }

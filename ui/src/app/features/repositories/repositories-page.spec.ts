@@ -61,4 +61,19 @@ describe('RepositoriesPageComponent preload', () => {
     expect(internals.preloadStarting(repo)).toBe(false);
     http.match(() => true);
   });
+
+  it('sends the exemption from the safe formats along with the policy', () => {
+    const fixture = TestBed.createComponent(RepositoriesPageComponent);
+    fixture.detectChanges();
+    const internals = fixture.componentInstance as unknown as {
+      savePolicy(repo: Repository): Promise<void>;
+    };
+    void internals.savePolicy({ ...repo, allow_unsafe_formats: true });
+    const patch = http.expectOne(
+      (request) => request.method === 'PATCH' && request.url === '/api/v1/repos/r1',
+    );
+    expect(patch.request.body).toEqual({ access_policy: 'public', allow_unsafe_formats: true });
+    patch.flush({ id: 'r1' });
+    http.match(() => true);
+  });
 });

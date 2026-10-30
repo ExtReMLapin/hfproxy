@@ -144,7 +144,6 @@
     "1272083541231470128": "Der Übertragungsstatus wird alle zwei Sekunden aktualisiert.",
     "2242514549789875087": "{VAR_PLURAL, plural, =1 {1 aktive Datei} other {{INTERPOLATION} aktive Dateien}}",
     "3410345226999041013": "Repository vorladen · {$INTERPOLATION}",
-    "8035528960825246576": "{$INTERPOLATION} / {$INTERPOLATION_1} Dateien {$START_BLOCK_IF} · {$INTERPOLATION_2} fehlgeschlagen {$CLOSE_BLOCK_IF}",
     "5332514962398710199": "Dateiliste des Repositorys wird gelesen …",
     "6754149208333360805": "{$INTERPOLATION} übertragen",
     "2394137387964305929": "Gestartet um {$INTERPOLATION}",
@@ -478,6 +477,11 @@
     "6033652155320780889": "Speicherkontingent pro Benutzer {$START_TAG_SPAN}(Bytes){$CLOSE_TAG_SPAN}{$TAG_INPUT}{$START_TAG_SPAN_1}Gezählt über die vom Benutzer erstellten Repositories, jede verschiedene Datei einmal. 0 bedeutet kein Kontingent. Veröffentlichte Dateien werden nie entfernt, um Platz zu schaffen.{$CLOSE_TAG_SPAN}",
     "3512954007194665286": " Ein Token kann aus den Repositories herunterladen, die Ihr Konto lesen darf. Ein Token, das auch veröffentlichen darf, kann die Modelle und Datensätze erstellen und ändern, die Sie veröffentlichen dürfen. ",
     "564683172741275649": "Darf {$START_TAG_SELECT}{$START_TAG_OPTION}Nur herunterladen{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_1}Herunterladen und veröffentlichen{$CLOSE_TAG_OPTION}{$CLOSE_TAG_SELECT}",
-    "7709092880907042153": "Modelle und Datensätze"
+    "7709092880907042153": "Modelle und Datensätze",
+    "4117811657959514887": "{$INTERPOLATION} / {$INTERPOLATION_1} Dateien {$START_BLOCK_IF} · {$INTERPOLATION_2} fehlgeschlagen {$CLOSE_BLOCK_IF}{$START_BLOCK_IF_1} · {$INTERPOLATION_3} übersprungen (unsicheres Format) {$CLOSE_BLOCK_IF}",
+    "4307083037322311423": "Pickle-basierte Dateien erlauben",
+    "386650655182357616": "Sichere Formate",
+    "7405367696944963881": " Pickle-basierte Dateien (.bin, .pt, .pth, .ckpt, .pkl, .joblib) können Code ausführen, wenn ein Client sie lädt. Ist die Option aktiv, werden sie weder ausgeliefert, vorab geladen noch veröffentlicht, und Clients, die auch eine safetensors-Datei finden, verwenden diese. Eine Datei mit dem Namen .safetensors muss wirklich eine sein. Ein Repository kann auf der Seite Repositories ausgenommen werden. ",
+    "4541376937628624108": "Nur sichere Modellformate ausliefern"
   }
 }

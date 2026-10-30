@@ -153,6 +153,11 @@ func (s *Server) apiPreupload(w http.ResponseWriter, r *http.Request, route loca
 			hfError(w, http.StatusBadRequest, "", fmt.Sprintf("Invalid file path or size: %q", f.Path))
 			return
 		}
+		if refusal := s.formatRefusal(repo.AllowUnsafeFormats, f.Path); refusal != "" {
+			s.countRefusedFormat("publish")
+			hfError(w, http.StatusUnprocessableEntity, "", refusal)
+			return
+		}
 		if f.Size > limit {
 			hfError(w, http.StatusRequestEntityTooLarge, "", fmt.Sprintf("%s is %d bytes: files cannot exceed %d bytes on this proxy.", f.Path, f.Size, limit))
 			return
@@ -701,6 +706,9 @@ type commitFailure struct {
 func (s *Server) commitOps(ctx context.Context, p *Principal, repoPK, ownerID, branch, parent, author, summary, description string, ops []db.CommitOp, sizes map[string]int64) (db.LocalCommit, *commitFailure) {
 	if strings.TrimSpace(summary) == "" {
 		return db.LocalCommit{}, &commitFailure{http.StatusBadRequest, "", "A commit needs a summary."}
+	}
+	if failure := s.checkFormats(ctx, repoPK, ops); failure != nil {
+		return db.LocalCommit{}, failure
 	}
 	overQuota, quota, err := s.ownerQuotaExceeded(ctx, ownerID, sizes)
 	if err != nil {

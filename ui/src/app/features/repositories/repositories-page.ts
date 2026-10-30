@@ -87,6 +87,7 @@ export class RepositoriesPageComponent implements OnInit, OnDestroy {
       await this.mutate(async () => {
         await this.api.patch(`/api/v1/repos/${encodeURIComponent(repo.id)}`, {
           access_policy: repo.access_policy,
+          allow_unsafe_formats: !!repo.allow_unsafe_formats,
         });
         this.savedPolicies.set(repo.id, repo.access_policy);
         this.feedback.showSuccess(

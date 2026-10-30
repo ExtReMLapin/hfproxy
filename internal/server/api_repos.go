@@ -32,7 +32,7 @@ func (s *Server) apiRepos(w http.ResponseWriter, r *http.Request) {
 		}
 		result := make([]map[string]any, 0, len(repos))
 		for _, repo := range repos {
-			result = append(result, map[string]any{"id": repo.ID, "repo_type": repo.Type, "repo_id": repo.RepoID, "access_policy": repo.Policy, "origin": repo.Origin, "created_at": repo.CreatedAt, "updated_at": repo.UpdatedAt})
+			result = append(result, map[string]any{"id": repo.ID, "repo_type": repo.Type, "repo_id": repo.RepoID, "access_policy": repo.Policy, "origin": repo.Origin, "allow_unsafe_formats": repo.AllowUnsafeFormats, "created_at": repo.CreatedAt, "updated_at": repo.UpdatedAt})
 		}
 		next := ""
 		if len(result) > limit {
@@ -110,28 +110,54 @@ func (s *Server) apiRepo(w http.ResponseWriter, r *http.Request, path string) {
 			s.fail(w, r, err, 500, "Database error", "Unable to load repository.")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"id": id, "repo_type": repo.Type, "repo_id": repo.RepoID, "access_policy": repo.Policy, "origin": repo.Origin, "created_at": repo.CreatedAt, "updated_at": repo.UpdatedAt})
+		writeJSON(w, 200, map[string]any{"id": id, "repo_type": repo.Type, "repo_id": repo.RepoID, "access_policy": repo.Policy, "origin": repo.Origin, "allow_unsafe_formats": repo.AllowUnsafeFormats, "created_at": repo.CreatedAt, "updated_at": repo.UpdatedAt})
 	case http.MethodPatch:
 		var input struct {
-			AccessPolicy string `json:"access_policy"`
+			AccessPolicy       *string `json:"access_policy"`
+			AllowUnsafeFormats *bool   `json:"allow_unsafe_formats"`
 		}
 		if !decodeJSON(w, r, &input) {
 			return
 		}
-		if input.AccessPolicy != "public" && input.AccessPolicy != "allowlist" && input.AccessPolicy != "admin_only" {
-			writeProblem(w, r, 400, "Invalid policy", "access_policy must be public, allowlist, or admin_only.")
+		if input.AccessPolicy == nil && input.AllowUnsafeFormats == nil {
+			writeProblem(w, r, 400, "Nothing to change", "Provide access_policy or allow_unsafe_formats.")
 			return
 		}
-		if err := s.db.SetRepositoryPolicy(r.Context(), id, input.AccessPolicy); err != nil {
-			if errors.Is(err, db.ErrNotFound) {
-				writeProblem(w, r, 404, "Repository not found", "The repository does not exist.")
-			} else {
-				s.fail(w, r, err, 500, "Database error", "Unable to update policy.")
+		if input.AccessPolicy != nil {
+			policy := *input.AccessPolicy
+			if policy != "public" && policy != "allowlist" && policy != "admin_only" {
+				writeProblem(w, r, 400, "Invalid policy", "access_policy must be public, allowlist, or admin_only.")
+				return
 			}
-			return
+			if err := s.db.SetRepositoryPolicy(r.Context(), id, policy); err != nil {
+				if errors.Is(err, db.ErrNotFound) {
+					writeProblem(w, r, 404, "Repository not found", "The repository does not exist.")
+				} else {
+					s.fail(w, r, err, 500, "Database error", "Unable to update policy.")
+				}
+				return
+			}
+			s.audit(r.Context(), p.ID, "repository.policy.update", "repository", id, map[string]any{"access_policy": policy})
 		}
-		s.audit(r.Context(), p.ID, "repository.policy.update", "repository", id, map[string]any{"access_policy": input.AccessPolicy})
-		writeJSON(w, 200, map[string]string{"id": id, "access_policy": input.AccessPolicy})
+		if input.AllowUnsafeFormats != nil {
+			if err := s.db.SetAllowUnsafeFormats(r.Context(), id, *input.AllowUnsafeFormats); err != nil {
+				if errors.Is(err, db.ErrNotFound) {
+					writeProblem(w, r, 404, "Repository not found", "The repository does not exist.")
+				} else {
+					s.fail(w, r, err, 500, "Database error", "Unable to update the repository.")
+				}
+				return
+			}
+			s.audit(r.Context(), p.ID, "repository.unsafe_formats", "repository", id, map[string]any{"allow_unsafe_formats": *input.AllowUnsafeFormats})
+		}
+		result := map[string]any{"id": id}
+		if input.AccessPolicy != nil {
+			result["access_policy"] = *input.AccessPolicy
+		}
+		if input.AllowUnsafeFormats != nil {
+			result["allow_unsafe_formats"] = *input.AllowUnsafeFormats
+		}
+		writeJSON(w, 200, result)
 	case http.MethodDelete:
 		deleteRepository := s.db.DeleteRepository
 		if repo, err := s.db.GetRepository(r.Context(), id); err == nil && repo.Origin == "local" {

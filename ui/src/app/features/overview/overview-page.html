@@ -277,6 +277,9 @@
                 @if (job.failed_files > 0) {
                   · {{ job.failed_files }} failed
                 }
+                @if (job.skipped_files) {
+                  · {{ job.skipped_files }} skipped (unsafe format)
+                }
               </p>
             } @else if (job.status === 'running') {
               <p class="mt-2 text-xs text-slate-500" i18n>Reading the repository file list…</p>

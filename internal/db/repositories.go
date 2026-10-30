@@ -13,6 +13,7 @@ type Repository struct {
 	// Origin is "hub" for a repository cached from the Hub and "local" for one
 	// published on this proxy; OwnerID is who published it.
 	Origin, OwnerID      string
+	AllowUnsafeFormats   bool
 	CreatedAt, UpdatedAt time.Time
 }
 
@@ -30,7 +31,7 @@ func (s *Store) ListRepositories(ctx context.Context, role, userID string, after
 		args = append(args, after[0], after[1], after[2])
 	}
 	args = append(args, limit)
-	rows, err := s.SQL.QueryContext(ctx, `SELECT r.id,r.repo_type,r.repo_id,r.access_policy,r.origin,COALESCE(r.owner_user_id,''),r.created_at,r.updated_at
+	rows, err := s.SQL.QueryContext(ctx, `SELECT r.id,r.repo_type,r.repo_id,r.access_policy,r.origin,COALESCE(r.owner_user_id,''),r.allow_unsafe_formats,r.created_at,r.updated_at
 		FROM repositories r WHERE r.deleted_at IS NULL AND ($1='admin' OR r.access_policy='public' OR (r.access_policy='allowlist' AND (EXISTS(SELECT 1 FROM repo_grants g WHERE g.repository_id=r.id AND g.subject_type='user' AND g.subject_id=$2) OR EXISTS(SELECT 1 FROM repo_grants g JOIN group_members m ON m.group_id=g.subject_id WHERE g.repository_id=r.id AND g.subject_type='group' AND m.user_id=$2))))`+cursorWhere+`
 		ORDER BY r.repo_type,r.repo_id,r.id LIMIT $`+itoa(len(args)), args...)
 	if err != nil {
@@ -40,7 +41,7 @@ func (s *Store) ListRepositories(ctx context.Context, role, userID string, after
 	var repos []Repository
 	for rows.Next() {
 		var r Repository
-		if rows.Scan(&r.ID, &r.Type, &r.RepoID, &r.Policy, &r.Origin, &r.OwnerID, &r.CreatedAt, &r.UpdatedAt) == nil {
+		if rows.Scan(&r.ID, &r.Type, &r.RepoID, &r.Policy, &r.Origin, &r.OwnerID, &r.AllowUnsafeFormats, &r.CreatedAt, &r.UpdatedAt) == nil {
 			repos = append(repos, r)
 		}
 	}
@@ -63,7 +64,7 @@ func (s *Store) UpsertRepository(ctx context.Context, repoType, repoID, policy, 
 // GetRepository returns a live repository by id, or ErrNotFound.
 func (s *Store) GetRepository(ctx context.Context, id string) (Repository, error) {
 	r := Repository{ID: id}
-	err := s.SQL.QueryRowContext(ctx, `SELECT repo_type,repo_id,access_policy,origin,COALESCE(owner_user_id,''),created_at,updated_at FROM repositories WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&r.Type, &r.RepoID, &r.Policy, &r.Origin, &r.OwnerID, &r.CreatedAt, &r.UpdatedAt)
+	err := s.SQL.QueryRowContext(ctx, `SELECT repo_type,repo_id,access_policy,origin,COALESCE(owner_user_id,''),allow_unsafe_formats,created_at,updated_at FROM repositories WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&r.Type, &r.RepoID, &r.Policy, &r.Origin, &r.OwnerID, &r.AllowUnsafeFormats, &r.CreatedAt, &r.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Repository{}, ErrNotFound
 	}
@@ -73,6 +74,19 @@ func (s *Store) GetRepository(ctx context.Context, id string) (Repository, error
 // SetRepositoryPolicy changes a live repository's policy, or returns ErrNotFound.
 func (s *Store) SetRepositoryPolicy(ctx context.Context, id, policy string) error {
 	result, err := s.SQL.ExecContext(ctx, `UPDATE repositories SET access_policy=$2,updated_at=now() WHERE id=$1 AND deleted_at IS NULL`, id, policy)
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetAllowUnsafeFormats exempts a live repository from the safe-formats
+// setting, or removes the exemption. It returns ErrNotFound for an unknown id.
+func (s *Store) SetAllowUnsafeFormats(ctx context.Context, id string, allow bool) error {
+	result, err := s.SQL.ExecContext(ctx, `UPDATE repositories SET allow_unsafe_formats=$2,updated_at=now() WHERE id=$1 AND deleted_at IS NULL`, id, allow)
 	if err != nil {
 		return err
 	}

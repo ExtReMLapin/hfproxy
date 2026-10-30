@@ -144,7 +144,6 @@
     "1272083541231470128": "El estado de las transferencias se actualiza cada dos segundos.",
     "2242514549789875087": "{VAR_PLURAL, plural, =1 {1 archivo activo} other {{INTERPOLATION} archivos activos}}",
     "3410345226999041013": "Precarga del repositorio · {$INTERPOLATION}",
-    "8035528960825246576": "{$INTERPOLATION} / {$INTERPOLATION_1} archivos {$START_BLOCK_IF} · {$INTERPOLATION_2} con error {$CLOSE_BLOCK_IF}",
     "5332514962398710199": "Leyendo la lista de archivos del repositorio…",
     "6754149208333360805": "{$INTERPOLATION} transferidos",
     "2394137387964305929": "Iniciado a las {$INTERPOLATION}",
@@ -478,6 +477,11 @@
     "6033652155320780889": "Cuota de almacenamiento por usuario {$START_TAG_SPAN}(bytes){$CLOSE_TAG_SPAN}{$TAG_INPUT}{$START_TAG_SPAN_1}Se cuenta sobre los repositorios que creó un usuario, cada archivo distinto una vez. 0 significa sin cuota. Los archivos publicados nunca se eliminan para hacer sitio.{$CLOSE_TAG_SPAN}",
     "3512954007194665286": " Un token puede descargar de los repositorios que su cuenta puede leer. Un token que además pueda publicar puede crear y modificar los modelos y conjuntos de datos que usted puede publicar. ",
     "564683172741275649": "Puede {$START_TAG_SELECT}{$START_TAG_OPTION}Solo descargar{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_1}Descargar y publicar{$CLOSE_TAG_OPTION}{$CLOSE_TAG_SELECT}",
-    "7709092880907042153": "Modelos y conjuntos de datos"
+    "7709092880907042153": "Modelos y conjuntos de datos",
+    "4117811657959514887": "{$INTERPOLATION} / {$INTERPOLATION_1} archivos {$START_BLOCK_IF} · {$INTERPOLATION_2} con error {$CLOSE_BLOCK_IF}{$START_BLOCK_IF_1} · {$INTERPOLATION_3} omitidos (formato no seguro) {$CLOSE_BLOCK_IF}",
+    "4307083037322311423": "Permitir archivos basados en pickle",
+    "386650655182357616": "Formatos seguros",
+    "7405367696944963881": " Los archivos basados en pickle (.bin, .pt, .pth, .ckpt, .pkl, .joblib) pueden ejecutar código cuando un cliente los carga. Si se activa, no se sirven, no se precargan ni se publican, y los clientes que también encuentran un archivo safetensors usan ese. Un archivo llamado .safetensors debe serlo de verdad. Un repositorio puede quedar exento desde la página Repositorios. ",
+    "4541376937628624108": "Servir solo formatos de modelo seguros"
   }
 }

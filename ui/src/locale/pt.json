@@ -144,7 +144,6 @@
     "1272083541231470128": "O status das transferências é atualizado a cada dois segundos.",
     "2242514549789875087": "{VAR_PLURAL, plural, =1 {1 arquivo ativo} other {{INTERPOLATION} arquivos ativos}}",
     "3410345226999041013": "Pré-carregamento do repositório · {$INTERPOLATION}",
-    "8035528960825246576": "{$INTERPOLATION} / {$INTERPOLATION_1} arquivos {$START_BLOCK_IF} · {$INTERPOLATION_2} com falha {$CLOSE_BLOCK_IF}",
     "5332514962398710199": "Lendo a lista de arquivos do repositório…",
     "6754149208333360805": "{$INTERPOLATION} transferidos",
     "2394137387964305929": "Iniciado às {$INTERPOLATION}",
@@ -478,6 +477,11 @@
     "6033652155320780889": "Cota de armazenamento por usuário {$START_TAG_SPAN}(bytes){$CLOSE_TAG_SPAN}{$TAG_INPUT}{$START_TAG_SPAN_1}Contada sobre os repositórios criados pelo usuário, cada arquivo distinto uma vez. 0 significa sem cota. Arquivos publicados nunca são removidos para liberar espaço.{$CLOSE_TAG_SPAN}",
     "3512954007194665286": " Um token pode baixar dos repositórios que sua conta pode ler. Um token que também possa publicar pode criar e alterar os modelos e conjuntos de dados que você pode publicar. ",
     "564683172741275649": "Pode {$START_TAG_SELECT}{$START_TAG_OPTION}Apenas baixar{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_1}Baixar e publicar{$CLOSE_TAG_OPTION}{$CLOSE_TAG_SELECT}",
-    "7709092880907042153": "Modelos e conjuntos de dados"
+    "7709092880907042153": "Modelos e conjuntos de dados",
+    "4117811657959514887": "{$INTERPOLATION} / {$INTERPOLATION_1} arquivos {$START_BLOCK_IF} · {$INTERPOLATION_2} com falha {$CLOSE_BLOCK_IF}{$START_BLOCK_IF_1} · {$INTERPOLATION_3} ignorados (formato inseguro) {$CLOSE_BLOCK_IF}",
+    "4307083037322311423": "Permitir arquivos baseados em pickle",
+    "386650655182357616": "Formatos seguros",
+    "7405367696944963881": " Arquivos baseados em pickle (.bin, .pt, .pth, .ckpt, .pkl, .joblib) podem executar código quando um cliente os carrega. Quando ativado, eles não são servidos, pré-carregados nem publicados, e os clientes que também encontram um arquivo safetensors usam esse. Um arquivo chamado .safetensors precisa ser realmente um. Um repositório pode ser isento na página Repositórios. ",
+    "4541376937628624108": "Servir apenas formatos de modelo seguros"
   }
 }

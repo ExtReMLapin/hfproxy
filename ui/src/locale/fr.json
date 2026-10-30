@@ -144,7 +144,6 @@
     "1272083541231470128": "L'état des transferts est actualisé toutes les deux secondes.",
     "2242514549789875087": "{VAR_PLURAL, plural, =0 {Aucun fichier actif} =1 {1 fichier actif} other {{INTERPOLATION} fichiers actifs}}",
     "3410345226999041013": "Préchargement du dépôt · {$INTERPOLATION}",
-    "8035528960825246576": "{$INTERPOLATION} / {$INTERPOLATION_1} fichiers {$START_BLOCK_IF} · {$INTERPOLATION_2} en échec {$CLOSE_BLOCK_IF}",
     "5332514962398710199": "Lecture de la liste des fichiers du dépôt…",
     "6754149208333360805": "{$INTERPOLATION} transférés",
     "2394137387964305929": "Démarré à {$INTERPOLATION}",
@@ -478,6 +477,11 @@
     "6033652155320780889": "Quota de stockage par utilisateur {$START_TAG_SPAN}(octets){$CLOSE_TAG_SPAN}{$TAG_INPUT}{$START_TAG_SPAN_1}Compté sur les dépôts créés par un utilisateur, chaque fichier distinct une seule fois. 0 signifie aucun quota. Les fichiers publiés ne sont jamais supprimés pour faire de la place.{$CLOSE_TAG_SPAN}",
     "3512954007194665286": " Un jeton peut télécharger depuis les dépôts que votre compte peut lire. Un jeton pouvant aussi publier peut créer et modifier les modèles et jeux de données que vous pouvez publier. ",
     "564683172741275649": "Peut {$START_TAG_SELECT}{$START_TAG_OPTION}Télécharger seulement{$CLOSE_TAG_OPTION}{$START_TAG_OPTION_1}Télécharger et publier{$CLOSE_TAG_OPTION}{$CLOSE_TAG_SELECT}",
-    "7709092880907042153": "Modèles et jeux de données"
+    "7709092880907042153": "Modèles et jeux de données",
+    "4117811657959514887": "{$INTERPOLATION} / {$INTERPOLATION_1} fichiers {$START_BLOCK_IF} · {$INTERPOLATION_2} en échec {$CLOSE_BLOCK_IF}{$START_BLOCK_IF_1} · {$INTERPOLATION_3} ignorés (format non sûr) {$CLOSE_BLOCK_IF}",
+    "4307083037322311423": "Autoriser les fichiers à base de pickle",
+    "386650655182357616": "Formats sûrs",
+    "7405367696944963881": " Les fichiers à base de pickle (.bin, .pt, .pth, .ckpt, .pkl, .joblib) peuvent exécuter du code quand un client les charge. Quand cette option est active, ils ne sont ni servis, ni préchargés, ni publiés, et les clients qui trouvent aussi un fichier safetensors utilisent celui-ci. Un fichier nommé .safetensors doit réellement en être un. Un dépôt peut être exempté depuis la page Dépôts. ",
+    "4541376937628624108": "Ne servir que les formats de modèle sûrs"
   }
 }

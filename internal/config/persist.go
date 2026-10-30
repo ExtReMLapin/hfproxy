@@ -42,6 +42,7 @@ type managedSettings struct {
 	DownloadRateLimit      *int64        `json:"download_rate_limit,omitempty"`
 	DownloadDailyQuota     *int64        `json:"download_daily_quota,omitempty"`
 	CustomRepos            *bool         `json:"custom_repositories,omitempty"`
+	SafeFormatsOnly        *bool         `json:"safe_formats_only,omitempty"`
 	UploadMaxFileSize      *int64        `json:"upload_max_file_size,omitempty"`
 	UploadUserQuota        *int64        `json:"upload_user_quota,omitempty"`
 	CacheRefTTL            time.Duration `json:"cache_ref_ttl"`
@@ -218,7 +219,7 @@ func managedFromConfig(c Config) managedSettings {
 		PublicURL: c.PublicURL, HFBaseURL: c.HFBaseURL, HFProxyURL: stringPointer(c.HFProxyURL), HFToken: c.HFToken, HFAllowedHosts: c.HFAllowedHosts, HFTimeout: c.HFTimeout,
 		S3Endpoint: c.S3Endpoint, S3Region: c.S3Region, S3Bucket: c.S3Bucket, S3Prefix: c.S3Prefix, S3ForcePathStyle: c.S3ForcePathStyle,
 		S3AccessKey: c.S3AccessKey, S3SecretKey: c.S3SecretKey, S3ServerSideEncryption: boolPointer(c.S3ServerSideEncryption), AuthMode: c.AuthMode, AnonymousPublicRead: c.AnonymousPublicRead,
-		SessionIdleTTL: c.SessionIdleTTL, SessionAbsoluteTTL: c.SessionAbsoluteTTL, CacheMaxFileSize: c.CacheMaxFileSize, CacheMaxTotalSize: int64Pointer(c.CacheMaxTotalSize), DownloadMaxConcurrent: int64Pointer(c.DownloadMaxConcurrent), DownloadRateLimit: int64Pointer(c.DownloadRateLimit), DownloadDailyQuota: int64Pointer(c.DownloadDailyQuota), CustomRepos: boolPointer(c.CustomRepos), UploadMaxFileSize: int64Pointer(c.UploadMaxFileSize), UploadUserQuota: int64Pointer(c.UploadUserQuota),
+		SessionIdleTTL: c.SessionIdleTTL, SessionAbsoluteTTL: c.SessionAbsoluteTTL, CacheMaxFileSize: c.CacheMaxFileSize, CacheMaxTotalSize: int64Pointer(c.CacheMaxTotalSize), DownloadMaxConcurrent: int64Pointer(c.DownloadMaxConcurrent), DownloadRateLimit: int64Pointer(c.DownloadRateLimit), DownloadDailyQuota: int64Pointer(c.DownloadDailyQuota), CustomRepos: boolPointer(c.CustomRepos), SafeFormatsOnly: boolPointer(c.SafeFormatsOnly), UploadMaxFileSize: int64Pointer(c.UploadMaxFileSize), UploadUserQuota: int64Pointer(c.UploadUserQuota),
 		CacheRefTTL: c.CacheRefTTL, CacheNegativeTTL: c.CacheNegativeTTL, CacheGCGrace: c.CacheGCGrace,
 		OIDCIssuer: c.OIDCIssuer, OIDCClientID: c.OIDCClientID, OIDCClientSecret: c.OIDCClientSecret, OIDCRedirectURL: c.OIDCRedirectURL,
 		OIDCAutoProvision: c.OIDCAutoProvision, LDAPURL: c.LDAPURL, LDAPStartTLS: c.LDAPStartTLS, LDAPBindDN: c.LDAPBindDN,
@@ -257,6 +258,9 @@ func (s managedSettings) apply(c Config) Config {
 	// Likewise for publishing: settings saved before it existed keep the environment's values.
 	if s.CustomRepos != nil {
 		c.CustomRepos = *s.CustomRepos
+	}
+	if s.SafeFormatsOnly != nil {
+		c.SafeFormatsOnly = *s.SafeFormatsOnly
 	}
 	if s.UploadMaxFileSize != nil {
 		c.UploadMaxFileSize = *s.UploadMaxFileSize
